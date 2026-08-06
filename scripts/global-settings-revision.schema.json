@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "settings", "summary"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["applied"]
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storyBackground", "characters", "props", "locations", "timeline", "continuity", "finalVideoStyle", "storyboardImageStyle", "modelRules", "negative"],
+      "properties": {
+        "storyBackground": { "type": "string" },
+        "characters": { "type": "array", "items": { "type": "string" } },
+        "props": { "type": "array", "items": { "type": "string" } },
+        "locations": { "type": "array", "items": { "type": "string" } },
+        "timeline": { "type": "array", "items": { "type": "string" } },
+        "continuity": { "type": "array", "items": { "type": "string" } },
+        "finalVideoStyle": { "type": "string" },
+        "storyboardImageStyle": { "type": "string" },
+        "modelRules": { "type": "array", "items": { "type": "string" } },
+        "negative": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "summary": { "type": "string" }
+  }
+}

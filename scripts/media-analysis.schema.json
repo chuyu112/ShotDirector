@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "kind", "projectTitle", "summary", "sourceText", "cameraNotes", "timeline", "mangaPages", "assetPrompts", "research", "shots", "scriptMarkdown"],
+  "properties": {
+    "status": { "type": "string", "enum": ["completed"] },
+    "kind": { "type": "string", "enum": ["video", "manga"] },
+    "projectTitle": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "sourceText": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/sourceTextItem" }
+    },
+    "cameraNotes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "timeline": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/timelineItem" }
+    },
+    "mangaPages": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/mangaPage" }
+    },
+    "assetPrompts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 240,
+      "items": { "$ref": "#/definitions/assetPrompt" }
+    },
+    "research": { "$ref": "#/definitions/research" },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 120,
+      "items": { "$ref": "#/definitions/shot" }
+    },
+    "scriptMarkdown": { "type": "string", "minLength": 1 }
+  },
+  "definitions": {
+    "sourceTextItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "speaker", "text", "confidence"],
+      "properties": {
+        "location": { "type": "string" },
+        "speaker": { "type": "string" },
+        "text": { "type": "string" },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+      }
+    },
+    "timelineItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "timecode", "story", "sourceObservation", "adaptationSuggestion", "shotSize", "camera", "movement", "editing", "performance", "sound", "keep", "issues"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "timecode": { "type": "string" },
+        "story": { "type": "string" },
+        "sourceObservation": { "type": "string" },
+        "adaptationSuggestion": { "type": "string" },
+        "shotSize": { "type": "string" },
+        "camera": { "type": "string" },
+        "movement": { "type": "string" },
+        "editing": { "type": "string" },
+        "performance": { "type": "string" },
+        "sound": { "type": "string" },
+        "keep": { "type": "array", "items": { "type": "string" } },
+        "issues": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "panelBounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 100 },
+        "y": { "type": "number", "minimum": 0, "maximum": 100 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+      }
+    },
+    "mangaPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "bounds", "kind", "includeInShots", "sourceObservation", "textSummary"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^P[0-9]{2}-(?:[RL]-)?G[0-9]{2}$" },
+        "bounds": { "$ref": "#/definitions/panelBounds" },
+        "kind": { "type": "string", "enum": ["story", "splash", "cover", "editorial", "blank"] },
+        "includeInShots": { "type": "boolean" },
+        "sourceObservation": { "type": "string" },
+        "textSummary": { "type": "string" }
+      }
+    },
+    "mangaPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scanIndex", "sourceFile", "layout", "classification", "readingOrder", "includeInShots", "notes", "panels"],
+      "properties": {
+        "scanIndex": { "type": "integer", "minimum": 1 },
+        "sourceFile": { "type": "string", "minLength": 1 },
+        "layout": { "type": "string", "enum": ["single-page", "double-page", "mixed"] },
+        "classification": { "type": "string", "enum": ["story", "splash", "cover", "editorial", "mixed"] },
+        "readingOrder": { "type": "array", "items": { "type": "string" } },
+        "includeInShots": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "panels": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/mangaPanel" } }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "beat", "framing", "mustShow"],
+      "properties": {
+        "label": { "type": "string" },
+        "beat": { "type": "string" },
+        "framing": { "type": "string" },
+        "mustShow": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "assetPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "sourceObservation", "prompt", "negative", "sourcePanels", "shotIds"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(?:CHAR|SCENE|PROP)-[0-9]{2,3}$" },
+        "kind": { "type": "string", "enum": ["character", "scene", "prop"] },
+        "name": { "type": "string", "minLength": 1 },
+        "sourceObservation": { "type": "string", "minLength": 1 },
+        "prompt": { "type": "string", "minLength": 1 },
+        "negative": { "type": "array", "items": { "type": "string" } },
+        "sourcePanels": { "type": "array", "items": { "type": "string" } },
+        "shotIds": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "researchSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "url", "usedFor"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "minLength": 1 },
+        "usedFor": { "type": "string", "minLength": 1 }
+      }
+    },
+    "researchNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact", "sourceUrls", "confidence"],
+      "properties": {
+        "fact": { "type": "string", "minLength": 1 },
+        "sourceUrls": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+      }
+    },
+    "research": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "used", "queries", "sources", "notes"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "supplement"] },
+        "used": { "type": "boolean" },
+        "queries": { "type": "array", "maxItems": 3, "items": { "type": "string", "minLength": 1 } },
+        "sources": { "type": "array", "maxItems": 5, "items": { "$ref": "#/definitions/researchSource" } },
+        "notes": { "type": "array", "maxItems": 12, "items": { "$ref": "#/definitions/researchNote" } }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "timecode", "duration", "title", "sourceText", "sourcePanels", "artStyle", "story", "scene", "characters", "props", "omniReferences", "composition", "camera", "action", "dialogue", "continuity", "negative", "segments"],
+      "properties": {
+        "id": { "type": "string" },
+        "timecode": { "type": "string" },
+        "duration": { "type": "number" },
+        "title": { "type": "string" },
+        "sourceText": { "type": "array", "items": { "type": "string" } },
+        "sourcePanels": { "type": "array", "items": { "type": "string" } },
+        "artStyle": { "type": "string", "minLength": 1 },
+        "story": { "type": "string" },
+        "scene": { "type": "string" },
+        "characters": { "type": "array", "items": { "type": "string" } },
+        "props": { "type": "array", "items": { "type": "string" } },
+        "omniReferences": { "type": "array", "maxItems": 50, "items": { "type": "string" } },
+        "composition": { "type": "string" },
+        "camera": { "type": "string" },
+        "action": { "type": "string" },
+        "dialogue": { "type": "array", "items": { "type": "string" } },
+        "continuity": { "type": "array", "items": { "type": "string" } },
+        "negative": { "type": "array", "items": { "type": "string" } },
+        "segments": { "type": "array", "items": { "$ref": "#/definitions/segment" } }
+      }
+    }
+  }
+}

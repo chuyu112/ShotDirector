@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "artworkFile"],
+  "properties": {
+    "status": { "type": "string", "const": "generated" },
+    "summary": { "type": "string" },
+    "artworkFile": { "type": "string" }
+  }
+}

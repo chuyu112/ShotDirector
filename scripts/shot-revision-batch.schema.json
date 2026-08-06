@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "shots"],
+  "properties": {
+    "status": { "type": "string", "const": "applied" },
+    "summary": { "type": "string" },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/shot" }
+    }
+  },
+  "definitions": {
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "beat", "framing", "mustShow"],
+      "properties": {
+        "label": { "type": "string" },
+        "beat": { "type": "string" },
+        "framing": { "type": "string" },
+        "mustShow": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "timecode", "duration", "title", "sourceText", "artStyle", "story", "scene", "characters", "props", "omniReferences", "composition", "camera", "action", "dialogue", "continuity", "negative", "segments"],
+      "properties": {
+        "id": { "type": "string" },
+        "timecode": { "type": "string" },
+        "duration": { "type": "number" },
+        "title": { "type": "string" },
+        "sourceText": { "type": "array", "items": { "type": "string" } },
+        "sourcePanels": { "type": "array", "items": { "type": "string" } },
+        "artStyle": { "type": "string", "minLength": 1 },
+        "story": { "type": "string" },
+        "scene": { "type": "string" },
+        "characters": { "type": "array", "items": { "type": "string" } },
+        "props": { "type": "array", "items": { "type": "string" } },
+        "omniReferences": { "type": "array", "maxItems": 50, "items": { "type": "string" } },
+        "composition": { "type": "string" },
+        "camera": { "type": "string" },
+        "action": { "type": "string" },
+        "dialogue": { "type": "array", "items": { "type": "string" } },
+        "continuity": { "type": "array", "items": { "type": "string" } },
+        "negative": { "type": "array", "items": { "type": "string" } },
+        "segments": { "type": "array", "items": { "$ref": "#/definitions/segment" } }
+      }
+    }
+  }
+}
