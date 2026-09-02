@@ -86,4 +86,5 @@ test("manual save neither reapplies stale UI state nor waits for account refresh
   assert.match(save, /void loadSession/);
   assert.doesNotMatch(save, /await loadSession/);
   assert.match(save, /finally[\s\S]*setProjectBusy\(false\)/);
+  assert.match(auth, /if \(background\)[\s\S]*?当前工作区保留[\s\S]*?return/);
 });

@@ -229,6 +229,12 @@ export function ManjingAuthGate({
       }
     } catch {
       if (requestId !== requestSequence.current) return;
+      if (background) {
+        // A transient account-refresh timeout is not a logout. Preserve the
+        // mounted editor (and in-flight save/AI callbacks) until auth responds.
+        setSessionError("账户信息暂时刷新失败，当前工作区保留；请稍后重试。");
+        return;
+      }
       // Default localhost remains an offline-capable workstation. An explicit
       // server URL, however, must fail closed when its auth service is down.
       setGate(localFallbackAllowed(serverConfigured)
