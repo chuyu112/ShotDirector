@@ -346,9 +346,10 @@ test("bridge uses structured schemas for analysis and preserves generic shot num
   assert.ok(media.required.includes("assetPrompts"));
   assert.equal(shot.type, "object");
   assert.match(bridge, /shot\.duration >= minDuration && shot\.duration <= maxDuration/);
-  assert.match(bridge, /普通中文对白按每秒约 4 个汉字估算/);
-  assert.match(bridge, /每个 segment 的 label 必须写明确秒点/);
-  assert.match(bridge, /每张图只能属于一个默认分组/);
+  assert.match(bridge, /不是“一格机械等于一镜”/);
+  assert.match(bridge, /相同地点、时间和摄影机意图下的连续反应格可合并/);
+  assert.match(bridge, /技术限制只能在 provider 适配层解决/);
+  assert.doesNotMatch(bridge, /普通中文对白按每秒约 4 个汉字估算/);
 });
 
 test("project-specific manga migrations are disabled in the clean package", async () => {

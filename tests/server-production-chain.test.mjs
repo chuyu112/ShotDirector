@@ -821,6 +821,11 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.ok(attachmentOnlyCalls.every((call) => /当前 API 不提供 view_image 或本地路径读取工具/.test(call.prompt)));
     assert.ok(attachmentOnlyCalls.every((call) => !call.prompt.includes(dataRoot)), "compatible prompts must not expose unusable tenant-local paths");
     const mediaPrompts = modelCalls.filter((call) => call.schemaName === "media-analysis").map((call) => call.prompt).join("\n");
+    assert.match(mediaPrompts, /不是“一格机械等于一镜”/);
+    assert.match(mediaPrompts, /相同地点、时间和摄影机意图下的连续反应格可合并/);
+    assert.match(mediaPrompts, /技术限制只能在 provider 适配层解决/);
+    assert.doesNotMatch(mediaPrompts, /短促动作、单一反应或信息点可以独立设计为 6 秒/);
+    assert.doesNotMatch(mediaPrompts, /主要出镜人物组合改变/);
     assert.match(mediaPrompts, /用户请求了 supplement[\s\S]*本次已明确降级为 off/);
     assert.match(mediaPrompts, /research 必须返回 \{"mode":"off","used":false,"queries":\[\],"sources":\[\],"notes":\[\]\}/);
     assert.ok(modelCalls.some((call) => call.schemaName === "media-analysis" && /(?:联网背景记录与本次分析模式不一致|联网背景已关闭，但写作模型返回了网络资料)/.test(call.prompt)), "fabricated media research must trigger repair");

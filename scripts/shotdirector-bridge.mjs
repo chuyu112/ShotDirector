@@ -2861,13 +2861,8 @@ function mediaAnalysisPrompt(payload, mediaFiles, extraction, panelBoxPlan = nul
 - 每个 bounds 先沿真实黑框或白色分格沟槽确定画面主体，再为本格所属的框外文字向外扩展。扩展范围应刚好覆盖完整气泡或文字，并尽量不带入相邻格的主要人物和对白。相邻 bounds 可以在文字留白区重叠，重叠不代表合框；若完整保留本格对白与绝对干净裁切发生冲突，优先保留本格对白，可使用 cropMasks 遮白无关的邻格内容。提交前逐格复看四边以及所有气泡是否完整。
 - sourceText 必须逐格穷尽提取所有可辨对白、旁白、拟声词、标题和画面文字；同一格有多段文字时分别列出，speaker 尽量落实到具体人物。不得只写摘要代替原文。每格的 sourceObservation 和 textSummary 必须足以让用户判断出场人物、人物关系、动作因果和该格在剧情中的作用；不确定处明确标低置信度，留给用户逐格批注。
 - 封面、纯插画、广告、作者后记和资料文字标为 cover／splash／editorial／blank；没有剧情动作时 includeInShots=false，绝不能混入剧情 Shot。
-- timeline.timecode 与 sourceText.location 必须引用真实 panel id。每个 Shot 必须填写 sourcePanels 和 sourceText；sourcePanels 只能引用 includeInShots=true 的 panel id；每一个 includeInShots=true 的画格都必须恰好出现在一个 Shot.sourcePanels 中，既不能漏格也不能重复分配。画格图片是用户审核分组的最小原子单位。
-- 不是“一格机械等于一个最终 Shot”。先逐格识别并保留全部画格图片，再给出默认分组建议：相同地点、时间和摄影机意图下的相邻反应格可默认组合为一个 Shot 的 segments；地点、时间、轴线或叙事目的改变时拆成新 Shot。sourcePanels 的顺序就是画格编组台中的图片顺序，必须遵循漫画阅读顺序。
-- 默认采用“人物与场地连续即优先合并”：只要主要出镜人物不变、仍在同一具体场地、时间连续且属于同一事件，就先尝试合为一个 Shot；对白来回、反应近景、景别变化和同一动作的起承转合用 segments 表达，不得仅因漫画换格或切近景就新建 Shot。
-- 当前模型为 ${model.label}，漫画改编的每个 Shot 时长范围是 ${model.minDuration}–${model.maxDuration} 秒，不等于强行一镜到底。预估超过 ${model.maxDuration} 秒时，再按动作转折、对白节拍或叙事目的拆开；短促动作、单一反应或信息点可以独立设计为 6 秒，不得为了凑时长硬合并。开枪、抓腕、撞击等不可逆关键动作通常设计为 6–8 秒 Shot。
-- 每个 Shot 必须先做时间核算再给 duration：只统计成片真正说出的 dialogue，不把 sourceText 原文全文当成表演对白。普通中文对白按每秒约 4 个汉字估算，每次换人额外预留约 0.35 秒；每个独立构图通常预留 1–1.5 秒，但同一连续动作中的惊讶、回头、抓握、瞬时反应格可作为 0.3–1 秒节点，不按画格数量平均分配时长；不能与对白完全重叠的关键动作另加 0.5–2 秒。建议时长最终限制在 ${model.minDuration}–${model.maxDuration} 秒。
-- 如果核算结果超过 ${model.maxDuration} 秒，必须拆镜或压缩成片对白；不得让角色加速念完。若压缩对白，sourceText 继续完整保留，dialogue 只写成片实际说出的台词。每个 segment 的 label 必须写明确秒点，并且所有 segment 首尾连续、总长严格等于 Shot duration。
-- 具体场地或时间跳变、主要出镜人物组合改变、叙事目的彻底切换、不可逆关键动作需要独立节奏点，或合并后超过 ${model.maxDuration} 秒／参考数量上限时应当拆镜。尤其是“梦境→现实”、“外景→室内”、“一组人物→另一组人物”这类同时更换人物、服装、场景、光线或全能参考集合的转换，必须优先拆为新 Shot；同一 Shot 尽量只使用一套稳定的人物、服装、场景与灯光参考。每次完成初拆后必须再检查相邻 Shot：只有在人物、服装、场地、光线和参考集合都连续，且合并后仍在 ${model.minDuration}–${model.maxDuration} 秒内时才允许合并，但不是必须合并；优先得到少而完整、可直接生成的镜头，同时保留必要的戏剧节拍。
+- timeline.timecode 与 sourceText.location 必须引用真实 panel id。每个 Shot 必须填写 sourcePanels 和 sourceText；sourcePanels 只能引用 includeInShots=true 的 panel id；每一个 includeInShots=true 的画格都必须至少出现在一个 Shot.sourcePanels 中，不得漏格或只写“未映射”。画格图片是用户审核分组的最小原子单位。
+- 不是“一格机械等于一镜”。相同地点、时间和摄影机意图下的连续反应格可合并为一个 Shot 的 segments；地点、时间、轴线或叙事目的改变时拆成新 Shot。不得因为当前 provider 的 Token 上限、调用批次、超时、重试或结构化输出限制增加 Shot 数量；这些技术限制只能在 provider 适配层解决。
 - 优先保留原作已经成熟的景别、构图、视线和剪辑。漫画格之间省略的身体动作只补足可执行的“起点—动作—结果”，不得新增原作没有的事件。
 - 黑白网点、彩页用色和漫画画法只属于源素材证据，不得自动写成最终视频 artStyle。
 - projectTitle 必须从本次漫画提取；结果是全新的独立项目，不得沿用当前项目的标题、Shot 数、连续性、道具规则、审批或资产。
@@ -3434,11 +3429,7 @@ function validateMediaAnalysisResult(result, payload) {
     if (assetPrompts !== undefined && assetPrompts.some((asset) => !asset.sourcePanels.length || asset.sourcePanels.some((panelId) => !panelIds.has(panelId)))) {
       throw new Error("漫画资产提示词缺少来源画格，或引用了不存在的画格");
     }
-    const mappedPanelList = result.shots.flatMap((shot) => shot.sourcePanels);
-    const mappedPanelIds = new Set(mappedPanelList);
-    if (mappedPanelList.length !== mappedPanelIds.size) {
-      throw new Error("漫画画格被重复分配到多个 Shot；每张图只能属于一个默认分组");
-    }
+    const mappedPanelIds = new Set(result.shots.flatMap((shot) => shot.sourcePanels));
     const uncoveredPanelIds = [...usablePanelIds].filter((panelId) => !mappedPanelIds.has(panelId));
     if (uncoveredPanelIds.length) {
       throw new Error(`漫画镜头草稿遗漏了 ${uncoveredPanelIds.length} 个应进入分镜的画格：${uncoveredPanelIds.join("、")}`);

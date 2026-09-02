@@ -117,6 +117,6 @@ test("bridge keeps complete prompt generation parallel while reviewer remains on
   );
   assert.match(source, /busy:\s*hasActiveWritingModelWork\(\)/);
   assert.match(source, /if \(hasActiveWritingModelWork\(\)\)[\s\S]*?完成后再切换/);
-  assert.match(source, /const child = spawn\(process\.execPath,/);
+  assert.match(source, /const child = spawn\(command, args,/);
   assert.match(source, /"--ephemeral"/);
 });
