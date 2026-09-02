@@ -152,6 +152,15 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(styles, /background: #175cff/);
   assert.match(page, /syncPanelAssemblyFromTop/);
   assert.match(page, /syncPanelAssemblyFromBottom/);
+  assert.match(page, /renderPanelAssemblyActions\("top"\)/);
+  assert.match(page, /renderPanelAssemblyActions\("bottom"\)/);
+  assert.match(page, /可拖动画格换组／排序/);
+  assert.match(page, /onDragStart=\{\(event\) => beginStructurePanelDrag\(event, panelId\)\}/);
+  assert.match(page, /moveStructurePanelsByDrag/);
+  assert.match(page, /draggedStructurePanelIds/);
+  assert.match(styles, /\.panel-shot-group\.is-drop-target/);
+  assert.match(styles, /\.panel-assembly-card\.is-dragging/);
+  assert.match(styles, /\.panel-assembly-card-shell\.drop-before::before/);
   assert.match(page, /ArrowLeft/);
   assert.match(page, /续传漫画/);
   assert.match(page, /生成完整提示词讨论稿/);

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, CSSProperties, FormEvent, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, DragEvent, FormEvent, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { blockingPlans, type BlockingMarker, type BlockingMovement } from "./blocking-plans";
 import { globalSettings as sourceGlobalSettings, type CharacterProfile, type GlobalSettings } from "./global-settings";
 import { defaultArtStyle, inferredVideoArtStyle, legacyStoryboardArtStyle, mistakenStoryboardAsVideoArtStyle, storyboardArtworkStyle, storyboardShots, type StoryboardShot, type StoryboardSegment } from "./storyboard-data";
@@ -33,6 +33,11 @@ type PromptReviewStatus = "empty" | "reviewing" | "ready" | "stale" | "error";
 type PromptReviewVerdict = "discussion-ready" | "needs-revision";
 type PromptReviewSeverity = "blocking" | "warning" | "suggestion";
 type AssetFilter = "all" | "attention" | "ready" | "running";
+type PanelDropTarget = {
+  reviewIndex: number;
+  panelId?: string;
+  position: "before" | "after" | "end";
+};
 type WritingModelId = "codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "gpt-5.6-luna" | "deepseek-v4-flash" | "seed-2.1-pro" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
@@ -2014,6 +2019,8 @@ function DirectorDesk() {
   const [selectedStructurePanelIds, setSelectedStructurePanelIds] = useState<string[]>([]);
   const [panelSelectionAnchor, setPanelSelectionAnchor] = useState("");
   const [structureHistory, setStructureHistory] = useState<ShotReview[][]>([]);
+  const [draggedStructurePanelIds, setDraggedStructurePanelIds] = useState<string[]>([]);
+  const [panelDropTarget, setPanelDropTarget] = useState<PanelDropTarget | null>(null);
   const [zoomedStructurePanelId, setZoomedStructurePanelId] = useState("");
   const [panelAssemblyScrollMetrics, setPanelAssemblyScrollMetrics] = useState({
     scrollLeft: 0,
@@ -2025,6 +2032,8 @@ function DirectorDesk() {
   const artworkScroller = useRef<HTMLDivElement>(null);
   const panelAssemblyBottomScroller = useRef<HTMLDivElement>(null);
   const panelAssemblyScrollFrame = useRef(0);
+  const draggedStructurePanelIdsRef = useRef<string[]>([]);
+  const suppressStructurePanelClickRef = useRef(false);
   const importingMaterialDraftId = useRef("");
   const staleSendingSince = useRef<Record<string, number>>({});
   const staleArtworkSince = useRef<Record<string, number>>({});
@@ -3337,6 +3346,59 @@ function DirectorDesk() {
     setSelectedStructurePanelIds((current) => current.includes(panelId) ? current.filter((id) => id !== panelId) : [...current, panelId]);
   }
 
+  function beginStructurePanelDrag(event: DragEvent<HTMLButtonElement>, panelId: string) {
+    if (structureConfirmed) {
+      event.preventDefault();
+      return;
+    }
+    const selectedIds = selectedStructurePanelIds.includes(panelId)
+      ? structurePanelEntries.filter((entry) => selectedStructurePanelIds.includes(entry.panelId)).map((entry) => entry.panelId)
+      : [panelId];
+    draggedStructurePanelIdsRef.current = selectedIds;
+    suppressStructurePanelClickRef.current = true;
+    setDraggedStructurePanelIds(selectedIds);
+    setPanelDropTarget(null);
+    if (!selectedStructurePanelIds.includes(panelId)) {
+      setSelectedStructurePanelIds([panelId]);
+      setPanelSelectionAnchor(panelId);
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", selectedIds.join("\n"));
+  }
+
+  function autoScrollPanelAssemblyForDrag(clientX: number) {
+    const scroller = panelAssemblyBottomScroller.current;
+    if (!scroller) return;
+    const rect = scroller.getBoundingClientRect();
+    const edge = Math.min(80, rect.width * 0.16);
+    const leftDistance = clientX - rect.left;
+    const rightDistance = rect.right - clientX;
+    if (leftDistance < edge) scroller.scrollLeft -= Math.ceil(8 + ((edge - leftDistance) / edge) * 24);
+    else if (rightDistance < edge) scroller.scrollLeft += Math.ceil(8 + ((edge - rightDistance) / edge) * 24);
+  }
+
+  function markStructurePanelDrop(event: DragEvent<HTMLElement>, target: PanelDropTarget) {
+    if (!draggedStructurePanelIdsRef.current.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    autoScrollPanelAssemblyForDrag(event.clientX);
+    setPanelDropTarget(target);
+  }
+
+  function markStructurePanelCardDrop(event: DragEvent<HTMLButtonElement>, reviewIndex: number, panelId: string) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientX >= rect.left + rect.width / 2 ? "after" : "before";
+    markStructurePanelDrop(event, { reviewIndex, panelId, position });
+  }
+
+  function finishStructurePanelDrag() {
+    draggedStructurePanelIdsRef.current = [];
+    setDraggedStructurePanelIds([]);
+    setPanelDropTarget(null);
+    window.setTimeout(() => { suppressStructurePanelClickRef.current = false; }, 0);
+  }
+
   function updateMangaPanelAnnotation(panelId: string, value: string) {
     setState((previous) => ({
       ...previous,
@@ -3851,6 +3913,86 @@ function DirectorDesk() {
         : `已从成片结构中排除 ${selected.size} 张画格；原漫画文件仍保留`);
   }
 
+  function moveStructurePanelsByDrag(event: DragEvent<HTMLElement>, target: PanelDropTarget) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (structureConfirmed) {
+      finishStructurePanelDrag();
+      setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
+      return;
+    }
+    const transferredIds = event.dataTransfer.getData("text/plain").split("\n").map((id) => id.trim()).filter(Boolean);
+    const requestedIds = draggedStructurePanelIdsRef.current.length ? draggedStructurePanelIdsRef.current : transferredIds;
+    const existingIds = new Set(structurePanelEntries.map((entry) => entry.panelId));
+    const draggedIds = structurePanelEntries
+      .map((entry) => entry.panelId)
+      .filter((panelId) => requestedIds.includes(panelId) && existingIds.has(panelId));
+    if (!draggedIds.length || !state.reviews[target.reviewIndex]) {
+      finishStructurePanelDrag();
+      return;
+    }
+    if (target.panelId && draggedIds.includes(target.panelId)) {
+      finishStructurePanelDrag();
+      setToast("已保持原位置；请拖到另一张画格的左半边或右半边");
+      return;
+    }
+
+    const draggedSet = new Set(draggedIds);
+    const atomicByPanelId = new Map<string, ShotReview>();
+    state.reviews.forEach((origin) => (origin.shot.sourcePanels || []).forEach((panelId) => {
+      atomicByPanelId.set(panelId, atomicPanelReview(origin, panelId));
+    }));
+    const groups = state.reviews.map((origin, originIndex) => ({
+      origin,
+      originIndex,
+      panelIds: (origin.shot.sourcePanels || []).filter((panelId) => !draggedSet.has(panelId)),
+    }));
+    const destination = groups[target.reviewIndex];
+    let insertionIndex = destination.panelIds.length;
+    if (target.panelId) {
+      const targetPanelIndex = destination.panelIds.indexOf(target.panelId);
+      if (targetPanelIndex >= 0) insertionIndex = targetPanelIndex + (target.position === "after" ? 1 : 0);
+    }
+    destination.panelIds.splice(insertionIndex, 0, ...draggedIds);
+    const nonEmptyGroups = groups.filter((group) => group.panelIds.length);
+    const nextPanelGroups = nonEmptyGroups.map((group) => group.panelIds);
+    const currentPanelGroups = state.reviews.map((item) => item.shot.sourcePanels || []);
+    if (JSON.stringify(nextPanelGroups) === JSON.stringify(currentPanelGroups)) {
+      finishStructurePanelDrag();
+      setToast("画格位置没有变化");
+      return;
+    }
+
+    const reviews = renumberStructure(nonEmptyGroups.map((group) => {
+      const originPanels = group.origin.shot.sourcePanels || [];
+      const unchanged = originPanels.length === group.panelIds.length
+        && originPanels.every((panelId, index) => panelId === group.panelIds[index]);
+      if (unchanged) return group.origin;
+      const atomicReviews = group.panelIds
+        .map((panelId) => atomicByPanelId.get(panelId))
+        .filter((item): item is ShotReview => Boolean(item));
+      return combinedPanelReview(atomicReviews);
+    }));
+    const targetIndex = Math.max(0, nonEmptyGroups.findIndex((group) => group.originIndex === target.reviewIndex));
+    setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => ({
+      ...previous,
+      reviews,
+      currentShot: targetIndex,
+      sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+      assetPrompts: [],
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+      view: "script",
+    }));
+    setSelectedStructurePanelIds(draggedIds);
+    setPanelSelectionAnchor(draggedIds[0] || "");
+    const targetShotId = reviews[targetIndex]?.shot.id || String(targetIndex + 1).padStart(2, "0");
+    finishStructurePanelDrag();
+    setToast(`已把 ${draggedIds.length} 张画格拖到 Shot ${targetShotId}；可用“撤销上一步”恢复`);
+  }
+
   function moveSelectedPanelsToAdjacent(direction: -1 | 1) {
     if (!selectedStructurePanelIds.length) {
       setToast("请先选择要移动的漫画画格");
@@ -3880,6 +4022,22 @@ function DirectorDesk() {
       return;
     }
     applyPanelGrouping("combine", direction < 0 ? [...targetPanels, ...selectedStructurePanelIds] : [...selectedStructurePanelIds, ...targetPanels]);
+  }
+
+  function renderPanelAssemblyActions(position: "top" | "bottom") {
+    return (
+      <div className={`panel-assembly-actions is-${position}`} aria-label={`画格编组操作栏（${position === "top" ? "顶部" : "底部"}）`}>
+        <span>已选 {selectedStructurePanelIds.length} 张 · Shift 连选 · 可拖动画格换组／排序</span>
+        <button type="button" className="button secondary" disabled={selectedStructurePanelIds.length < 2} onClick={() => applyPanelGrouping("combine")}>组合选中画格为一个 Shot</button>
+        <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(-1)}>并入前一组</button>
+        <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(1)}>并入后一组</button>
+        <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("split")}>选中画格拆成单格</button>
+        <button type="button" className="button danger" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("exclude")}>删除选中画格</button>
+        <button type="button" className="button secondary" disabled title="未来支持上传画师补画或新建空白分镜">＋ 新增手绘分镜（未来）</button>
+        <button type="button" className="text-button" disabled={!selectedStructurePanelIds.length} onClick={() => { setSelectedStructurePanelIds([]); setPanelSelectionAnchor(""); }}>取消选择</button>
+        <button type="button" className="text-button" disabled={!structureHistory.length} onClick={undoStructureChange}>撤销上一步</button>
+      </div>
+    );
   }
 
   function mergeCurrentWithNext() {
@@ -6645,6 +6803,7 @@ function DirectorDesk() {
                   : "全部可见"}
               </output>
             </div>
+            {renderPanelAssemblyActions("top")}
             <div className="panel-shot-groups" ref={panelAssemblyBottomScroller} onScroll={syncPanelAssemblyFromBottom}>
               {state.reviews.map((item, reviewIndex) => {
                 const panelIds = item.shot.sourcePanels || [];
@@ -6656,7 +6815,7 @@ function DirectorDesk() {
                   model: generationModel,
                 });
                 return (
-                  <article className={`panel-shot-group ${reviewIndex === state.currentShot ? "is-current" : ""} ${item.completePromptConfirmedAt ? "is-confirmed" : ""} ${item.approved ? "is-approved" : ""}`} key={`${item.shot.id}-${panelIds.join("-")}`}>
+                  <article className={`panel-shot-group ${reviewIndex === state.currentShot ? "is-current" : ""} ${item.completePromptConfirmedAt ? "is-confirmed" : ""} ${item.approved ? "is-approved" : ""} ${panelDropTarget?.reviewIndex === reviewIndex ? "is-drop-target" : ""}`} key={`${item.shot.id}-${panelIds.join("-")}`}>
                     <div className="panel-shot-group-title">
                       <div className="panel-shot-main" title={timingEstimateLabel(itemTiming, item.shot.duration)}>
                         <button type="button" onClick={() => selectShot(reviewIndex)}>
@@ -6705,18 +6864,36 @@ function DirectorDesk() {
                               ? "重试生成完整提示词讨论稿"
                               : "生成完整提示词讨论稿"}
                     </button>
-                    <div className="panel-shot-images">
+                    <div
+                      className="panel-shot-images"
+                      onDragOver={(event) => markStructurePanelDrop(event, { reviewIndex, position: "end" })}
+                      onDrop={(event) => moveStructurePanelsByDrag(event, { reviewIndex, position: "end" })}
+                    >
                       {panelIds.map((panelId) => {
                         const selected = selectedStructurePanelIds.includes(panelId);
                         const url = mangaSourceRequestId ? mangaPanelCropUrl(mangaSourceRequestId, panelId, bridge.pairingToken) : "";
+                        const dropPosition = panelDropTarget?.panelId === panelId ? panelDropTarget.position : "";
                         return (
-                          <div className="panel-assembly-card-shell" key={panelId}>
+                          <div className={`panel-assembly-card-shell ${dropPosition ? `drop-${dropPosition}` : ""}`} key={panelId}>
                             <button
                               type="button"
-                              className={`panel-assembly-card ${selected ? "is-selected" : ""}`}
+                              draggable
+                              className={`panel-assembly-card ${selected ? "is-selected" : ""} ${draggedStructurePanelIds.includes(panelId) ? "is-dragging" : ""}`}
                               aria-pressed={selected}
                               aria-label={`${selected ? "取消选择" : "选择"}画格 ${panelId}`}
-                              onClick={(event) => toggleStructurePanel(panelId, event.shiftKey)}
+                              title="拖动可调整所属 Shot 和组内顺序"
+                              onClick={(event) => {
+                                if (suppressStructurePanelClickRef.current) return;
+                                toggleStructurePanel(panelId, event.shiftKey);
+                              }}
+                              onDragStart={(event) => beginStructurePanelDrag(event, panelId)}
+                              onDragOver={(event) => markStructurePanelCardDrop(event, reviewIndex, panelId)}
+                              onDrop={(event) => {
+                                const rect = event.currentTarget.getBoundingClientRect();
+                                const position = event.clientX >= rect.left + rect.width / 2 ? "after" : "before";
+                                moveStructurePanelsByDrag(event, { reviewIndex, panelId, position });
+                              }}
+                              onDragEnd={finishStructurePanelDrag}
                             >
                               {url && bridge.pairingToken ? <img src={url} alt={`漫画画格 ${panelId}`} /> : <i>等待裁图</i>}
                               <span>{panelId}</span>
@@ -6730,17 +6907,7 @@ function DirectorDesk() {
                 );
               })}
             </div>
-            <div className="panel-assembly-actions">
-              <span>已选 {selectedStructurePanelIds.length} 张 · Shift 可连续选择</span>
-              <button type="button" className="button secondary" disabled={selectedStructurePanelIds.length < 2} onClick={() => applyPanelGrouping("combine")}>组合选中画格为一个 Shot</button>
-              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(-1)}>并入前一组</button>
-              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(1)}>并入后一组</button>
-              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("split")}>选中画格拆成单格</button>
-              <button type="button" className="button danger" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("exclude")}>删除选中画格</button>
-              <button type="button" className="button secondary" disabled title="未来支持上传画师补画或新建空白分镜">＋ 新增手绘分镜（未来）</button>
-              <button type="button" className="text-button" disabled={!selectedStructurePanelIds.length} onClick={() => { setSelectedStructurePanelIds([]); setPanelSelectionAnchor(""); }}>取消选择</button>
-              <button type="button" className="text-button" disabled={!structureHistory.length} onClick={undoStructureChange}>撤销上一步</button>
-            </div>
+            {renderPanelAssemblyActions("bottom")}
           </section>
         ) : null}
         <div className="shot-structure-actions">

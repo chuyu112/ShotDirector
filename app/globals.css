@@ -1099,6 +1099,7 @@ input:focus-visible {
 .panel-shot-group.is-current { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(187, 73, 30, .12); }
 .panel-shot-group.is-confirmed { border-color: #2f7d62; background: #edf7f2; }
 .panel-shot-group.is-approved { border-color: #167257; box-shadow: inset 0 3px 0 #167257; }
+.panel-shot-group.is-drop-target { border-color: #175cff; box-shadow: 0 0 0 3px rgba(23,92,255,.18); }
 .panel-shot-group-title { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; border-bottom: 1px solid rgba(21,21,21,.1); background: rgba(255,255,255,.8); }
 .panel-shot-main { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; }
 .panel-shot-main > button { min-width: 0; border: 0; padding: 2px 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
@@ -1121,11 +1122,17 @@ input:focus-visible {
 .panel-shot-group-title .panel-group-select:hover { background: rgba(187,73,30,.08); }
 .panel-shot-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 7px; }
 .panel-assembly-card-shell { position: relative; min-width: 0; }
-.panel-assembly-card { position: relative; display: grid; min-width: 0; min-height: 112px; overflow: hidden; padding: 0; border: 2px solid transparent; border-radius: 8px; background: #dedbd2; cursor: pointer; }
+.panel-assembly-card-shell.drop-before::before,
+.panel-assembly-card-shell.drop-after::after { content: ""; position: absolute; z-index: 4; top: -3px; bottom: -3px; width: 5px; border-radius: 999px; background: #175cff; box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 0 0 5px rgba(23,92,255,.22); pointer-events: none; }
+.panel-assembly-card-shell.drop-before::before { left: -4px; }
+.panel-assembly-card-shell.drop-after::after { right: -4px; }
+.panel-assembly-card { position: relative; display: grid; min-width: 0; min-height: 112px; overflow: hidden; padding: 0; border: 2px solid transparent; border-radius: 8px; background: #dedbd2; cursor: grab; }
+.panel-assembly-card:active { cursor: grabbing; }
 .panel-assembly-card img { display: block; width: 100%; height: 112px; object-fit: contain; background: #dedbd2; }
 .panel-assembly-card i { display: grid; place-items: center; min-height: 112px; color: var(--muted); font-size: 10px; font-style: normal; }
 .panel-assembly-card span { position: absolute; right: 4px; bottom: 4px; padding: 3px 5px; border-radius: 4px; background: rgba(15,15,15,.82); color: white; font-family: var(--font-geist-mono), monospace; font-size: 8px; font-weight: 900; }
 .panel-assembly-card.is-selected { border-color: #f4bd00; box-shadow: 0 0 0 2px rgba(244,189,0,.28); }
+.panel-assembly-card.is-dragging { opacity: .42; filter: grayscale(.45); }
 .panel-assembly-card.is-selected::after { content: "✓"; position: absolute; top: 4px; left: 4px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: #f4bd00; color: #171717; font-size: 13px; font-weight: 1000; }
 .panel-card-zoom { position: absolute; top: 5px; right: 5px; z-index: 2; display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; background: rgba(15,15,15,.82); color: white; font: inherit; font-size: 15px; font-weight: 900; line-height: 1; cursor: zoom-in; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
 .panel-card-zoom:hover { background: var(--accent); }
@@ -1161,6 +1168,8 @@ input:focus-visible {
 .panel-lightbox-annotation small { color: var(--muted); font-size: 9px; font-weight: 800; }
 .panel-assembly-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .panel-assembly-actions > span { margin-right: auto; color: var(--ink-soft); font-size: 11px; font-weight: 900; }
+.panel-assembly-actions.is-top { padding: 9px 10px; border: 1px solid rgba(23,92,255,.2); border-radius: 10px; background: rgba(247,249,255,.96); }
+.panel-assembly-actions.is-bottom { padding-top: 2px; }
 .shot-structure-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .shot-structure-actions .button { min-height: 42px; }
 .shot-confirmation-progress { display: inline-flex; align-items: center; min-height: 42px; padding: 8px 12px; border: 1px solid rgba(47,125,98,.28); border-radius: 10px; background: #edf7f2; color: #216048; font-size: 11px; font-weight: 900; }
