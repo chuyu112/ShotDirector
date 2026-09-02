@@ -5083,6 +5083,10 @@ input:focus-visible {
 .strict-review-control-card label { display: grid; gap: 6px; margin: 6px 18px 0; }
 .strict-review-control-card label > span { font-size: 9px; font-weight: 900; }
 .strict-review-control-card select { min-height: 46px; width: 100%; padding: 8px 32px 8px 10px; border: 1px solid #aaa49a; background: white; }
+.strict-review-blocked, .strict-review-ready { margin: 0 18px; padding: 12px; font-size: 12px; line-height: 1.6; }
+.strict-review-blocked { border-left: 3px solid #9d6a00; background: #fff4ce; color: #735000; }
+.strict-review-blocked .button { margin-top: 10px; width: 100%; }
+.strict-review-ready { background: #edf7f2; color: #23684f; }
 .strict-review-control-card > .button,
 .strict-review-control-card > small,
 .strict-review-control-card > .prompt-review-config,

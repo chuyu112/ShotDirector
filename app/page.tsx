@@ -13,6 +13,8 @@ import { WhiteboxEditor } from "./whitebox-stage";
 import { planPanelDrop } from "./panel-drag-grouping.mjs";
 import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysisReadingOrder, type ReadingPage } from "./manga-reading-order.mjs";
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
+import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
+import { persistProjectSnapshot } from "./project-save.mjs";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
   browserAgentRevision,
@@ -404,6 +406,7 @@ const mangaPanelUnderstandingVersion = 2;
 type BridgeState = {
   connected: boolean;
   busy: boolean;
+  draining?: boolean;
   serverMode?: boolean;
   modelProvider?: {
     id: string;
@@ -2053,6 +2056,7 @@ function DirectorDesk() {
   const recoveringArtworkJob = useRef("");
   const recoveringCompletePrompt = useRef("");
   const recoveringPromptReview = useRef("");
+  const promptReviewSubmission = useRef(false);
   const currentShotIdRef = useRef("");
   const writingModelMenuRef = useRef<HTMLDetailsElement>(null);
   const draggedWritingModelIdRef = useRef<WritingModelId | "">("");
@@ -2110,7 +2114,7 @@ function DirectorDesk() {
     ? "切换中…"
     : activeWritingModel?.label || (bridge.connected ? "暂无可用模型" : "未连接");
   const selectedReasoningEffort = bridge.reasoningPolicy?.selected || "high";
-  const reviewerOptions = bridge.reviewers?.length ? bridge.reviewers : [{ id: defaultPromptReviewerId, label: "Kimi K3 · 独立 Agent", provider: "kimi", model: "k3", available: bridge.connected }];
+  const reviewerOptions = bridge.reviewers?.length ? bridge.reviewers : [{ id: defaultPromptReviewerId, label: "正在加载审核模型…", provider: "kimi", model: "k3", available: false, reason: "尚未收到审核模型目录，请等待服务连接。" }];
   const savedPromptReviewer = reviewerOptions.find((item) => item.id === review.promptReviewerId);
   const selectedPromptReviewer = savedPromptReviewer || reviewerOptions.find((item) => item.available) || reviewerOptions[0];
   const selectedPromptReviewerId = selectedPromptReviewer?.id || defaultPromptReviewerId;
@@ -2132,6 +2136,10 @@ function DirectorDesk() {
   const mangaSourceRequestId = /^[a-f0-9-]{36}$/i.test(state.sourceMangaRequestId || "")
     ? state.sourceMangaRequestId as string
     : materialDraftMode && shot.sourcePanels?.length && /^[a-f0-9-]{36}$/i.test(projectScopeId) ? projectScopeId : "";
+  const reviewControls = promptReviewControls({
+    review, reviewer: selectedPromptReviewer, bridge,
+    hasSource: Boolean(mangaSourceRequestId && shot.sourcePanels?.length),
+  });
   const zoomedStructurePanelUrl = zoomedStructurePanelId && mangaSourceRequestId
     ? mangaPanelCropUrl(mangaSourceRequestId, zoomedStructurePanelId, bridge.pairingToken)
     : "";
@@ -2531,6 +2539,7 @@ function DirectorDesk() {
           if (active) setBridge({
             connected: Boolean(value.connected),
             busy: Boolean(value.busy),
+            draining: Boolean(value.draining),
             serverMode: Boolean(value.serverMode),
             modelProvider: value.modelProvider,
             pairingToken: value.pairingToken || (value.serverMode ? serverGatewayPairingSentinel : undefined),
@@ -2856,6 +2865,7 @@ function DirectorDesk() {
 
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
+    if (promptReviewSubmission.current) return;
     if (promptReviewIsCurrent) return;
     const matchingLiveJob = bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.status === "running";
     if (matchingLiveJob) return;
@@ -3604,6 +3614,8 @@ function DirectorDesk() {
   }
 
   function selectPromptReviewer(reviewerId: string) {
+    if (reviewControls.selectingDisabled || promptReviewSubmission.current) return;
+    if (!reviewerOptions.some((item) => item.id === reviewerId && item.available)) return;
     updateReview((current) => ({
       ...invalidatePromptReview(current),
       promptReviewerId: reviewerId,
@@ -3611,26 +3623,12 @@ function DirectorDesk() {
   }
 
   async function reviewCompletePrompt() {
-    if (!review.completePrompt?.trim() || review.completePromptStatus !== "ready") {
-      setToast("请先生成并确认当前完整提示词讨论稿内容");
+    if (promptReviewSubmission.current) return;
+    if (reviewControls.submitDisabled || !selectedPromptReviewer?.available || !bridge.pairingToken || !review.completePrompt?.trim()) {
+      setToast(reviewControls.reason || "所选 Reviewer 暂不可用");
       return;
     }
-    if (!bridge.connected || !bridge.pairingToken) {
-      setToast("本地桥接未启动，暂时不能提交独立审查");
-      return;
-    }
-    if (bridge.busy) {
-      setToast("另一个 Agent 任务正在处理，请等待完成");
-      return;
-    }
-    if (!selectedPromptReviewer?.available) {
-      setToast(selectedPromptReviewer?.reason || "所选 Reviewer 尚未配置");
-      return;
-    }
-    if (!mangaSourceRequestId) {
-      setToast("当前 Shot 缺少可读取的漫画原图，无法独立核对");
-      return;
-    }
+    promptReviewSubmission.current = true;
     const panelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [panelId, state.sourceMangaPanelAnnotations?.[panelId] || ""]));
     const sourceRevision = buildPromptReviewRevision({
       shotId: shot.id,
@@ -3655,7 +3653,6 @@ function DirectorDesk() {
         promptReviewError: undefined,
       } : item),
     }));
-    setBridge((current) => ({ ...current, busy: true }));
     setToast(`已交给 ${selectedPromptReviewer.label} 的独立 Agent 审查；它不能改稿或批准`);
     try {
       const response = await bridgeFetch(`${bridgeBase}/review-shot-prompt`, {
@@ -3712,7 +3709,7 @@ function DirectorDesk() {
       }));
       setToast(message);
     } finally {
-      setBridge((current) => ({ ...current, busy: false }));
+      promptReviewSubmission.current = false;
     }
   }
 
@@ -4778,51 +4775,18 @@ function DirectorDesk() {
     setState((previous) => ({ ...previous, globalAnnotation: value, globalStatus: value.trim() ? "draft" : previous.globalStatus }));
   }
 
-  async function persistProjectNow() {
+  async function persistProjectNow(detail: ManjingSaveProjectEventDetail) {
     if (!bridge.connected || !bridge.pairingToken || !projectArchiveLoaded) {
       throw new Error("项目存档尚未加载完成，请稍后再保存");
     }
-    const savedAt = new Date().toISOString();
-    const snapshot: ReviewState = {
-      ...state,
-      globalSettings: cloneGlobalSettings(state.globalSettings),
-      globalUpdatedAt: savedAt,
-    };
-    const draftResponse = await bridgeFetch(`${bridgeBase}/draft-state`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
-      body: JSON.stringify({
-        scopeId: projectScopeId || "main",
-        storageKey: activeStorageKey,
-        state: snapshot,
-        appliedAgentRevision: appliedAgentDraftRevision.current,
-      }),
+    return persistProjectSnapshot({
+      fetcher: bridgeFetch, apiBase: bridgeBase, snapshot: state,
+      scopeId: projectScopeId || "main", storageKey: activeStorageKey,
+      appliedAgentRevision: appliedAgentDraftRevision.current,
+      pairingToken: bridge.pairingToken, materialDraftMode, workspaceScope,
+      serverProjectId: tenantScope.mode === "server" ? tenantScope.projectId : undefined,
+      signal: detail.signal, onProgress: detail.onProgress,
     });
-    const draftResult = await draftResponse.json().catch(() => ({}));
-    if (!draftResponse.ok || draftResult.status === "agent-revision-required") {
-      throw new Error(draftResult.error || "Agent 有更新版本，请先加载后再保存");
-    }
-    if (!materialDraftMode) {
-      const settingsResponse = await bridgeFetch(`${bridgeBase}/source-global-settings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
-        body: JSON.stringify({ projectTitle: snapshot.projectTitle, workspaceScope, settings: snapshot.globalSettings }),
-      });
-      const settingsResult = await settingsResponse.json().catch(() => ({}));
-      if (!settingsResponse.ok) throw new Error(settingsResult.error || "项目全局设定保存失败");
-    }
-    if (tenantScope.mode === "server") {
-      const renameResponse = await bridgeFetch(`${bridgeBase}/projects/rename`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: tenantScope.projectId, name: snapshot.projectTitle }),
-      });
-      const renameResult = await renameResponse.json().catch(() => ({}));
-      if (!renameResponse.ok) throw new Error(renameResult.error || "项目名称保存失败");
-    }
-    scopedBrowserStorage.setItem(activeStorageKey, JSON.stringify(browserDraftSnapshot(snapshot, appliedAgentDraftRevision.current)));
-    setState(snapshot);
-    return `项目《${snapshot.projectTitle}》已保存到服务器`;
   }
 
   useEffect(() => {
@@ -4830,7 +4794,7 @@ function DirectorDesk() {
       const detail = (event as CustomEvent<ManjingSaveProjectEventDetail>).detail;
       if (!detail) return;
       detail.handled = true;
-      void persistProjectNow().then(detail.resolve).catch((error) => {
+      void persistProjectNow(detail).then(detail.resolve).catch((error) => {
         detail.reject(error instanceof Error ? error.message : "项目保存失败");
       });
     };
@@ -6444,7 +6408,7 @@ function DirectorDesk() {
           {state.reviews.map((item, index) => {
             const active = index === state.currentShot;
             const reportReady = item.promptReviewStatus === "ready";
-            return <button type="button" key={item.shot.shotUid || item.shot.id} className={`${active ? "active" : ""} ${reportReady ? "reviewed" : ""}`} onClick={() => selectShot(index)}><b>SHOT {item.shot.id}</b><small>{reportReady ? "已有审核" : item.completePrompt?.trim() ? "待审核" : "等待 Creator 提示词"}</small></button>;
+            return <button type="button" key={item.shot.shotUid || item.shot.id} className={`${active ? "active" : ""} ${reportReady ? "reviewed" : ""}`} onClick={() => selectShot(index)}><b>SHOT {item.shot.id}</b><small>{promptReviewShotLabel(item)}</small></button>;
           })}
         </nav>
 
@@ -6463,10 +6427,11 @@ function DirectorDesk() {
           <aside className="strict-review-report-column">
             <section className="strict-review-control-card">
               <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>每次都是隔离的新 Agent Session，只输出问题、证据与建议。</p></div>
-              <label><span>Reviewer 模型</span><select value={selectedPromptReviewerId} disabled={review.promptReviewStatus === "reviewing" || bridge.busy} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 未配置"}</option>)}</select></label>
+              <label><span>Reviewer 模型</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
               <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
               {!selectedPromptReviewer?.available ? <p className="prompt-review-config">{selectedPromptReviewer?.reason || "当前 Reviewer 的 env 尚未配置完整"}</p> : null}
-              <button type="button" className="button primary" disabled={bridge.busy || review.promptReviewStatus === "reviewing" || !selectedPromptReviewer?.available || review.completePromptStatus !== "ready" || !review.completePrompt?.trim()} onClick={() => void reviewCompletePrompt()}>{review.promptReviewStatus === "reviewing" ? "严格审核中…" : promptReviewArtifactIsCurrent ? "重新审核当前只读快照" : "提交严格审核"}</button>
+              {reviewControls.reason ? <div id="strict-review-blocked-reason" className="strict-review-blocked" role="status"><p>{reviewControls.reason}</p>{reviewControls.action === "creator" ? <button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); openCompleteShotPrompt(state.currentShot); }}>到创作台处理当前提示词</button> : null}</div> : <p className="strict-review-ready" role="status">当前 Shot 已可审核，无需等待其他 Shot 生成完成。</p>}
+              <button type="button" className="button primary" disabled={reviewControls.submitDisabled} aria-describedby={reviewControls.reason ? "strict-review-blocked-reason" : undefined} onClick={() => void reviewCompletePrompt()}>{review.promptReviewStatus === "reviewing" ? "严格审核中…" : promptReviewArtifactIsCurrent ? "重新审核当前只读快照" : "提交严格审核"}</button>
               <small>本按钮只创建审核报告，不会改写提示词、Shot、源文件或批准状态。</small>
             </section>
 

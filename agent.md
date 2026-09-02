@@ -39,6 +39,8 @@ npm run lint
 - 批注、源文件回写、出图和选图都不等于审批；只有独立盖章才批准 Shot。
 - 最终视频风格、临时分镜图风格和白模材质必须分层。
 - 异步任务必须可恢复，结果必须回到正确项目和 Shot。
+- Reviewer 模型选择是当前 Shot 的本地选择，不是全局写作模型切换。其他 Shot 生成中的全局 busy 不得锁住当前已就绪 Shot 的选择和审核；仅当前审核运行时锁定其模型，独占审核/批注通道占用时阻止重复提交，并显示原因。过期、缺稿、断线或模型不可用须有明确提示，不能只留灰色按钮。
+- 保存项目必须有覆盖事件回调、请求与响应读取的超时及失败出口，成功以服务器写入回执为准；刷新账户目录不得延长保存锁。保存完成不得重新应用旧快照覆盖期间到达的 Agent 结果或人工修改。海外 HTTPS 入口启用 HTTP/2，避免多个长生成请求耗尽浏览器 HTTP/1.1 连接而阻塞保存和健康检查。
 - 新的数据模型应使用稳定 UID；显示编号不能继续承担业务主键职责。
 - 所有模型任务必须经 Pi Agent Harness 执行。Creator 可以恢复同一稳定 Session；Reviewer 必须使用包含 Run ID 的隔离 Session，禁止恢复 Creator checkpoint 或注册 Creator 工具。
 - Harness 必须保留 Session / Run / 追加事件 / stateVersion 检查点语义。事件不得记录 token、cookie、密钥、隐藏推理或 chain-of-thought；旧 Run 不得覆盖更新 Session。

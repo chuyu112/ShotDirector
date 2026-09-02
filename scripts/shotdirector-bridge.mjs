@@ -27,6 +27,7 @@ import { OpenAIImageProvider } from "../server/openai-image-provider.mjs";
 import { LibtvServerWorker } from "../server/libtv-worker.mjs";
 import { assertAnnotationBatchShotLimit } from "../server/request-limits.mjs";
 import { refineMangaPanelPixelBounds } from "../server/manga-panel-edge-snap.mjs";
+import { confirmedMangaPixelBounds } from "../server/manga-native-box.mjs";
 import { isGlobalSettings } from "./project-global-settings.mjs";
 
 const host = String(process.env.MANJING_BRIDGE_HOST || "127.0.0.1").trim();
@@ -3727,13 +3728,13 @@ async function createMangaPanelCrop(requestId, panelId) {
     right: Math.max(1, Math.min(orientedWidth, Math.ceil(((panel.bounds.x + panel.bounds.width) / scale) * orientedWidth))),
     bottom: Math.max(1, Math.min(orientedHeight, Math.ceil(((panel.bounds.y + panel.bounds.height) / scale) * orientedHeight))),
   };
-  const refinedBounds = cropMasks.length ? modelBounds : await refineMangaPanelPixelBounds({
+  const refinedBounds = confirmedMangaPixelBounds(panel, orientedWidth, orientedHeight) || (cropMasks.length ? modelBounds : await refineMangaPanelPixelBounds({
     imagePath: source.filePath,
     imageWidth: orientedWidth,
     imageHeight: orientedHeight,
     bounds: modelBounds,
     missingEdges: panel.missingEdges,
-  });
+  }));
   const left = refinedBounds.left;
   const top = refinedBounds.top;
   const right = Math.max(left + 1, refinedBounds.right);

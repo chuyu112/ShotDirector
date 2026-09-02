@@ -85,6 +85,10 @@ test("runs prompt review as an isolated non-approving reviewer task", async () =
   assert.match(strictReviewBranch, /STRICT REVIEW · 只审不改/);
   assert.match(strictReviewBranch, /没有编辑、重新生成、应用建议或批准入口/);
   assert.match(strictReviewBranch, /CREATOR PROMPT · READ ONLY/);
+  assert.match(strictReviewBranch, /disabled=\{reviewControls.selectingDisabled\}/);
+  assert.match(strictReviewBranch, /disabled=\{reviewControls.submitDisabled\}/);
+  assert.match(strictReviewBranch, /strict-review-blocked-reason/);
+  assert.doesNotMatch(strictReviewBranch, /disabled=\{[^}]*bridge\.busy/);
   assert.doesNotMatch(strictReviewBranch, /stampCurrentShot|generateCompleteShotPrompt|updateCompleteShotPrompt|<textarea/);
   assert.match(page, /promptReviewSourceRevision/);
   assert.match(page, /const promptReviewArtifactIsCurrent = review\.promptReviewStatus === "ready"/);
@@ -290,7 +294,7 @@ test("Shot prompt controls use stable identities and do not globally block paral
     assert.doesNotMatch(entry, /disabled=\{bridge\.busy/);
   }
   assert.doesNotMatch(page, /className="button primary" disabled=\{bridge\.busy \|\| review\.completePromptStatus/);
-  assert.match(page, /disabled=\{bridge\.busy \|\| review\.promptReviewStatus === "reviewing"/);
+  assert.match(page, /disabled=\{reviewControls.submitDisabled\}/);
 });
 
 test("manga panel detection enforces Box-to-Box while allowing intentional overlap", async () => {

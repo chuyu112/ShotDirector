@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { requestProjectSave, type SaveProjectDetail } from "./project-save.mjs";
 
 type AuthUser = {
   id: string;
@@ -52,11 +53,7 @@ const authChannelName = "manjing-auth-session-v1";
 const authStorageSignalKey = "manjing-auth-signal-v1";
 export const MANJING_SESSION_INVALID_EVENT = "manjing-session-invalid";
 export const MANJING_SAVE_PROJECT_EVENT = "manjing-save-project";
-export type ManjingSaveProjectEventDetail = {
-  handled: boolean;
-  resolve: (message?: string) => void;
-  reject: (message: string) => void;
-};
+export type ManjingSaveProjectEventDetail = SaveProjectDetail;
 const ManjingWorkspaceScopeContext = createContext<ManjingWorkspaceScope | null>(null);
 
 function safeScopePart(value: string) {
@@ -159,6 +156,7 @@ export function ManjingAuthGate({
   const [submitting, setSubmitting] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
+  const [projectSaveStage, setProjectSaveStage] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const requestSequence = useRef(0);
   const activeSessionRequest = useRef<number | null>(null);
@@ -194,6 +192,7 @@ export function ManjingAuthGate({
       const response = await globalThis.fetch(`${apiBase}/auth/me`, {
         cache: "no-store",
         credentials: "include",
+        signal: AbortSignal.timeout(10_000),
       });
       if (requestId !== requestSequence.current) return;
 
@@ -419,26 +418,25 @@ export function ManjingAuthGate({
   }
 
   async function saveProject() {
+    if (projectBusy) return;
     setProjectBusy(true);
+    setProjectSaveStage("正在保存项目…");
     setSessionError("");
     setProjectNotice("");
     try {
-      const message = await new Promise<string>((resolve, reject) => {
-        const detail: ManjingSaveProjectEventDetail = {
-          handled: false,
-          resolve: (value = "项目已保存") => resolve(value),
-          reject,
-        };
-        window.dispatchEvent(new CustomEvent<ManjingSaveProjectEventDetail>(MANJING_SAVE_PROJECT_EVENT, { detail }));
-        if (!detail.handled) reject(new Error("项目工作区尚未准备好"));
+      const message = await requestProjectSave(window, MANJING_SAVE_PROJECT_EVENT, {
+        onProgress: setProjectSaveStage,
       });
       setProjectNotice(message);
       publishAuthSignal("session-changed");
-      await loadSession({ background: true, force: true });
+      // Account refresh is not part of saving. A slow /auth/me must not keep
+      // the project controls locked after the server has acknowledged writes.
+      void loadSession({ background: true, force: true });
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error || "保存项目失败，请重试。"));
     } finally {
       setProjectBusy(false);
+      setProjectSaveStage("");
     }
   }
 
@@ -473,7 +471,7 @@ export function ManjingAuthGate({
                 新建项目
               </button>
               <button type="button" disabled={projectBusy || !(selectedProjectId || gate.activeProject.id)} onClick={() => void activateProject(selectedProjectId || gate.activeProject.id)}>加载项目</button>
-              <button type="button" disabled={projectBusy} onClick={() => void saveProject()}>{projectBusy ? "处理中…" : "保存项目"}</button>
+              <button type="button" disabled={projectBusy} onClick={() => void saveProject()}>{projectSaveStage || (projectBusy ? "处理中…" : "保存项目")}</button>
             </div>
             <div className="manjing-server-account">
               <span className={gate.user.role === "superadmin" ? "superadmin-badge" : undefined}>
