@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, CSSProperties, DragEvent, FormEvent, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, DragEvent, FormEvent, Fragment, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { blockingPlans, type BlockingMarker, type BlockingMovement } from "./blocking-plans";
 import { globalSettings as sourceGlobalSettings, type CharacterProfile, type GlobalSettings } from "./global-settings";
 import { defaultArtStyle, inferredVideoArtStyle, legacyStoryboardArtStyle, mistakenStoryboardAsVideoArtStyle, storyboardArtworkStyle, storyboardShots, type StoryboardShot, type StoryboardSegment } from "./storyboard-data";
@@ -10,6 +10,8 @@ import { buildCompleteShotPromptRevision, buildPromptReviewRevision, buildShotUp
 import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
 import { MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
+import { planPanelDrop } from "./panel-drag-grouping.mjs";
+import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
   browserAgentRevision,
@@ -35,8 +37,8 @@ type PromptReviewSeverity = "blocking" | "warning" | "suggestion";
 type AssetFilter = "all" | "attention" | "ready" | "running";
 type PanelDropTarget = {
   reviewIndex: number;
-  panelId?: string;
-  position: "before" | "after" | "end";
+  position: "end";
+  createShotAt?: number;
 };
 type WritingModelId = "codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "gpt-5.6-luna" | "deepseek-v4-flash" | "seed-2.1-pro" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
 type ShotAssetKind = "character" | "scene" | "prop";
@@ -538,6 +540,10 @@ function durationRangeFor(model: GenerationModel) {
 }
 
 type ShotTimingEstimate = {
+  segmentCount: number;
+  estimatedFromPanels: boolean;
+  dialogueCharacters: number;
+  dialogueLineCount: number;
   dialogueSeconds: number;
   visualSeconds: number;
   actionReactionSeconds: number;
@@ -601,39 +607,29 @@ function generatedJapaneseDialogue(prompt?: string): TimingDialogueLine[] {
 }
 
 function dialogueLineSeconds(text: string) {
-  const spoken = text.replace(/（[^）]*仅制作备注[^）]*）/g, "").trim();
-  const visible = spoken.replace(/[\s、，,；;。！？!?…—「」『』“”‘’（）()：:・]/g, "");
-  if (!visible) return 0;
-
-  if (/[ぁ-んァ-ヶー]/.test(visible)) {
-    // 7 个有效字符/秒是项目的实测成片节奏，已经包含自然标点与换气，不再重复加停顿。
-    return [...visible].length / 7;
-  }
-  if (/\p{Script=Han}/u.test(visible)) return [...visible].length / 4;
-  const words = visible.split(/\s+/).filter(Boolean).length || 1;
-  return words / 2.5;
+  return dialogueMetrics(text).seconds;
 }
 
 function estimateShotTiming(input: {
   dialogue?: string[];
   completePrompt?: string;
   panelCount: number;
+  segmentCount?: number;
   assignedDuration: number;
   model: GenerationModel;
 }): ShotTimingEstimate {
   const promptDialogue = generatedJapaneseDialogue(input.completePrompt);
-  const sourceDialogue = (input.dialogue || []).map(splitTimingDialogueLine).filter((item) => item.text);
+  const sourceDialogue = (input.dialogue || []).map(splitTimingDialogueLine)
+    .filter((item) => item.text && !/^(?:拟声词|画面文字|画面符号)$/.test(item.speaker) && dialogueMetrics(item.text).characters > 0);
   const lines = promptDialogue.length ? promptDialogue : sourceDialogue;
   let speakerChanges = 0;
   for (let index = 1; index < lines.length; index += 1) {
     if (lines[index - 1].speaker && lines[index].speaker && lines[index - 1].speaker !== lines[index].speaker) speakerChanges += 1;
   }
   const dialogueSeconds = lines.reduce((total, item) => total + dialogueLineSeconds(item.text), 0);
-  const panelCount = Math.max(1, input.panelCount || 1);
-  // 漫画画格不是平均分秒：首个构图负责建立空间，后续瞬间反应格只追加较短识读时间。
-  const visualSeconds = Math.max(1.8, 1.2 + Math.max(0, panelCount - 1) * 0.55);
-  // 对白、包扎、眼神和构图可以并行；只有视觉动作链本身比对白更长时，才由视觉侧决定总时长。
-  const actionReactionSeconds = Math.min(4, 0.8 + Math.max(0, panelCount - 1) * 0.18 + speakerChanges * 0.22);
+  const visual = visualTimingMetrics(input.panelCount, input.segmentCount, speakerChanges);
+  const { visualSeconds, actionReactionSeconds } = visual;
+  // Speech and action can overlap; this is an estimate, never a command to split or truncate a Shot.
   const rawSeconds = Math.max(dialogueSeconds, visualSeconds + actionReactionSeconds);
   const requiredSeconds = Math.ceil(rawSeconds);
   const localWindowOverrunSeconds = lines.reduce((largest, item) => item.windowSeconds === undefined
@@ -649,6 +645,10 @@ function estimateShotTiming(input: {
         ? "tight"
         : "comfortable";
   return {
+    segmentCount: visual.segmentCount,
+    estimatedFromPanels: visual.estimatedFromPanels,
+    dialogueCharacters: lines.reduce((total, item) => total + dialogueMetrics(item.text).characters, 0),
+    dialogueLineCount: lines.length,
     dialogueSeconds,
     visualSeconds,
     actionReactionSeconds,
@@ -667,6 +667,13 @@ function timingEstimateLabel(estimate: ShotTimingEstimate, assignedDuration: num
   if (estimate.deltaSeconds === 0) return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 刚好`;
   if (estimate.status === "tight") return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 偏挤`;
   return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 余量 ${estimate.deltaSeconds}s`;
+}
+
+function timingEvidenceLabel(estimate: ShotTimingEstimate) {
+  const visual = `${estimate.estimatedFromPanels ? "暂按画格估" : "预估"} ${estimate.segmentCount} 个分镜`;
+  const speech = estimate.dialogueSource === "none" ? "暂无对白数据，待核对"
+    : `${estimate.dialogueSource === "generated-japanese" ? "日语" : "原文暂估"} ${estimate.dialogueCharacters} 字 · ${estimate.dialogueLineCount} 句`;
+  return `${visual} · ${speech}`;
 }
 
 const sections: Array<{ id: SectionId; number: string; title: string; hint: string }> = [
@@ -2280,6 +2287,7 @@ function DirectorDesk() {
     dialogue: shot.dialogue,
     completePrompt: review.completePrompt,
     panelCount: shot.sourcePanels?.length || 1,
+    segmentCount: shot.segments?.length,
     assignedDuration: shot.duration,
     model: generationModel,
   });
@@ -3386,12 +3394,6 @@ function DirectorDesk() {
     setPanelDropTarget(target);
   }
 
-  function markStructurePanelCardDrop(event: DragEvent<HTMLButtonElement>, reviewIndex: number, panelId: string) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const position = event.clientX >= rect.left + rect.width / 2 ? "after" : "before";
-    markStructurePanelDrop(event, { reviewIndex, panelId, position });
-  }
-
   function finishStructurePanelDrag() {
     draggedStructurePanelIdsRef.current = [];
     setDraggedStructurePanelIds([]);
@@ -3921,59 +3923,29 @@ function DirectorDesk() {
       setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
       return;
     }
-    const transferredIds = event.dataTransfer.getData("text/plain").split("\n").map((id) => id.trim()).filter(Boolean);
-    const requestedIds = draggedStructurePanelIdsRef.current.length ? draggedStructurePanelIdsRef.current : transferredIds;
-    const existingIds = new Set(structurePanelEntries.map((entry) => entry.panelId));
-    const draggedIds = structurePanelEntries
-      .map((entry) => entry.panelId)
-      .filter((panelId) => requestedIds.includes(panelId) && existingIds.has(panelId));
-    if (!draggedIds.length || !state.reviews[target.reviewIndex]) {
-      finishStructurePanelDrag();
-      return;
-    }
-    if (target.panelId && draggedIds.includes(target.panelId)) {
-      finishStructurePanelDrag();
-      setToast("已保持原位置；请拖到另一张画格的左半边或右半边");
-      return;
-    }
-
-    const draggedSet = new Set(draggedIds);
-    const atomicByPanelId = new Map<string, ShotReview>();
-    state.reviews.forEach((origin) => (origin.shot.sourcePanels || []).forEach((panelId) => {
-      atomicByPanelId.set(panelId, atomicPanelReview(origin, panelId));
-    }));
-    const groups = state.reviews.map((origin, originIndex) => ({
-      origin,
-      originIndex,
-      panelIds: (origin.shot.sourcePanels || []).filter((panelId) => !draggedSet.has(panelId)),
-    }));
-    const destination = groups[target.reviewIndex];
-    let insertionIndex = destination.panelIds.length;
-    if (target.panelId) {
-      const targetPanelIndex = destination.panelIds.indexOf(target.panelId);
-      if (targetPanelIndex >= 0) insertionIndex = targetPanelIndex + (target.position === "after" ? 1 : 0);
-    }
-    destination.panelIds.splice(insertionIndex, 0, ...draggedIds);
-    const nonEmptyGroups = groups.filter((group) => group.panelIds.length);
-    const nextPanelGroups = nonEmptyGroups.map((group) => group.panelIds);
-    const currentPanelGroups = state.reviews.map((item) => item.shot.sourcePanels || []);
-    if (JSON.stringify(nextPanelGroups) === JSON.stringify(currentPanelGroups)) {
+    // Only accept a drag started by this board, never external image/text payloads.
+    const plan = planPanelDrop(state.reviews.map((item) => item.shot.sourcePanels || []), draggedStructurePanelIdsRef.current, target);
+    if (!plan) {
       finishStructurePanelDrag();
       setToast("画格位置没有变化");
       return;
     }
-
-    const reviews = renumberStructure(nonEmptyGroups.map((group) => {
-      const originPanels = group.origin.shot.sourcePanels || [];
-      const unchanged = originPanels.length === group.panelIds.length
+    const { groups, draggedIds, targetIndex, creating } = plan;
+    const atomicByPanelId = new Map<string, ShotReview>();
+    state.reviews.forEach((origin) => (origin.shot.sourcePanels || []).forEach((panelId) => {
+      atomicByPanelId.set(panelId, atomicPanelReview(origin, panelId));
+    }));
+    const reviews = renumberStructure(groups.map((group) => {
+      const origin = state.reviews[group.originIndex];
+      const originPanels = origin?.shot.sourcePanels || [];
+      const unchanged = origin && originPanels.length === group.panelIds.length
         && originPanels.every((panelId, index) => panelId === group.panelIds[index]);
-      if (unchanged) return group.origin;
+      if (unchanged) return origin;
       const atomicReviews = group.panelIds
         .map((panelId) => atomicByPanelId.get(panelId))
         .filter((item): item is ShotReview => Boolean(item));
       return combinedPanelReview(atomicReviews);
     }));
-    const targetIndex = Math.max(0, nonEmptyGroups.findIndex((group) => group.originIndex === target.reviewIndex));
     setStructureHistory((history) => [...history.slice(-19), state.reviews]);
     setArtworkRecord({ shotId: "", dataUrls: [] });
     setState((previous) => ({
@@ -3990,7 +3962,24 @@ function DirectorDesk() {
     setPanelSelectionAnchor(draggedIds[0] || "");
     const targetShotId = reviews[targetIndex]?.shot.id || String(targetIndex + 1).padStart(2, "0");
     finishStructurePanelDrag();
-    setToast(`已把 ${draggedIds.length} 张画格拖到 Shot ${targetShotId}；可用“撤销上一步”恢复`);
+    setToast(`${creating ? "已新建" : "已移入"} Shot ${targetShotId}（${draggedIds.length} 张画格）；可用“撤销上一步”恢复`);
+  }
+
+  function renderNewShotDropZone(index: number, atEnd = false) {
+    const target: PanelDropTarget = { reviewIndex: -1, position: "end", createShotAt: index };
+    return (
+      <div
+        className={`panel-new-shot-drop ${atEnd ? "is-end" : "is-between"} ${panelDropTarget?.createShotAt === index ? "is-drop-target" : ""}`}
+        role="region"
+        aria-label={atEnd ? "拖到这里新建 Shot" : `在 Shot ${index + 1} 前新建 Shot`}
+        onDragEnter={(event) => markStructurePanelDrop(event, target)}
+        onDragOver={(event) => markStructurePanelDrop(event, target)}
+        onDrop={(event) => moveStructurePanelsByDrag(event, target)}
+      >
+        <b>＋</b><span>{atEnd ? "拖到这里新建 Shot" : "新建 Shot"}</span>
+        {atEnd ? <small>将一张或选中的多张画格拖入</small> : null}
+      </div>
+    );
   }
 
   function moveSelectedPanelsToAdjacent(direction: -1 | 1) {
@@ -4027,7 +4016,7 @@ function DirectorDesk() {
   function renderPanelAssemblyActions(position: "top" | "bottom") {
     return (
       <div className={`panel-assembly-actions is-${position}`} aria-label={`画格编组操作栏（${position === "top" ? "顶部" : "底部"}）`}>
-        <span>已选 {selectedStructurePanelIds.length} 张 · Shift 连选 · 可拖动画格换组／排序</span>
+        <span>已选 {selectedStructurePanelIds.length} 张 · Shift 连选 · 拖入 Shot 尾部，不改变两组内部顺序 · 拖到 ＋ 新建 Shot</span>
         <button type="button" className="button secondary" disabled={selectedStructurePanelIds.length < 2} onClick={() => applyPanelGrouping("combine")}>组合选中画格为一个 Shot</button>
         <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(-1)}>并入前一组</button>
         <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(1)}>并入后一组</button>
@@ -6811,11 +6800,19 @@ function DirectorDesk() {
                   dialogue: item.shot.dialogue,
                   completePrompt: item.completePrompt,
                   panelCount: panelIds.length || 1,
+                  segmentCount: item.shot.segments?.length,
                   assignedDuration: item.shot.duration,
                   model: generationModel,
                 });
                 return (
-                  <article className={`panel-shot-group ${reviewIndex === state.currentShot ? "is-current" : ""} ${item.completePromptConfirmedAt ? "is-confirmed" : ""} ${item.approved ? "is-approved" : ""} ${panelDropTarget?.reviewIndex === reviewIndex ? "is-drop-target" : ""}`} key={`${item.shot.id}-${panelIds.join("-")}`}>
+                  <Fragment key={`${item.shot.id}-${panelIds.join("-")}`}>
+                  {renderNewShotDropZone(reviewIndex)}
+                  <article
+                    className={`panel-shot-group ${reviewIndex === state.currentShot ? "is-current" : ""} ${item.completePromptConfirmedAt ? "is-confirmed" : ""} ${item.approved ? "is-approved" : ""} ${panelDropTarget?.reviewIndex === reviewIndex ? "is-drop-target" : ""}`}
+                    onDragEnter={(event) => markStructurePanelDrop(event, { reviewIndex, position: "end" })}
+                    onDragOver={(event) => markStructurePanelDrop(event, { reviewIndex, position: "end" })}
+                    onDrop={(event) => moveStructurePanelsByDrag(event, { reviewIndex, position: "end" })}
+                  >
                     <div className="panel-shot-group-title">
                       <div className="panel-shot-main" title={timingEstimateLabel(itemTiming, item.shot.duration)}>
                         <button type="button" onClick={() => selectShot(reviewIndex)}>
@@ -6846,6 +6843,10 @@ function DirectorDesk() {
                       </div>
                       <button type="button" className="panel-group-select" onClick={() => toggleStructurePanelGroup(panelIds)}>{panelIds.every((panelId) => selectedStructurePanelIds.includes(panelId)) ? "取消整组" : "选择整组"}</button>
                     </div>
+                    <p className={`panel-shot-timing-detail ${itemTiming.status}`}>
+                      <span>{timingEvidenceLabel(itemTiming)}</span>
+                      <strong>{timingEstimateLabel(itemTiming, item.shot.duration)}</strong>
+                    </p>
                     <button
                       type="button"
                       className={`complete-shot-prompt-button ${item.completePromptStatus || "empty"}`}
@@ -6872,30 +6873,23 @@ function DirectorDesk() {
                       {panelIds.map((panelId) => {
                         const selected = selectedStructurePanelIds.includes(panelId);
                         const url = mangaSourceRequestId ? mangaPanelCropUrl(mangaSourceRequestId, panelId, bridge.pairingToken) : "";
-                        const dropPosition = panelDropTarget?.panelId === panelId ? panelDropTarget.position : "";
                         return (
-                          <div className={`panel-assembly-card-shell ${dropPosition ? `drop-${dropPosition}` : ""}`} key={panelId}>
+                          <div className="panel-assembly-card-shell" key={panelId}>
                             <button
                               type="button"
                               draggable
                               className={`panel-assembly-card ${selected ? "is-selected" : ""} ${draggedStructurePanelIds.includes(panelId) ? "is-dragging" : ""}`}
                               aria-pressed={selected}
                               aria-label={`${selected ? "取消选择" : "选择"}画格 ${panelId}`}
-                              title="拖动可调整所属 Shot 和组内顺序"
+                              title="拖到目标 Shot 的任意位置，按原顺序接在尾部"
                               onClick={(event) => {
                                 if (suppressStructurePanelClickRef.current) return;
                                 toggleStructurePanel(panelId, event.shiftKey);
                               }}
                               onDragStart={(event) => beginStructurePanelDrag(event, panelId)}
-                              onDragOver={(event) => markStructurePanelCardDrop(event, reviewIndex, panelId)}
-                              onDrop={(event) => {
-                                const rect = event.currentTarget.getBoundingClientRect();
-                                const position = event.clientX >= rect.left + rect.width / 2 ? "after" : "before";
-                                moveStructurePanelsByDrag(event, { reviewIndex, panelId, position });
-                              }}
                               onDragEnd={finishStructurePanelDrag}
                             >
-                              {url && bridge.pairingToken ? <img src={url} alt={`漫画画格 ${panelId}`} /> : <i>等待裁图</i>}
+                              {url && bridge.pairingToken ? <img draggable={false} src={url} alt={`漫画画格 ${panelId}`} /> : <i>等待裁图</i>}
                               <span>{panelId}</span>
                             </button>
                             <button type="button" className="panel-card-zoom" aria-label={`放大画格 ${panelId}`} title="放大查看图和文字" onClick={() => openStructurePanelZoom(panelId)}>⛶</button>
@@ -6904,8 +6898,10 @@ function DirectorDesk() {
                       })}
                     </div>
                   </article>
+                  </Fragment>
                 );
               })}
+              {renderNewShotDropZone(state.reviews.length, true)}
             </div>
             {renderPanelAssemblyActions("bottom")}
           </section>
@@ -6923,7 +6919,8 @@ function DirectorDesk() {
               title={`公式：对白与动作并行，取较长者。对白 ${shotTimingEstimate.dialogueSeconds.toFixed(1)}s；构图 ${shotTimingEstimate.visualSeconds.toFixed(1)}s；动作反应 ${shotTimingEstimate.actionReactionSeconds.toFixed(1)}s。${shotTimingEstimate.dialogueSource === "generated-japanese" ? "已按完整提示词中的日语对白重算。" : "当前按漫画对白预估；生成日语对白后会自动重算。"}`}
             >
               <b>{timingEstimateLabel(shotTimingEstimate, shot.duration)}</b>
-              <span>{shotTimingEstimate.dialogueSource === "generated-japanese" ? "按日语成片对白" : "按漫画对白预估"}</span>
+              <span>{timingEvidenceLabel(shotTimingEstimate)}</span>
+              <span>对白 {shotTimingEstimate.dialogueSeconds.toFixed(1)}s · 画面动作 {(shotTimingEstimate.visualSeconds + shotTimingEstimate.actionReactionSeconds).toFixed(1)}s · 可并行时取较长者；未试读</span>
             </div>
             <button type="button" className="button secondary" disabled={state.currentShot >= state.reviews.length - 1} onClick={mergeCurrentWithNext}>当前整组与下一组组合</button>
             <button type="button" className="button danger" disabled={state.reviews.length <= 1} onClick={deleteCurrentShot}>删除当前整组</button>

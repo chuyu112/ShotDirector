@@ -154,13 +154,20 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(page, /syncPanelAssemblyFromBottom/);
   assert.match(page, /renderPanelAssemblyActions\("top"\)/);
   assert.match(page, /renderPanelAssemblyActions\("bottom"\)/);
-  assert.match(page, /可拖动画格换组／排序/);
+  assert.match(page, /拖入 Shot 尾部，不改变两组内部顺序/);
+  assert.match(page, /拖到这里新建 Shot/);
+  assert.match(page, /renderNewShotDropZone\(reviewIndex\)/);
+  assert.match(page, /renderNewShotDropZone\(state.reviews.length, true\)/);
+  assert.match(page, /<img draggable=\{false\}/);
+  assert.match(page, /planPanelDrop/);
+  assert.match(styles, /\.panel-new-shot-drop\.is-drop-target/);
+  assert.match(styles, /\.panel-assembly-card > img[^}]+pointer-events: none/);
   assert.match(page, /onDragStart=\{\(event\) => beginStructurePanelDrag\(event, panelId\)\}/);
   assert.match(page, /moveStructurePanelsByDrag/);
   assert.match(page, /draggedStructurePanelIds/);
   assert.match(styles, /\.panel-shot-group\.is-drop-target/);
   assert.match(styles, /\.panel-assembly-card\.is-dragging/);
-  assert.match(styles, /\.panel-assembly-card-shell\.drop-before::before/);
+  assert.doesNotMatch(page, /markStructurePanelCardDrop|drop-before|drop-after/);
   assert.match(page, /ArrowLeft/);
   assert.match(page, /续传漫画/);
   assert.match(page, /生成完整提示词讨论稿/);
@@ -195,10 +202,12 @@ test("estimates shot timing from dialogue and visual action without double count
   ]);
 
   assert.match(page, /function estimateShotTiming/);
-  assert.match(page, /return \[\.\.\.visible\]\.length \/ 7/);
+  assert.match(page, /dialogueMetrics\(text\).seconds/);
+  assert.match(page, /visualTimingMetrics\(input.panelCount, input.segmentCount, speakerChanges\)/);
+  assert.match(page, /timingEvidenceLabel\(itemTiming\)/);
   assert.match(page, /Math\.max\(dialogueSeconds, visualSeconds \+ actionReactionSeconds\)/);
   assert.match(page, /估算需/);
-  assert.match(page, /按日语成片对白/);
+  assert.match(page, /原文暂估/);
   assert.match(bridge, /总时长=max（全部对白时间，完整视觉动作链时间）/);
   assert.match(bridge, /有效字符数÷7/);
   assert.match(rulesText, /允许对白与动作并行，不重复相加/);
