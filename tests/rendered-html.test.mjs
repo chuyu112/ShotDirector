@@ -310,11 +310,32 @@ test("keeps manga analysis, asset sync, video review and whitebox entry points",
 });
 
 test("keeps model duration and omni-reference limits", async () => {
-  const page = await read("../app/page.tsx");
+  const [page, storyboard, bridge] = await Promise.all([
+    read("../app/page.tsx"),
+    read("../app/storyboard-data.ts"),
+    read("../scripts/shotdirector-bridge.mjs"),
+  ]);
 
   assert.match(page, /Seedance 2\.0[^\n]*limit: 9[^\n]*minDuration: 6[^\n]*maxDuration: 15/);
   assert.match(page, /Seedance 2\.5[^\n]*limit: 50[^\n]*minDuration: 6[^\n]*maxDuration: 30/);
+  assert.match(page, /defaultGenerationModel: GenerationModel = "seedance-2\.5"/);
+  assert.match(page, /视频输出 · 默认 30s/);
+  assert.match(storyboard, /timecode: "00:00–00:30"[\s\S]*duration: 30/);
+  assert.match(bridge, /payload\?\.generationModel === "seedance-2\.0"[\s\S]*Seedance 2\.5/);
   assert.match(page, /absoluteMaxOmniReferences = 50/);
+});
+
+test("groups the project toolbar by workspace, video output and import", async () => {
+  const [page, styles] = await Promise.all([
+    read("../app/page.tsx"),
+    read("../app/globals.css"),
+  ]);
+
+  assert.match(page, /loaded-script-action-group workspace-action-group/);
+  assert.match(page, /loaded-script-action-group video-action-group/);
+  assert.match(page, /loaded-script-action-group import-action-group/);
+  assert.match(styles, /\.loaded-script-actions[\s\S]*grid-template-columns:/);
+  assert.match(styles, /@media \(max-width: 1500px\)[\s\S]*\.loaded-script \{ grid-template-columns: 1fr; \}/);
 });
 
 test("web research control follows the active writing provider capability", async () => {

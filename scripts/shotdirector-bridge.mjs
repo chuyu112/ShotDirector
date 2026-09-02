@@ -1937,9 +1937,9 @@ function restoreRecentAnnotationResult() {
 restoreRecentAnnotationResult();
 
 function generationModelInfo(payload) {
-  return payload?.generationModel === "seedance-2.5"
-    ? { id: "seedance-2.5", label: "Seedance 2.5", referenceLimit: 50, minDuration: 6, maxDuration: 30 }
-    : { id: "seedance-2.0", label: "Seedance 2.0", referenceLimit: 9, minDuration: 6, maxDuration: 15 };
+  return payload?.generationModel === "seedance-2.0"
+    ? { id: "seedance-2.0", label: "Seedance 2.0", referenceLimit: 9, minDuration: 6, maxDuration: 15 }
+    : { id: "seedance-2.5", label: "Seedance 2.5", referenceLimit: 50, minDuration: 6, maxDuration: 30 };
 }
 
 function hasValidReferenceBudget(shot, payload) {

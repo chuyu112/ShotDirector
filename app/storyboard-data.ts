@@ -46,8 +46,8 @@ export const storyboardArtworkStyle = "临时导演预演分镜工作图；使�
 export const storyboardShots: StoryboardShot[] = [
   {
     id: "01",
-    timecode: "00:00–00:04",
-    duration: 4,
+    timecode: "00:00–00:30",
+    duration: 30,
     title: "未命名镜头",
     sourceText: [],
     sourcePanels: [],

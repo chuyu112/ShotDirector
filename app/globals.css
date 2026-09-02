@@ -525,19 +525,19 @@ input:focus-visible {
 .reasoning-effort-picker > select:disabled { opacity: .55; }
 
 .loaded-script {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 15px 28px;
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(720px, 2.2fr);
+  align-items: stretch;
+  gap: 22px;
+  padding: 12px 28px;
   border-bottom: 1px solid var(--ink);
   background: var(--panel);
 }
 
 .loaded-script-copy {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -550,9 +550,19 @@ input:focus-visible {
 }
 
 .loaded-script-copy h1 {
+  overflow: hidden;
   margin: 0;
   font-size: 18px;
   letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loaded-script-title-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .project-title-row {
@@ -619,11 +629,16 @@ input:focus-visible {
 }
 
 .loaded-script-copy small {
+  overflow: hidden;
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
   font-size: 9px;
   font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.loaded-script-copy small i { padding-inline: 3px; font-style: normal; }
 
 .load-script-button {
   flex: 0 0 auto;
@@ -632,10 +647,53 @@ input:focus-visible {
 }
 
 .loaded-script-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(390px, 1.35fr) minmax(260px, 0.9fr) minmax(190px, 0.65fr);
   align-items: stretch;
-  gap: 10px;
-  flex: 0 0 auto;
+  gap: 12px;
+  min-width: 0;
+}
+
+.loaded-script-action-group {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 5px;
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.loaded-script-group-label {
+  color: var(--muted);
+  font: 900 8px/1 var(--font-geist-mono), monospace;
+  letter-spacing: .1em;
+}
+
+.workspace-action-group > div,
+.import-action-group > div {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(118px, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.loaded-script-action-group .global-settings-entry,
+.loaded-script-action-group .material-lab-entry,
+.loaded-script-action-group .material-original-project,
+.loaded-script-action-group .asset-ledger-entry {
+  min-width: 0;
+}
+
+.loaded-script-action-group .button { min-height: 43px; }
+
+.video-action-group .model-switch { height: 100%; }
+
+@media (max-width: 1500px) {
+  .loaded-script { grid-template-columns: 1fr; }
+  .loaded-script-actions { grid-template-columns: minmax(0, 1.4fr) minmax(250px, .8fr); }
+  .import-action-group { grid-column: 1 / -1; }
+  .import-action-group > div { grid-auto-columns: minmax(150px, 220px); justify-content: end; }
 }
 
 .production-pipeline {
@@ -4281,12 +4339,28 @@ input:focus-visible {
 
   .loaded-script-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     width: 100%;
     margin-left: 0;
   }
 
-  .loaded-script-actions .model-switch { grid-column: 1 / -1; }
+  .loaded-script-action-group,
+  .import-action-group {
+    grid-column: auto;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .workspace-action-group > div {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .import-action-group > div {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+  .loaded-script-actions .model-switch { grid-column: auto; }
   .loaded-script-actions .load-script-button { width: 100%; }
 
   .script-loader {
@@ -5154,6 +5228,8 @@ input:focus-visible {
   .loaded-script-actions .button,
   .loaded-script-actions .load-script-button { width: 100%; min-width: 0; }
   .loaded-script-actions .model-switch { grid-column: auto; grid-template-columns: 1fr; }
+  .workspace-action-group > div,
+  .import-action-group > div { grid-template-columns: 1fr; }
   .loaded-script-actions button { min-height: 48px; }
   .production-pipeline { padding-inline: 16px; }
   .production-pipeline-heading { display: grid; gap: 4px; }

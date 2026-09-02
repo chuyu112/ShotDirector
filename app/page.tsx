@@ -521,13 +521,15 @@ const generationModels: Array<{ id: GenerationModel; label: string; limit: numbe
   { id: "seedance-2.5", label: "Seedance 2.5", limit: 50, minDuration: 6, maxDuration: 30 },
 ];
 
+const defaultGenerationModel: GenerationModel = "seedance-2.5";
+
 function referenceLimitFor(model: GenerationModel) {
-  return generationModels.find((item) => item.id === model)?.limit ?? 9;
+  return generationModels.find((item) => item.id === model)?.limit ?? 50;
 }
 
 function durationRangeFor(model: GenerationModel) {
   const target = generationModels.find((item) => item.id === model);
-  return { min: target?.minDuration ?? 4, max: target?.maxDuration ?? 15 };
+  return { min: target?.minDuration ?? 6, max: target?.maxDuration ?? 30 };
 }
 
 type ShotTimingEstimate = {
@@ -981,7 +983,7 @@ function createInitialState(): ReviewState {
     sourceDocument: sourceDocumentFromShots(storyboardShots),
     sourceName: "空白项目模板",
     selectedRecipeId: defaultDirectorRecipeId,
-    generationModel: "seedance-2.0",
+    generationModel: defaultGenerationModel,
     workspaceMode: "shots",
     globalSettings: cloneGlobalSettings(),
     assetPrompts: [],
@@ -1298,7 +1300,7 @@ function normalizeStateForResume(incoming: ReviewState): ReviewState {
     selectedRecipeId: getDirectorRecipe(incoming.selectedRecipeId).id,
     generationModel: incoming.generationModel === "seedance-2.0" || incoming.generationModel === "seedance-2.5"
       ? incoming.generationModel
-      : "seedance-2.0",
+      : defaultGenerationModel,
     workspaceMode: incoming.workspaceMode === "global"
       || incoming.workspaceMode === "materials"
       || incoming.workspaceMode === "coverage"
@@ -2053,7 +2055,7 @@ function DirectorDesk() {
   const zoomedStructurePanelIndex = structurePanelEntries.findIndex((entry) => entry.panelId === zoomedStructurePanelId);
   const shotNavigationGroups = useMemo(() => buildShotNavigationGroups(state.reviews), [state.reviews]);
   const isOpeningSubshot = isOpeningSubshotId(shot.id);
-  const generationModel = state.generationModel || "seedance-2.0";
+  const generationModel = state.generationModel || defaultGenerationModel;
   const writingModelOptions = useMemo(() => {
     const live = new Map((bridge.writingModels || []).map((model) => [model.id, model]));
     return writingModelCatalog
@@ -6410,62 +6412,77 @@ function DirectorDesk() {
 
       <section className="loaded-script">
         <div className="loaded-script-copy">
-          <span>已载入脚本</span>
-          <div className="project-title-row">
-            {editingProjectTitle ? (
-              <form className="project-title-form" onSubmit={(event) => { event.preventDefault(); renameProject(); }}>
-                <input
-                  autoFocus
-                  aria-label="项目名称"
-                  value={projectTitleDraft}
-                  onChange={(event) => setProjectTitleDraft(event.target.value)}
-                  onKeyDown={(event) => { if (event.key === "Escape") cancelRenameProject(); }}
-                />
-                <button className="project-title-edit" type="submit">保存</button>
-                <button className="project-title-edit" type="button" onClick={cancelRenameProject}>取消</button>
-              </form>
-            ) : (
-              <>
-                <h1>{state.projectTitle}</h1>
-                <button className="project-title-edit" type="button" onClick={beginRenameProject} aria-label="修改项目名称">修改名称</button>
-              </>
-            )}
+          <span>当前项目</span>
+          <div className="loaded-script-title-line">
+            <div className="project-title-row">
+              {editingProjectTitle ? (
+                <form className="project-title-form" onSubmit={(event) => { event.preventDefault(); renameProject(); }}>
+                  <input
+                    autoFocus
+                    aria-label="项目名称"
+                    value={projectTitleDraft}
+                    onChange={(event) => setProjectTitleDraft(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Escape") cancelRenameProject(); }}
+                  />
+                  <button className="project-title-edit" type="submit">保存</button>
+                  <button className="project-title-edit" type="button" onClick={cancelRenameProject}>取消</button>
+                </form>
+              ) : (
+                <>
+                  <h1>{state.projectTitle}</h1>
+                  <button className="project-title-edit" type="button" onClick={beginRenameProject} aria-label="修改项目名称">修改名称</button>
+                </>
+              )}
+            </div>
+            <button className="project-manifest-button" type="button" onClick={downloadProjectManifest}>导出清单</button>
           </div>
-          <small>{state.reviews.length} SHOTS · {state.projectUid}</small>
-          <button className="project-manifest-button" type="button" onClick={downloadProjectManifest}>导出清单</button>
+          <small>{state.reviews.length} SHOTS <i aria-hidden="true">·</i> {state.projectUid}</small>
         </div>
         <div className="loaded-script-actions">
-          {materialDraftMode ? (
-            <button className="button secondary material-original-project" type="button" onClick={() => { window.location.href = "/?main=1"; }}>
-              <b>打开主工作区</b><small>当前草稿不会覆盖原审批</small>
-            </button>
-          ) : null}
-          <button className={`button global-settings-entry ${state.workspaceMode === "global" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "global" ? returnToShots : openGlobalSettings}>
-            <b>{state.workspaceMode === "global" ? "返回镜头审核" : "全局设定"}</b>
-            <small>{state.globalStatus === "draft" ? "有未保存修改" : "独立批注 · 不计入Shot"}</small>
-          </button>
-          <button className={`button material-lab-entry ${state.workspaceMode === "materials" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "materials" ? returnToShots : openMaterialLab}>
-            <b>{state.workspaceMode === "materials" ? "返回镜头审核" : materialDraftMode ? "续传漫画" : "漫画转分镜"}</b>
-            <small>{materialDraftMode ? "追加后续漫画页 · 保留当前草稿" : "上传漫画 · 自动拆成可审 Shot"}</small>
-          </button>
-          <button className={`button coverage-entry ${state.workspaceMode === "coverage" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "coverage" ? returnToShots : openCoverageReview}>
-            <b>{state.workspaceMode === "coverage" ? "返回镜头审核" : "脚本体检"}</b>
-            <small>{coverageReport.coveragePercent}% 覆盖 · {coverageReport.missingUnits} 条未覆盖</small>
-          </button>
-          <button className={`button asset-ledger-entry ${state.workspaceMode === "assets" ? "active" : ""}`} type="button" disabled={approvedCount === 0 && state.workspaceMode !== "assets"} onClick={state.workspaceMode === "assets" ? returnToShots : openAssetLedger}>
-            <b>{state.workspaceMode === "assets" ? "返回镜头审核" : "资产同步"}</b>
-            <small>{approvedCount ? `${approvedCount} 镜已解锁 · ${assetReadyCount} 包就绪${assetRunningCount ? ` · ${assetRunningCount} 生成中` : ""}` : "批准单镜后解锁"}</small>
-          </button>
-          <div className="model-switch" role="group" aria-label="Seedance生成模型">
-            {generationModels.map((model) => (
-              <button key={model.id} className={generationModel === model.id ? "active" : ""} onClick={() => selectGenerationModel(model.id)}>
-                <b>{model.label}</b><small>{model.minDuration}–{model.maxDuration} 秒 · {model.limit} 个参考</small>
+          <div className="loaded-script-action-group workspace-action-group">
+            <span className="loaded-script-group-label">工作区</span>
+            <div>
+              {materialDraftMode ? (
+                <button className="button secondary material-original-project" type="button" onClick={() => { window.location.href = "/?main=1"; }}>
+                  <b>打开主工作区</b><small>当前草稿不会覆盖原审批</small>
+                </button>
+              ) : null}
+              <button className={`button global-settings-entry ${state.workspaceMode === "global" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "global" ? returnToShots : openGlobalSettings}>
+                <b>{state.workspaceMode === "global" ? "返回镜头审核" : "全局设定"}</b>
+                <small>{state.globalStatus === "draft" ? "有未保存修改" : "项目共用规则"}</small>
               </button>
-            ))}
+              <button className={`button coverage-entry ${state.workspaceMode === "coverage" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "coverage" ? returnToShots : openCoverageReview}>
+                <b>{state.workspaceMode === "coverage" ? "返回镜头审核" : "脚本体检"}</b>
+                <small>{coverageReport.coveragePercent}% 覆盖 · {coverageReport.missingUnits} 条未覆盖</small>
+              </button>
+              <button className={`button asset-ledger-entry ${state.workspaceMode === "assets" ? "active" : ""}`} type="button" disabled={approvedCount === 0 && state.workspaceMode !== "assets"} onClick={state.workspaceMode === "assets" ? returnToShots : openAssetLedger}>
+                <b>{state.workspaceMode === "assets" ? "返回镜头审核" : "资产同步"}</b>
+                <small>{approvedCount ? `${approvedCount} 镜已解锁 · ${assetReadyCount} 包就绪${assetRunningCount ? ` · ${assetRunningCount} 生成中` : ""}` : "批准单镜后解锁"}</small>
+              </button>
+            </div>
           </div>
-          <button className="button secondary load-script-button" onClick={() => setShowLoader((current) => !current)}>
-            {showLoader ? "收起" : "载入脚本"}
-          </button>
+          <div className="loaded-script-action-group video-action-group">
+            <span className="loaded-script-group-label">视频输出 · 默认 30s</span>
+            <div className="model-switch" role="group" aria-label="Seedance生成模型">
+              {generationModels.map((model) => (
+                <button key={model.id} className={generationModel === model.id ? "active" : ""} onClick={() => selectGenerationModel(model.id)}>
+                  <b>{model.label}</b><small>{model.minDuration}–{model.maxDuration} 秒 · {model.limit} 个参考</small>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="loaded-script-action-group import-action-group">
+            <span className="loaded-script-group-label">导入</span>
+            <div>
+              <button className={`button material-lab-entry ${state.workspaceMode === "materials" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "materials" ? returnToShots : openMaterialLab}>
+                <b>{state.workspaceMode === "materials" ? "返回镜头审核" : materialDraftMode ? "续传漫画" : "漫画转分镜"}</b>
+                <small>{materialDraftMode ? "追加漫画页" : "上传漫画并拆分"}</small>
+              </button>
+              <button className="button secondary load-script-button" onClick={() => setShowLoader((current) => !current)}>
+                {showLoader ? "收起" : "载入脚本"}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
