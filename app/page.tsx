@@ -11,6 +11,7 @@ import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensur
 import { MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
 import { planPanelDrop } from "./panel-drag-grouping.mjs";
+import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysisReadingOrder, type ReadingPage } from "./manga-reading-order.mjs";
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
@@ -381,6 +382,8 @@ type ReviewState = {
   sourceMangaPanels?: Record<string, MangaPanelUnderstanding>;
   sourceMangaPanelUnderstandingVersion?: number;
   sourceMangaPanelAnnotations?: Record<string, string>;
+  sourceMangaReadingDirection?: "right-to-left" | "left-to-right";
+  sourceMangaReadingPages?: ReadingPage[];
   structureStatus?: StructureStatus;
   structureConfirmedAt?: string;
   currentShot: number;
@@ -1341,6 +1344,8 @@ function normalizeStateForResume(incoming: ReviewState): ReviewState {
       ? mangaPanelUnderstandingVersion
       : undefined,
     sourceMangaPanelAnnotations: normalizeMangaPanelAnnotations(incoming.sourceMangaPanelAnnotations),
+    sourceMangaReadingDirection: incoming.sourceMangaReadingDirection === "left-to-right" ? "left-to-right" : "right-to-left",
+    sourceMangaReadingPages: Array.isArray(incoming.sourceMangaReadingPages) ? incoming.sourceMangaReadingPages : undefined,
     structureStatus: replacedCityHunterAnimationStyle || episode5HadBandageContamination
       ? "draft"
       : incoming.structureStatus === "draft" || incoming.structureStatus === "confirmed"
@@ -2914,7 +2919,7 @@ function DirectorDesk() {
     const validActiveDraftId = /^[a-f0-9-]{36}$/i.test(activeDraftId) ? activeDraftId : "";
     const recoverDraftUnderstandings = hydrated
       && Boolean(validActiveDraftId)
-      && state.sourceMangaPanelUnderstandingVersion !== mangaPanelUnderstandingVersion;
+      && (state.sourceMangaPanelUnderstandingVersion !== mangaPanelUnderstandingVersion || !state.sourceMangaReadingPages?.length);
     const recoverLatest = !requestId && !activeDraftId && query.get("main") !== "1" && window.location.pathname === "/";
     const recoveryKey = validRequestId || (recoverDraftUnderstandings ? `panel-notes:${validActiveDraftId}` : recoverLatest ? "latest" : "");
     const directRequestId = validRequestId || (recoverDraftUnderstandings ? validActiveDraftId : "");
@@ -2941,6 +2946,8 @@ function DirectorDesk() {
             ...previous,
             sourceMangaPanels: mangaPanelUnderstandingsFrom(result),
             sourceMangaPanelUnderstandingVersion: mangaPanelUnderstandingVersion,
+            sourceMangaReadingDirection: result.readingDirection || previous.sourceMangaReadingDirection || "right-to-left",
+            sourceMangaReadingPages: result.mangaPages,
           }));
           return;
         }
@@ -4017,6 +4024,7 @@ function DirectorDesk() {
     return (
       <div className={`panel-assembly-actions is-${position}`} aria-label={`画格编组操作栏（${position === "top" ? "顶部" : "底部"}）`}>
         <span>已选 {selectedStructurePanelIds.length} 张 · Shift 连选 · 拖入 Shot 尾部，不改变两组内部顺序 · 拖到 ＋ 新建 Shot</span>
+        <button type="button" className="button secondary" disabled={!state.sourceMangaReadingPages?.length} onClick={correctStructureReadingOrder}>按原页校正阅读顺序</button>
         <button type="button" className="button secondary" disabled={selectedStructurePanelIds.length < 2} onClick={() => applyPanelGrouping("combine")}>组合选中画格为一个 Shot</button>
         <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(-1)}>并入前一组</button>
         <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(1)}>并入后一组</button>
@@ -4027,6 +4035,21 @@ function DirectorDesk() {
         <button type="button" className="text-button" disabled={!structureHistory.length} onClick={undoStructureChange}>撤销上一步</button>
       </div>
     );
+  }
+
+  function correctStructureReadingOrder() {
+    if (structureConfirmed || !state.sourceMangaReadingPages?.length) return;
+    const order = buildMangaReadingOrder(state.sourceMangaReadingPages, state.sourceMangaReadingDirection);
+    const corrected = correctMangaReviewOrder(state.reviews, order.panelIds);
+    if (corrected.changedShotIds.length) {
+      setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+      setState((previous) => ({ ...previous, reviews: corrected.reviews, structureStatus: "draft", structureConfirmedAt: undefined }));
+    }
+    setToast([
+      corrected.changedShotIds.length ? `已校正 ${corrected.changedShotIds.length} 个 Shot 的阅读顺序；不重裁、不改分组，旧讨论稿待复核，可撤销。` : "当前可校正的 Shot 已符合原页顺序。",
+      corrected.blockedShotIds.length ? `Shot ${corrected.blockedShotIds.join("、")} 已批准或任务进行中，未改动。` : "",
+      order.issues.length ? `${order.issues.length} 处叠格顺序需人工核对，未强行排列。` : "",
+    ].filter(Boolean).join(" "));
   }
 
   function mergeCurrentWithNext() {
@@ -4559,6 +4582,7 @@ function DirectorDesk() {
   }
 
   function createMaterialDraft(result: MediaAnalysisResult, targetShotId?: string) {
+    result = normalizeMangaAnalysisReadingOrder(result, result.readingDirection);
     if (!result.projectTitle?.trim() || !Array.isArray(result.shots) || !result.shots.length || !result.shots.every(isStoryboardShot)) {
       setToast("素材分析结果还不能创建漫镜草稿");
       return;
@@ -4614,6 +4638,8 @@ function DirectorDesk() {
       sourceMangaPanels: analysisMangaPanels,
       sourceMangaPanelUnderstandingVersion: mangaPanelUnderstandingVersion,
       sourceMangaPanelAnnotations: {},
+      sourceMangaReadingDirection: result.readingDirection || "right-to-left",
+      sourceMangaReadingPages: result.mangaPages,
       currentShot: targetShotIndex,
       view: "script",
       reviews: createReviews(result.shots, false, ensureProjectUid("", `manga-draft::${draftId}`)),
@@ -4633,6 +4659,8 @@ function DirectorDesk() {
             projectUid: parsedProjectUid,
             sourceMangaRequestId: result.kind === "manga" ? result.requestId || parsed.sourceMangaRequestId : undefined,
             sourceMangaPanels: result.kind === "manga" ? analysisMangaPanels : parsed.sourceMangaPanels,
+            sourceMangaReadingDirection: result.readingDirection || parsed.sourceMangaReadingDirection || "right-to-left",
+            sourceMangaReadingPages: result.kind === "manga" ? result.mangaPages : parsed.sourceMangaReadingPages,
             sourceMangaPanelUnderstandingVersion: result.kind === "manga"
               ? mangaPanelUnderstandingVersion
               : parsed.sourceMangaPanelUnderstandingVersion,
@@ -6753,7 +6781,7 @@ function DirectorDesk() {
         {!structureConfirmed && structurePanelEntries.length ? (
           <section className="panel-assembly-board" aria-label="漫画画格编组台">
             <header className="panel-assembly-heading">
-              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p></div>
+              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p><p>阅读方向：{state.sourceMangaReadingDirection === "left-to-right" ? "每行从左到右，再向下" : "日漫 · 每行从右到左，再向下"}。角标是阅读位置，画格 ID 不代表先后；旧顺序可用「按原页校正阅读顺序」修正。</p></div>
               <strong>{structurePanelEntries.length} 张图 · {state.reviews.length} 个 Shot</strong>
             </header>
             <div
@@ -6867,14 +6895,16 @@ function DirectorDesk() {
                     </button>
                     <div
                       className="panel-shot-images"
+                      dir={state.sourceMangaReadingDirection === "left-to-right" ? "ltr" : "rtl"}
                       onDragOver={(event) => markStructurePanelDrop(event, { reviewIndex, position: "end" })}
                       onDrop={(event) => moveStructurePanelsByDrag(event, { reviewIndex, position: "end" })}
                     >
-                      {panelIds.map((panelId) => {
+                      {panelIds.map((panelId, readingIndex) => {
                         const selected = selectedStructurePanelIds.includes(panelId);
                         const url = mangaSourceRequestId ? mangaPanelCropUrl(mangaSourceRequestId, panelId, bridge.pairingToken) : "";
                         return (
                           <div className="panel-assembly-card-shell" key={panelId}>
+                            <b className="panel-reading-index" aria-label={`阅读顺序 ${readingIndex + 1}`}>{readingIndex + 1}</b>
                             <button
                               type="button"
                               draggable

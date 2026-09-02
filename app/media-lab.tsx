@@ -132,6 +132,7 @@ export type MediaDraftShot = {
 };
 
 export type MediaAnalysisResult = {
+  readingDirection?: ReadingDirection;
   status: "completed";
   kind: MediaKind;
   projectTitle: string;
@@ -1033,7 +1034,7 @@ export function MediaLab({
               <button type="button" onClick={recoverGeneratedResult} disabled={recovering || submitting || jobRunning}>{recovering ? "正在重新读取……" : "重新读取本地结果"}</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.json`, JSON.stringify(visibleResult, null, 2), "application/json;charset=utf-8")}>下载 JSON</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.md`, visibleResult.scriptMarkdown, "text/markdown;charset=utf-8")}>下载 Markdown</button>
-              <button type="button" className="media-create-draft" onClick={() => onCreateDraft({ ...visibleResult, projectBackground: storyBackground.trim() })}>进入逐镜审核（独立草稿）</button>
+              <button type="button" className="media-create-draft" onClick={() => onCreateDraft({ ...visibleResult, readingDirection: visibleResult.readingDirection || readingDirection, projectBackground: storyBackground.trim() })}>进入逐镜审核（独立草稿）</button>
             </div>
           </div>
 
@@ -1114,7 +1115,7 @@ export function MediaLab({
                                 <button
                                   type="button"
                                   className="media-panel-enter"
-                                  onClick={() => onCreateDraft(visibleResult, targetShotIds[0])}
+                                  onClick={() => onCreateDraft({ ...visibleResult, readingDirection: visibleResult.readingDirection || readingDirection }, targetShotIds[0])}
                                   title={targetShotIds.length > 1 ? `该画格用于 Shot ${targetShotIds.join("、")}；先进入 Shot ${targetShotIds[0]}` : `进入 Shot ${targetShotIds[0]}`}
                                 >进入 Shot {targetShotIds[0]}</button>
                               ) : <em>{panel.includeInShots ? "未映射" : "排除"}</em>}

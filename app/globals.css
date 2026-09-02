@@ -1131,6 +1131,8 @@ input:focus-visible {
 .panel-shot-group-title .panel-group-select:hover { background: rgba(187,73,30,.08); }
 .panel-shot-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 7px; }
 .panel-assembly-card-shell { position: relative; min-width: 0; }
+.panel-shot-images > .panel-assembly-card-shell { direction: ltr; }
+.panel-reading-index { position: absolute; z-index: 1; top: 6px; left: 6px; min-width: 20px; padding: 2px 4px; border-radius: 4px; background: #175cff; color: #fff; font: 800 10px/1.4 var(--font-geist-mono), monospace; text-align: center; pointer-events: none; }
 .panel-assembly-card { position: relative; display: grid; width: 100%; min-width: 0; min-height: 112px; overflow: hidden; padding: 0; border: 2px solid transparent; border-radius: 8px; background: #dedbd2; cursor: grab; user-select: none; }
 .panel-assembly-card > img, .panel-assembly-card > span, .panel-assembly-card > i { pointer-events: none; }
 .panel-assembly-card:active { cursor: grabbing; }

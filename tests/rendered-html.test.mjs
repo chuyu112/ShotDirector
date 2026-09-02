@@ -194,6 +194,18 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.doesNotMatch(page, /同名资产会在其他 Shot 自动复用/);
 });
 
+test("manga layout and prompt evidence share explicit reading order without mirroring images", async () => {
+  const [page, styles, bridge] = await Promise.all([read("../app/page.tsx"), read("../app/globals.css"), read("../scripts/shotdirector-bridge.mjs")]);
+  assert.match(page, /dir=\{state.sourceMangaReadingDirection === "left-to-right" \? "ltr" : "rtl"\}/);
+  assert.match(page, /按原页校正阅读顺序/);
+  assert.match(page, /correctMangaReviewOrder\(state.reviews, order.panelIds\)/);
+  assert.match(page, /sourceMangaReadingPages: result.mangaPages/);
+  assert.match(page, /panelIds.map\(\(panelId, readingIndex\)/);
+  assert.match(styles, /\.panel-shot-images > \.panel-assembly-card-shell \{ direction: ltr;/);
+  assert.doesNotMatch(styles, /scaleX\(-1\)/);
+  assert.match(bridge, /normalizeMangaAnalysisReadingOrder\(result, payload.readingDirection\)/);
+});
+
 test("estimates shot timing from dialogue and visual action without double counting", async () => {
   const [page, bridge, rulesText] = await Promise.all([
     read("../app/page.tsx"),
