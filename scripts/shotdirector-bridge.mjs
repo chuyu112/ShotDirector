@@ -1372,7 +1372,7 @@ function persistProjectGlobalSettings(state, { scopeId, savedAt }) {
 }
 
 function formatGlobalSettingsSource(settings) {
-  return `export type GlobalSettings = {\n  storyBackground: string;\n  adaptationFocus: string;\n  characters: string[];\n  props: string[];\n  locations: string[];\n  timeline: string[];\n  continuity: string[];\n  finalVideoStyle: string;\n  storyboardImageStyle: string;\n  modelRules: string[];\n  negative: string[];\n};\n\nexport const globalSettings: GlobalSettings = ${JSON.stringify({ ...settings, adaptationFocus: String(settings.adaptationFocus || "") }, null, 2)};\n`;
+  return `export type CharacterProfile = {\n  id: string;\n  name: string;\n  japaneseName: string;\n  biography: string;\n  identity: string;\n  appearance: string;\n  wardrobe: string;\n  performanceBoundary: string;\n  faceRestriction: string;\n};\n\nexport type GlobalSettings = {\n  storyBackground: string;\n  adaptationFocus: string;\n  characterProfiles: CharacterProfile[];\n  characters: string[];\n  props: string[];\n  locations: string[];\n  timeline: string[];\n  continuity: string[];\n  finalVideoStyle: string;\n  storyboardImageStyle: string;\n  modelRules: string[];\n  negative: string[];\n};\n\nexport const globalSettings: GlobalSettings = ${JSON.stringify({ ...settings, adaptationFocus: String(settings.adaptationFocus || ""), characterProfiles: Array.isArray(settings.characterProfiles) ? settings.characterProfiles : [] }, null, 2)};\n`;
 }
 
 function writeGlobalSettingsToSource(settings) {
@@ -1976,7 +1976,7 @@ function batchRevisionPrompt(payload) {
 }
 
 function globalSettingsRevisionPrompt(payload) {
-  return `你是“漫镜”的项目全局设定编辑器。用户只写一次全局批注，你要把它整理进项目级设定；不要生成或改写任何 Shot。\n\n脚本：${payload.projectTitle}\n当前全局设定：\n${JSON.stringify(payload.settings, null, 2)}\n\n全局批注：\n${String(payload.annotation || "")}\n\n规则：返回完整全局设定，不得遗漏未被要求改变的既有规则。整套漫画固定的时代、世界观、改编边界和声音总原则写入 storyBackground；人物身份、发型、服装、露脸限制写入 characters；跨镜关键道具写入 props；地点与时代写入 locations；日期与事件先后写入 timeline；跨镜硬锁写入 continuity；最终视频风格与临时分镜图风格严格分开；模型时长、参考数量写入 modelRules；禁止项写入 negative。同一规则只保留一条，合并重复和冲突描述。用户最新的明确批注优先。项目背景只能补充上下文，不能覆盖原作画格或脚本中的剧情、对白、动作和证据。不要把规则展开成逐镜内容，不要修改任何本地文件，只返回符合 JSON Schema 的完整 settings。`;
+  return `你是“漫镜”的项目全局设定编辑器。用户只写一次全局批注，你要把它整理进项目级设定；不要生成或改写任何 Shot。\n\n脚本：${payload.projectTitle}\n当前全局设定：\n${JSON.stringify(payload.settings, null, 2)}\n\n全局批注：\n${String(payload.annotation || "")}\n\n规则：返回完整全局设定，不得遗漏未被要求改变的既有规则。整套漫画固定的时代、世界观、改编边界和声音总原则写入 storyBackground；adaptationFocus 只保存改编重点。每个已建档人物的人物传、身份关系、外形定妆、服装、表演边界和露脸限制写入 characterProfiles，不得删除未被批注的人物档案；characters 只保留无法归入单个档案的人物补充规则。跨镜关键道具写入 props；地点与时代写入 locations；日期与事件先后写入 timeline；跨镜硬锁写入 continuity；最终视频风格与临时分镜图风格严格分开；模型时长、参考数量写入 modelRules；禁止项写入 negative。同一规则只保留一条，合并重复和冲突描述。用户最新的明确批注优先。项目背景只能补充上下文，不能覆盖原作画格或脚本中的剧情、对白、动作和证据。不要把规则展开成逐镜内容，不要修改任何本地文件，只返回符合 JSON Schema 的完整 settings。`;
 }
 
 function loadPrompt(payload) {
@@ -2919,6 +2919,7 @@ ${payload.globalSettings.finalVideoStyle}
 
 项目人物画像、地点、时代烙印、连续性与禁止项：
 ${JSON.stringify({
+    characterProfiles: payload.globalSettings.characterProfiles || [],
     characters: payload.globalSettings.characters,
     locations: payload.globalSettings.locations,
     timeline: payload.globalSettings.timeline,

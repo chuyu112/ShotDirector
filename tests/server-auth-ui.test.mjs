@@ -99,9 +99,10 @@ test("project archive hydration precedes writes and the global file library is e
   assert.match(page, /projectArchiveLoaded/);
   assert.match(page, /if \(hydrated && projectArchiveLoaded\)/);
   assert.match(page, /!projectArchiveLoaded \|\| !bridge\.connected/);
-  for (const label of ["新建全局文件", "加载全局文件", "保存全局文件", "视频改编重点"]) {
+  for (const label of ["新建全局文件", "加载全局文件", "保存全局文件", "视频改编重点", "人物传", "身份与人物关系", "表演边界", "露脸限制"]) {
     assert.match(page, new RegExp(label));
   }
+  assert.match(page, /characterProfiles/);
   assert.match(page, /\/global-files\/save/);
   assert.match(page, /\/global-files\/load/);
 });

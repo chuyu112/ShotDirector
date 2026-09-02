@@ -2,7 +2,7 @@
 
 import { ChangeEvent, CSSProperties, FormEvent, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { blockingPlans, type BlockingMarker, type BlockingMovement } from "./blocking-plans";
-import { globalSettings as sourceGlobalSettings, type GlobalSettings } from "./global-settings";
+import { globalSettings as sourceGlobalSettings, type CharacterProfile, type GlobalSettings } from "./global-settings";
 import { defaultArtStyle, inferredVideoArtStyle, legacyStoryboardArtStyle, mistakenStoryboardAsVideoArtStyle, storyboardArtworkStyle, storyboardShots, type StoryboardShot, type StoryboardSegment } from "./storyboard-data";
 import { buildCoverageReport, changedShotFields, defaultDirectorRecipeId, directorRecipes, getDirectorRecipe, sourceDocumentFromShots, sourceTextForShot, type CoverageStatus } from "./director-workflow";
 import { MediaLab, type MediaAnalysisResult } from "./media-lab";
@@ -729,6 +729,7 @@ function cloneGlobalSettings(settings: GlobalSettings = sourceGlobalSettings): G
     ...settings,
     storyBackground: typeof settings.storyBackground === "string" ? settings.storyBackground : sourceGlobalSettings.storyBackground,
     adaptationFocus: typeof settings.adaptationFocus === "string" ? settings.adaptationFocus : "",
+    characterProfiles: normalizeCharacterProfiles(settings.characterProfiles),
     characters: [...settings.characters],
     props: [...settings.props],
     locations: [...settings.locations],
@@ -737,6 +738,45 @@ function cloneGlobalSettings(settings: GlobalSettings = sourceGlobalSettings): G
     modelRules: [...settings.modelRules],
     negative: [...settings.negative],
   };
+}
+
+function normalizeCharacterProfiles(value: unknown): CharacterProfile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object") return [];
+    const profile = item as Partial<CharacterProfile>;
+    const text = (field: keyof CharacterProfile) => typeof profile[field] === "string" ? String(profile[field]).trim() : "";
+    const name = text("name");
+    if (!name) return [];
+    return [{
+      id: text("id") || `character-${index + 1}`,
+      name,
+      japaneseName: text("japaneseName"),
+      biography: text("biography"),
+      identity: text("identity"),
+      appearance: text("appearance"),
+      wardrobe: text("wardrobe"),
+      performanceBoundary: text("performanceBoundary"),
+      faceRestriction: text("faceRestriction"),
+    }];
+  });
+}
+
+function characterProfileRule(profile: CharacterProfile) {
+  return [
+    profile.name,
+    profile.japaneseName ? `日文名：${profile.japaneseName}` : "",
+    profile.biography ? `人物传：${profile.biography}` : "",
+    profile.identity ? `身份关系：${profile.identity}` : "",
+    profile.appearance ? `外形定妆：${profile.appearance}` : "",
+    profile.wardrobe ? `服装：${profile.wardrobe}` : "",
+    profile.performanceBoundary ? `表演边界：${profile.performanceBoundary}` : "",
+    profile.faceRestriction ? `露脸限制：${profile.faceRestriction}` : "",
+  ].filter(Boolean).join("；");
+}
+
+function allCharacterRules(settings: GlobalSettings) {
+  return [...normalizeCharacterProfiles(settings.characterProfiles).map(characterProfileRule), ...settings.characters];
 }
 
 function cityHunterEpisodeNumber(projectTitle: string) {
@@ -880,6 +920,7 @@ function isGlobalSettings(value: unknown): value is GlobalSettings {
   return globalArrayFields.every((field) => Array.isArray(settings[field]) && (settings[field] as unknown[]).every((item) => typeof item === "string"))
     && (settings.storyBackground === undefined || typeof settings.storyBackground === "string")
     && (settings.adaptationFocus === undefined || typeof settings.adaptationFocus === "string")
+    && (settings.characterProfiles === undefined || normalizeCharacterProfiles(settings.characterProfiles).length === (settings.characterProfiles as unknown[]).length)
     && typeof settings.finalVideoStyle === "string"
     && typeof settings.storyboardImageStyle === "string";
 }
@@ -1444,7 +1485,7 @@ function globalRulesForShot(shot: StoryboardShot, settings: GlobalSettings) {
     const name = candidate.replace(/（.*$/, "").trim();
     return Boolean(name) && (rule.includes(name) || shotText.includes(rule.split(/[：:]/, 1)[0].trim()));
   });
-  const characterRules = settings.characters.filter((rule) => ruleMatches(rule, shot.characters));
+  const characterRules = allCharacterRules(settings).filter((rule) => ruleMatches(rule, shot.characters));
   const propRules = settings.props.filter((rule) => ruleMatches(rule, shot.props));
   const locationRules = settings.locations.filter((rule) => ruleMatches(rule, [shot.scene]));
   const timelineRules = settings.timeline.filter((rule) => rule.includes(`Shot ${shot.id}`));
@@ -1562,7 +1603,7 @@ function defaultShotAssetPrompt(asset: ShotAssetEntry, shot: StoryboardShot, set
   const common = `${backgroundSummary ? `项目背景：${backgroundSummary}。` : ""}${style}${sourcePanels}单一资产参考图，不是剧情分镜，不做多格拼图；干净背景，无文字、无水印，不生成无关人物或物品。`;
   if (asset.kind === "character") {
     const matchingReference = shot.omniReferences.find((item) => isShotAssetReference(item, asset));
-    const profile = settings.characters.find((item) => item.includes(asset.name)) || asset.name;
+    const profile = allCharacterRules(settings).find((item) => item.includes(asset.name)) || asset.name;
     return `人物资产：${asset.name}。全局人物画像：${profile}。从漫画画格中提取并保持该人物可见的年龄感、体型、脸型、发型、服装、身份气质和表情特征；漫画未画清的颜色、纹样或身体细节不要臆测。角色依据：${matchingReference || asset.name}。本镜身份与行为：${shot.story} ${shot.action}。只生成 Shot ${shot.id} 使用的独立人物参考图，不自动覆盖或替换其他 Shot 的资产。全身为主，站姿自然，正面略带三分之二角度，双手完整可见。${common}`;
   }
   if (asset.kind === "scene") {
@@ -1629,6 +1670,24 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 function TextField({ label, value, rows = 4, onChange }: { label: string; value: string; rows?: number; onChange: (value: string) => void }) {
   return (
     <label className="sheet-field">
+      <span>{label}</span>
+      <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function CharacterTextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="character-profile-field compact">
+      <span>{label}</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function CharacterTextArea({ label, value, rows = 3, onChange }: { label: string; value: string; rows?: number; onChange: (value: string) => void }) {
+  return (
+    <label className="character-profile-field">
       <span>{label}</span>
       <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} />
     </label>
@@ -4370,6 +4429,8 @@ function DirectorDesk() {
     const artStyles = unique(result.shots.map((shot) => shot.artStyle));
     const draftGlobalSettings: GlobalSettings = {
       storyBackground: result.projectBackground?.trim() || state.globalSettings.storyBackground || sourceGlobalSettings.storyBackground,
+      adaptationFocus: state.globalSettings.adaptationFocus,
+      characterProfiles: normalizeCharacterProfiles(state.globalSettings.characterProfiles),
       characters: unique(result.shots.flatMap((shot) => shot.characters)),
       props: unique(result.shots.flatMap((shot) => shot.props)),
       locations: unique(result.shots.map((shot) => shot.scene)),
@@ -4464,6 +4525,61 @@ function DirectorDesk() {
       ...previous,
       globalStatus: "draft",
       globalSettings: { ...previous.globalSettings, [field]: splitLines(value) },
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+    }));
+  }
+
+  function updateCharacterProfile(profileId: string, field: keyof Omit<CharacterProfile, "id">, value: string) {
+    setState((previous) => ({
+      ...previous,
+      globalStatus: "draft",
+      globalSettings: {
+        ...previous.globalSettings,
+        characterProfiles: normalizeCharacterProfiles(previous.globalSettings.characterProfiles).map((profile) => (
+          profile.id === profileId ? { ...profile, [field]: value } : profile
+        )),
+      },
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+    }));
+  }
+
+  function addCharacterProfile() {
+    const profile: CharacterProfile = {
+      id: `character-${crypto.randomUUID()}`,
+      name: "新人物",
+      japaneseName: "",
+      biography: "",
+      identity: "",
+      appearance: "",
+      wardrobe: "",
+      performanceBoundary: "",
+      faceRestriction: "",
+    };
+    setState((previous) => ({
+      ...previous,
+      globalStatus: "draft",
+      globalSettings: {
+        ...previous.globalSettings,
+        characterProfiles: [...normalizeCharacterProfiles(previous.globalSettings.characterProfiles), profile],
+      },
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+    }));
+  }
+
+  function removeCharacterProfile(profileId: string) {
+    setState((previous) => ({
+      ...previous,
+      globalStatus: "draft",
+      globalSettings: {
+        ...previous.globalSettings,
+        characterProfiles: normalizeCharacterProfiles(previous.globalSettings.characterProfiles).filter((profile) => profile.id !== profileId),
+      },
       reviews: previous.reviews.map(invalidateCompletePrompt),
       structureStatus: "draft",
       structureConfirmedAt: undefined,
@@ -5668,8 +5784,32 @@ function DirectorDesk() {
             <TextField label="视频改编重点" value={state.globalSettings.adaptationFocus} rows={7} onChange={(value) => updateGlobalString("adaptationFocus", value)} />
           </section>
           <section className="global-setting-card character-canon">
-            <div className="global-setting-heading"><span>01 · CHARACTERS</span><h2>人物全局设定</h2><p>身份、发型、服装、表演边界和露脸限制只在这里定义一次。</p></div>
-            <TextField label="人物设定（每行一条）" value={lines(state.globalSettings.characters)} rows={10} onChange={(value) => updateGlobalArray("characters", value)} />
+            <div className="global-setting-heading character-heading">
+              <div><span>01 · CHARACTERS</span><h2>人物全局设定</h2><p>每个人物建立一份可跨项目复用的档案；人物传、造型和表演约束只定义一次。</p></div>
+              <button className="button secondary" type="button" onClick={addCharacterProfile}>新增人物</button>
+            </div>
+            <div className="character-profile-list">
+              {normalizeCharacterProfiles(state.globalSettings.characterProfiles).map((profile, index) => (
+                <article className="character-profile-card" key={profile.id}>
+                  <header>
+                    <div><span>CHARACTER {String(index + 1).padStart(2, "0")}</span><h3>{profile.name}</h3></div>
+                    <button type="button" className="text-button danger" onClick={() => removeCharacterProfile(profile.id)}>删除</button>
+                  </header>
+                  <div className="character-profile-name-row">
+                    <CharacterTextInput label="角色名" value={profile.name} onChange={(value) => updateCharacterProfile(profile.id, "name", value)} />
+                    <CharacterTextInput label="日文名" value={profile.japaneseName} onChange={(value) => updateCharacterProfile(profile.id, "japaneseName", value)} />
+                  </div>
+                  <CharacterTextArea label="人物传" value={profile.biography} rows={5} onChange={(value) => updateCharacterProfile(profile.id, "biography", value)} />
+                  <CharacterTextArea label="身份与人物关系" value={profile.identity} onChange={(value) => updateCharacterProfile(profile.id, "identity", value)} />
+                  <CharacterTextArea label="外形与定妆" value={profile.appearance} onChange={(value) => updateCharacterProfile(profile.id, "appearance", value)} />
+                  <CharacterTextArea label="常用服装与年代约束" value={profile.wardrobe} onChange={(value) => updateCharacterProfile(profile.id, "wardrobe", value)} />
+                  <CharacterTextArea label="表演边界" value={profile.performanceBoundary} onChange={(value) => updateCharacterProfile(profile.id, "performanceBoundary", value)} />
+                  <CharacterTextArea label="露脸限制" value={profile.faceRestriction} rows={2} onChange={(value) => updateCharacterProfile(profile.id, "faceRestriction", value)} />
+                </article>
+              ))}
+              {!normalizeCharacterProfiles(state.globalSettings.characterProfiles).length ? <div className="character-profile-empty">尚未建立人物档案。点击“新增人物”开始录入。</div> : null}
+            </div>
+            <TextField label="人物补充规则（每行一条，兼容旧项目）" value={lines(state.globalSettings.characters)} rows={5} onChange={(value) => updateGlobalArray("characters", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>02 · PROPS</span><h2>关键物品</h2><p>维护跨镜道具的唯一性、外观、比例和状态时间线。</p></div>

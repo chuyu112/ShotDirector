@@ -11,9 +11,29 @@
     "settings": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["storyBackground", "characters", "props", "locations", "timeline", "continuity", "finalVideoStyle", "storyboardImageStyle", "modelRules", "negative"],
+      "required": ["storyBackground", "adaptationFocus", "characterProfiles", "characters", "props", "locations", "timeline", "continuity", "finalVideoStyle", "storyboardImageStyle", "modelRules", "negative"],
       "properties": {
         "storyBackground": { "type": "string" },
+        "adaptationFocus": { "type": "string" },
+        "characterProfiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "japaneseName", "biography", "identity", "appearance", "wardrobe", "performanceBoundary", "faceRestriction"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "japaneseName": { "type": "string" },
+              "biography": { "type": "string" },
+              "identity": { "type": "string" },
+              "appearance": { "type": "string" },
+              "wardrobe": { "type": "string" },
+              "performanceBoundary": { "type": "string" },
+              "faceRestriction": { "type": "string" }
+            }
+          }
+        },
         "characters": { "type": "array", "items": { "type": "string" } },
         "props": { "type": "array", "items": { "type": "string" } },
         "locations": { "type": "array", "items": { "type": "string" } },

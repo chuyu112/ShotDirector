@@ -17,6 +17,25 @@ function field(label: string, value: string) {
   return `**${label}**\n\n${value || "无"}`;
 }
 
+function characterProfilesMarkdown() {
+  return (globalSettings.characterProfiles || []).flatMap((profile) => [
+    `#### ${profile.name}${profile.japaneseName ? ` / ${profile.japaneseName}` : ""}`,
+    "",
+    field("人物传", profile.biography),
+    "",
+    field("身份与人物关系", profile.identity),
+    "",
+    field("外形与定妆", profile.appearance),
+    "",
+    field("常用服装与年代约束", profile.wardrobe),
+    "",
+    field("表演边界", profile.performanceBoundary),
+    "",
+    field("露脸限制", profile.faceRestriction),
+    "",
+  ]);
+}
+
 const globalSections = [
   ["人物全局设定", globalSettings.characters],
   ["关键物品", globalSettings.props],
@@ -38,6 +57,9 @@ const markdown = [
   "",
   globalSettings.storyBackground,
   "",
+  "### 人物档案",
+  "",
+  ...characterProfilesMarkdown(),
   ...globalSections.flatMap(([title, items]) => [`### ${title}`, "", bullets([...items]), ""]),
   "### 最终视频美术风格",
   "",
