@@ -79,6 +79,9 @@ test("auth gate covers session, registration, login and logout", async () => {
   assert.match(auth, /退出登录/);
   assert.match(auth, /\/projects\/select/);
   assert.match(auth, /新建项目/);
+  assert.match(auth, /加载项目/);
+  assert.match(auth, /保存项目/);
+  assert.match(auth, /MANJING_SAVE_PROJECT_EVENT/);
   assert.match(auth, /gate\.user\.role === "superadmin"/);
   assert.match(auth, /SUPER ADMIN/);
   assert.match(auth, /ManjingWorkspaceScopeContext\.Provider/);
@@ -89,6 +92,18 @@ test("auth gate covers session, registration, login and logout", async () => {
   assert.match(auth, /visibilitychange/);
   assert.match(auth, /activeSessionRequest\.current !== null && !force/);
   assert.doesNotMatch(auth, /window\.sessionStorage\.clear/);
+});
+
+test("project archive hydration precedes writes and the global file library is explicit", async () => {
+  const page = await readFile(pagePath, "utf8");
+  assert.match(page, /projectArchiveLoaded/);
+  assert.match(page, /if \(hydrated && projectArchiveLoaded\)/);
+  assert.match(page, /!projectArchiveLoaded \|\| !bridge\.connected/);
+  for (const label of ["新建全局文件", "加载全局文件", "保存全局文件", "视频改编重点"]) {
+    assert.match(page, new RegExp(label));
+  }
+  assert.match(page, /\/global-files\/save/);
+  assert.match(page, /\/global-files\/load/);
 });
 
 test("browser caches and IndexedDB keys are partitioned by authenticated user and project", async () => {

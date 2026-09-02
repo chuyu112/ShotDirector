@@ -210,6 +210,19 @@ function mapProject(row) {
   };
 }
 
+function mapGlobalFile(row, { includePayload = false } = {}) {
+  if (!row) return null;
+  const result = {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    name: row.name,
+    createdAt: timestampToIso(row.created_at),
+    updatedAt: timestampToIso(row.updated_at),
+  };
+  if (includePayload) result.payload = JSON.parse(row.payload_json);
+  return result;
+}
+
 function mapSession(row) {
   if (!row) return null;
   return {
@@ -380,6 +393,20 @@ export class ManjingAuthStore {
         WHERE is_default = 1;
       CREATE INDEX IF NOT EXISTS idx_projects_owner
         ON projects(owner_user_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS global_files (
+        id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120),
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (owner_user_id, name),
+        FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_global_files_owner
+        ON global_files(owner_user_id, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT NOT NULL UNIQUE,
@@ -643,6 +670,69 @@ export class ManjingAuthStore {
       `).run(projectId, ownerUserId, projectName, now, now);
     });
     return this.getProjectById(projectId, { userId: ownerUserId });
+  }
+
+  renameProject({ userId, projectId, name } = {}) {
+    this.#assertOpen();
+    const ownerUserId = normalizeId(userId, "用户 ID");
+    const id = normalizeId(projectId, "项目 ID");
+    const projectName = normalizeProjectName(name);
+    const result = this.database.prepare(`
+      UPDATE projects
+      SET name = ?, updated_at = ?
+      WHERE id = ? AND owner_user_id = ?
+    `).run(projectName, this.#timestamp(), id, ownerUserId);
+    if (Number(result.changes) !== 1) throw new AuthNotFoundError("项目不存在");
+    return this.getProjectById(id, { userId: ownerUserId });
+  }
+
+  listGlobalFiles(userId) {
+    this.#assertOpen();
+    const ownerUserId = normalizeId(userId, "用户 ID");
+    return this.database.prepare(`
+      SELECT * FROM global_files
+      WHERE owner_user_id = ?
+      ORDER BY updated_at DESC, created_at ASC, id ASC
+    `).all(ownerUserId).map((row) => mapGlobalFile(row));
+  }
+
+  getGlobalFile(globalFileId, { userId } = {}) {
+    this.#assertOpen();
+    const id = normalizeId(globalFileId, "全局文件 ID");
+    const row = this.database.prepare(`
+      SELECT * FROM global_files
+      WHERE id = ? AND owner_user_id = ?
+    `).get(id, normalizeId(userId, "用户 ID"));
+    return mapGlobalFile(row, { includePayload: true });
+  }
+
+  saveGlobalFile({ userId, globalFileId, name, payload } = {}) {
+    this.#assertOpen();
+    const ownerUserId = normalizeId(userId, "用户 ID");
+    const globalName = normalizeProjectName(name);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new AuthValidationError("全局文件内容必须是对象");
+    }
+    const payloadJson = JSON.stringify(payload);
+    if (Buffer.byteLength(payloadJson, "utf8") > 1024 * 1024) {
+      throw new AuthValidationError("全局文件超过 1MB 上限");
+    }
+    const now = this.#timestamp();
+    const id = globalFileId ? normalizeId(globalFileId, "全局文件 ID") : makeId("gbl");
+    if (globalFileId) {
+      const result = this.database.prepare(`
+        UPDATE global_files
+        SET name = ?, payload_json = ?, updated_at = ?
+        WHERE id = ? AND owner_user_id = ?
+      `).run(globalName, payloadJson, now, id, ownerUserId);
+      if (Number(result.changes) !== 1) throw new AuthNotFoundError("全局文件不存在");
+    } else {
+      this.database.prepare(`
+        INSERT INTO global_files (id, owner_user_id, name, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, ownerUserId, globalName, payloadJson, now, now);
+    }
+    return this.getGlobalFile(id, { userId: ownerUserId });
   }
 
   getProjectById(projectId, { userId } = {}) {

@@ -2,6 +2,7 @@ import workflowRules from "../config/workflow-rules.json";
 
 export type GlobalSettings = {
   storyBackground: string;
+  adaptationFocus: string;
   characters: string[];
   props: string[];
   locations: string[];
@@ -19,6 +20,7 @@ export type GlobalSettings = {
  */
 export const globalSettings: GlobalSettings = {
   storyBackground: "",
+  adaptationFocus: "",
   characters: [],
   props: [],
   locations: [],

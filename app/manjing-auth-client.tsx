@@ -51,6 +51,12 @@ type AuthSignal = {
 const authChannelName = "manjing-auth-session-v1";
 const authStorageSignalKey = "manjing-auth-signal-v1";
 export const MANJING_SESSION_INVALID_EVENT = "manjing-session-invalid";
+export const MANJING_SAVE_PROJECT_EVENT = "manjing-save-project";
+export type ManjingSaveProjectEventDetail = {
+  handled: boolean;
+  resolve: (message?: string) => void;
+  reject: (message: string) => void;
+};
 const ManjingWorkspaceScopeContext = createContext<ManjingWorkspaceScope | null>(null);
 
 function safeScopePart(value: string) {
@@ -149,9 +155,11 @@ export function ManjingAuthGate({
   const [displayName, setDisplayName] = useState("");
   const [formError, setFormError] = useState("");
   const [sessionError, setSessionError] = useState("");
+  const [projectNotice, setProjectNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const requestSequence = useRef(0);
   const activeSessionRequest = useRef<number | null>(null);
   const authChannel = useRef<BroadcastChannel | null>(null);
@@ -370,6 +378,7 @@ export function ManjingAuthGate({
   async function activateProject(projectId: string) {
     setProjectBusy(true);
     setSessionError("");
+    setProjectNotice("");
     try {
       const response = await globalThis.fetch(`${apiBase}/projects/select`, {
         method: "POST",
@@ -392,6 +401,7 @@ export function ManjingAuthGate({
     if (!name) return;
     setProjectBusy(true);
     setSessionError("");
+    setProjectNotice("");
     try {
       const response = await globalThis.fetch(`${apiBase}/projects`, {
         method: "POST",
@@ -404,6 +414,30 @@ export function ManjingAuthGate({
       await activateProject(payload.project.id);
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : "新建项目失败，请重试。");
+      setProjectBusy(false);
+    }
+  }
+
+  async function saveProject() {
+    setProjectBusy(true);
+    setSessionError("");
+    setProjectNotice("");
+    try {
+      const message = await new Promise<string>((resolve, reject) => {
+        const detail: ManjingSaveProjectEventDetail = {
+          handled: false,
+          resolve: (value = "项目已保存") => resolve(value),
+          reject,
+        };
+        window.dispatchEvent(new CustomEvent<ManjingSaveProjectEventDetail>(MANJING_SAVE_PROJECT_EVENT, { detail }));
+        if (!detail.handled) reject(new Error("项目工作区尚未准备好"));
+      });
+      setProjectNotice(message);
+      publishAuthSignal("session-changed");
+      await loadSession({ background: true, force: true });
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error || "保存项目失败，请重试。"));
+    } finally {
       setProjectBusy(false);
     }
   }
@@ -428,16 +462,18 @@ export function ManjingAuthGate({
                 <span>当前项目</span>
                 <select
                   aria-label="切换项目"
-                  value={gate.activeProject.id}
+                  value={selectedProjectId || gate.activeProject.id}
                   disabled={projectBusy}
-                  onChange={(event) => void activateProject(event.target.value)}
+                  onChange={(event) => setSelectedProjectId(event.target.value)}
                 >
                   {gate.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select>
               </label>
               <button type="button" disabled={projectBusy} onClick={() => void createProject()}>
-                {projectBusy ? "处理中…" : "新建项目"}
+                新建项目
               </button>
+              <button type="button" disabled={projectBusy || !(selectedProjectId || gate.activeProject.id)} onClick={() => void activateProject(selectedProjectId || gate.activeProject.id)}>加载项目</button>
+              <button type="button" disabled={projectBusy} onClick={() => void saveProject()}>{projectBusy ? "处理中…" : "保存项目"}</button>
             </div>
             <div className="manjing-server-account">
               <span className={gate.user.role === "superadmin" ? "superadmin-badge" : undefined}>
@@ -447,6 +483,7 @@ export function ManjingAuthGate({
               {gate.user.displayName ? <small>{gate.user.email}</small> : null}
             </div>
             {sessionError ? <p role="alert">{sessionError}</p> : null}
+            {projectNotice ? <p className="project-notice" role="status">{projectNotice}</p> : null}
             <button type="button" disabled={loggingOut} onClick={() => void logout()}>
               {loggingOut ? "正在退出…" : "退出登录"}
             </button>

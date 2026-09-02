@@ -8,7 +8,7 @@ import { buildCoverageReport, changedShotFields, defaultDirectorRecipeId, direct
 import { MediaLab, type MediaAnalysisResult } from "./media-lab";
 import { buildCompleteShotPromptRevision, buildPromptReviewRevision, buildShotUpstreamRevision, buildVideoGenerationPackage, type VideoGenerationPackage, type VideoPackageStatus } from "./video-package";
 import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
-import { ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope } from "./manjing-auth-client";
+import { MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
@@ -60,6 +60,19 @@ type ProjectAssetPrompt = {
   negative: string[];
   sourcePanels: string[];
   shotIds: string[];
+};
+
+type GlobalFileSummary = {
+  id: string;
+  name: string;
+  updatedAt?: string;
+};
+
+type GlobalFilePayload = {
+  schemaVersion: number;
+  settings: GlobalSettings;
+  assetPrompts: ProjectAssetPrompt[];
+  referenceAssets: Array<{ id: string; kind: ShotAssetKind; name: string; fileId?: string; url?: string }>;
 };
 
 const assetImageModels: Array<{ id: AssetImageModel; label: string }> = [
@@ -350,6 +363,8 @@ type ReviewState = {
   generationModel: GenerationModel;
   workspaceMode: WorkspaceMode;
   globalSettings: GlobalSettings;
+  globalFileId?: string;
+  globalFileName?: string;
   assetPrompts?: ProjectAssetPrompt[];
   globalAnnotation: string;
   globalStatus: ScriptStatus;
@@ -713,6 +728,7 @@ function cloneGlobalSettings(settings: GlobalSettings = sourceGlobalSettings): G
   return {
     ...settings,
     storyBackground: typeof settings.storyBackground === "string" ? settings.storyBackground : sourceGlobalSettings.storyBackground,
+    adaptationFocus: typeof settings.adaptationFocus === "string" ? settings.adaptationFocus : "",
     characters: [...settings.characters],
     props: [...settings.props],
     locations: [...settings.locations],
@@ -863,6 +879,7 @@ function isGlobalSettings(value: unknown): value is GlobalSettings {
   const settings = value as Record<string, unknown>;
   return globalArrayFields.every((field) => Array.isArray(settings[field]) && (settings[field] as unknown[]).every((item) => typeof item === "string"))
     && (settings.storyBackground === undefined || typeof settings.storyBackground === "string")
+    && (settings.adaptationFocus === undefined || typeof settings.adaptationFocus === "string")
     && typeof settings.finalVideoStyle === "string"
     && typeof settings.storyboardImageStyle === "string";
 }
@@ -1248,6 +1265,8 @@ function normalizeStateForResume(incoming: ReviewState): ReviewState {
       ? incoming.workspaceMode
       : "shots",
     globalSettings: resumedGlobalSettings,
+    globalFileId: typeof incoming.globalFileId === "string" ? incoming.globalFileId : undefined,
+    globalFileName: typeof incoming.globalFileName === "string" ? incoming.globalFileName : undefined,
     assetPrompts: normalizeProjectAssetPrompts(incoming.assetPrompts),
     globalAnnotation: typeof incoming.globalAnnotation === "string" ? incoming.globalAnnotation : "",
     globalStatus: incoming.globalStatus === "sending"
@@ -1897,6 +1916,7 @@ function DirectorDesk() {
   const [state, setState] = useState<ReviewState>(createInitialState);
   const [deskMode, setDeskMode] = useState<DeskMode>("creator");
   const [hydrated, setHydrated] = useState(false);
+  const [projectArchiveLoaded, setProjectArchiveLoaded] = useState(tenantScope.mode === "local");
   const [activeStorageKey, setActiveStorageKey] = useState(storageKey);
   const [materialDraftMode, setMaterialDraftMode] = useState(false);
   const [bridge, setBridge] = useState<BridgeState>({ connected: false, busy: false });
@@ -1913,6 +1933,9 @@ function DirectorDesk() {
   const [loggingIntoLibtv, setLoggingIntoLibtv] = useState(false);
   const [stampingShotId, setStampingShotId] = useState("");
   const [savingGlobalSettings, setSavingGlobalSettings] = useState(false);
+  const [globalFiles, setGlobalFiles] = useState<GlobalFileSummary[]>([]);
+  const [selectedGlobalFileId, setSelectedGlobalFileId] = useState("");
+  const [globalFileBusy, setGlobalFileBusy] = useState(false);
   const [lastGlobalSubmission, setLastGlobalSubmission] = useState<{ annotation: string; submittedAt: string }>();
   const [naturalScript, setNaturalScript] = useState("");
   const [lastSubmission, setLastSubmission] = useState<AnnotationSubmission>();
@@ -2358,10 +2381,42 @@ function DirectorDesk() {
   }, [scopedBrowserStorage, tenantScope.mode]);
 
   useEffect(() => {
-    if (hydrated) scopedBrowserStorage.setItem(activeStorageKey, JSON.stringify(
+    if (!hydrated || tenantScope.mode !== "server" || !bridge.connected || !bridge.pairingToken) return;
+    let active = true;
+    setProjectArchiveLoaded(false);
+    bridgeFetch(`${bridgeBase}/draft-state?scopeId=${encodeURIComponent(projectScopeId || "main")}`, {
+      cache: "no-store",
+      headers: { "X-Manjing-Token": bridge.pairingToken },
+    }).then(async (response) => {
+      if (response.status === 404) return null;
+      const snapshot = await response.json();
+      if (!response.ok) throw new Error(snapshot?.error || "项目存档加载失败");
+      return snapshot;
+    }).then((snapshot) => {
+      if (!active) return;
+      if (!snapshot) {
+        setProjectArchiveLoaded(true);
+        return;
+      }
+      const incoming = snapshot.state as ReviewState | undefined;
+      if (!incoming?.reviews?.length || !incoming.reviews.every((item) => isStoryboardShot(item.shot))) {
+        throw new Error("服务器项目存档不完整，已禁止浏览器覆盖");
+      }
+      const revision = typeof snapshot.agentRevision === "string" ? snapshot.agentRevision : "";
+      if (revision) appliedAgentDraftRevision.current = revision;
+      setState(normalizeStateForResume(repairKnownMangaDraftState(incoming, projectScopeId)));
+      setProjectArchiveLoaded(true);
+    }).catch((error) => {
+      if (active) setToast(error instanceof Error ? error.message : "项目存档加载失败");
+    });
+    return () => { active = false; };
+  }, [bridge.connected, bridge.pairingToken, hydrated, projectScopeId, tenantScope.mode]);
+
+  useEffect(() => {
+    if (hydrated && projectArchiveLoaded) scopedBrowserStorage.setItem(activeStorageKey, JSON.stringify(
       browserDraftSnapshot(state, appliedAgentDraftRevision.current),
     ));
-  }, [activeStorageKey, hydrated, scopedBrowserStorage, state]);
+  }, [activeStorageKey, hydrated, projectArchiveLoaded, scopedBrowserStorage, state]);
 
   useEffect(() => {
     const syncAcrossTabs = (event: StorageEvent) => {
@@ -2555,7 +2610,7 @@ function DirectorDesk() {
   }
 
   useEffect(() => {
-    if (!hydrated || !bridge.connected || !bridge.pairingToken) return;
+    if (!hydrated || !projectArchiveLoaded || !bridge.connected || !bridge.pairingToken) return;
     let active = true;
     const receiveAgentDraftUpdate = () => {
       bridgeFetch(`${bridgeBase}/draft-state?scopeId=${encodeURIComponent(projectScopeId || "main")}`, {
@@ -2584,10 +2639,10 @@ function DirectorDesk() {
       active = false;
       window.clearInterval(receiveTimer);
     };
-  }, [bridge.connected, bridge.pairingToken, hydrated, projectScopeId]);
+  }, [bridge.connected, bridge.pairingToken, hydrated, projectArchiveLoaded, projectScopeId]);
 
   useEffect(() => {
-    if (!hydrated || !bridge.connected || !bridge.pairingToken) return;
+    if (!hydrated || !projectArchiveLoaded || !bridge.connected || !bridge.pairingToken) return;
     // Capture the revision that was current when this browser-state save was
     // scheduled. If an Agent draft arrives before the debounce expires, this
     // save still contains the previous browser state and must not overwrite the
@@ -2609,7 +2664,7 @@ function DirectorDesk() {
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [activeStorageKey, bridge.connected, bridge.pairingToken, hydrated, projectScopeId, state]);
+  }, [activeStorageKey, bridge.connected, bridge.pairingToken, hydrated, projectArchiveLoaded, projectScopeId, state]);
 
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length || review.completePrompt) return;
@@ -4415,7 +4470,7 @@ function DirectorDesk() {
     }));
   }
 
-  function updateGlobalString(field: "storyBackground" | "finalVideoStyle" | "storyboardImageStyle", value: string) {
+  function updateGlobalString(field: "storyBackground" | "adaptationFocus" | "finalVideoStyle" | "storyboardImageStyle", value: string) {
     setState((previous) => ({
       ...previous,
       globalStatus: "draft",
@@ -4429,6 +4484,66 @@ function DirectorDesk() {
   function updateGlobalAnnotation(value: string) {
     setState((previous) => ({ ...previous, globalAnnotation: value, globalStatus: value.trim() ? "draft" : previous.globalStatus }));
   }
+
+  async function persistProjectNow() {
+    if (!bridge.connected || !bridge.pairingToken || !projectArchiveLoaded) {
+      throw new Error("项目存档尚未加载完成，请稍后再保存");
+    }
+    const savedAt = new Date().toISOString();
+    const snapshot: ReviewState = {
+      ...state,
+      globalSettings: cloneGlobalSettings(state.globalSettings),
+      globalUpdatedAt: savedAt,
+    };
+    const draftResponse = await bridgeFetch(`${bridgeBase}/draft-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
+      body: JSON.stringify({
+        scopeId: projectScopeId || "main",
+        storageKey: activeStorageKey,
+        state: snapshot,
+        appliedAgentRevision: appliedAgentDraftRevision.current,
+      }),
+    });
+    const draftResult = await draftResponse.json().catch(() => ({}));
+    if (!draftResponse.ok || draftResult.status === "agent-revision-required") {
+      throw new Error(draftResult.error || "Agent 有更新版本，请先加载后再保存");
+    }
+    if (!materialDraftMode) {
+      const settingsResponse = await bridgeFetch(`${bridgeBase}/source-global-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
+        body: JSON.stringify({ projectTitle: snapshot.projectTitle, workspaceScope, settings: snapshot.globalSettings }),
+      });
+      const settingsResult = await settingsResponse.json().catch(() => ({}));
+      if (!settingsResponse.ok) throw new Error(settingsResult.error || "项目全局设定保存失败");
+    }
+    if (tenantScope.mode === "server") {
+      const renameResponse = await bridgeFetch(`${bridgeBase}/projects/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: tenantScope.projectId, name: snapshot.projectTitle }),
+      });
+      const renameResult = await renameResponse.json().catch(() => ({}));
+      if (!renameResponse.ok) throw new Error(renameResult.error || "项目名称保存失败");
+    }
+    scopedBrowserStorage.setItem(activeStorageKey, JSON.stringify(browserDraftSnapshot(snapshot, appliedAgentDraftRevision.current)));
+    setState(snapshot);
+    return `项目《${snapshot.projectTitle}》已保存到服务器`;
+  }
+
+  useEffect(() => {
+    const receiveSaveProject = (event: Event) => {
+      const detail = (event as CustomEvent<ManjingSaveProjectEventDetail>).detail;
+      if (!detail) return;
+      detail.handled = true;
+      void persistProjectNow().then(detail.resolve).catch((error) => {
+        detail.reject(error instanceof Error ? error.message : "项目保存失败");
+      });
+    };
+    window.addEventListener(MANJING_SAVE_PROJECT_EVENT, receiveSaveProject);
+    return () => window.removeEventListener(MANJING_SAVE_PROJECT_EVENT, receiveSaveProject);
+  });
 
   async function saveGlobalSettings() {
     if (!bridge.connected || !bridge.pairingToken) {
@@ -4465,6 +4580,107 @@ function DirectorDesk() {
       setSavingGlobalSettings(false);
     }
   }
+
+  async function refreshGlobalFiles(preferredId = "") {
+    if (tenantScope.mode !== "server") return [] as GlobalFileSummary[];
+    const response = await bridgeFetch(`${bridgeBase}/global-files`, { cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "全局文件列表加载失败");
+    const files = Array.isArray(result.files) ? result.files.filter((item: unknown): item is GlobalFileSummary => {
+      const candidate = item as Partial<GlobalFileSummary>;
+      return typeof candidate?.id === "string" && typeof candidate.name === "string";
+    }) : [];
+    setGlobalFiles(files);
+    const nextId = preferredId || state.globalFileId || selectedGlobalFileId || files[0]?.id || "";
+    setSelectedGlobalFileId(files.some((item) => item.id === nextId) ? nextId : files[0]?.id || "");
+    return files;
+  }
+
+  async function saveGlobalFile({ createNew = false } = {}) {
+    if (tenantScope.mode !== "server") {
+      setToast("全局文件库需要登录服务器后使用");
+      return;
+    }
+    const current = globalFiles.find((item) => item.id === (state.globalFileId || selectedGlobalFileId));
+    const requestedName = createNew
+      ? window.prompt("请输入全局文件名称，例如：城市猎人", state.globalFileName || "")?.trim()
+      : current?.name || state.globalFileName || window.prompt("请输入全局文件名称", "")?.trim();
+    if (!requestedName) return;
+    setGlobalFileBusy(true);
+    try {
+      const payload: GlobalFilePayload = {
+        schemaVersion: 1,
+        settings: cloneGlobalSettings(state.globalSettings),
+        assetPrompts: normalizeProjectAssetPrompts(state.assetPrompts),
+        referenceAssets: [],
+      };
+      const response = await bridgeFetch(`${bridgeBase}/global-files/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          globalFileId: createNew ? undefined : current?.id,
+          name: requestedName,
+          payload,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.file?.id) throw new Error(result.error || "全局文件保存失败");
+      setState((previous) => ({
+        ...previous,
+        globalFileId: result.file.id,
+        globalFileName: result.file.name,
+        globalStatus: "applied",
+        globalUpdatedAt: result.file.updatedAt || new Date().toISOString(),
+        globalSummary: `已保存全局文件「${result.file.name}」，可跨项目加载`,
+      }));
+      await refreshGlobalFiles(result.file.id);
+      setToast(`全局文件「${result.file.name}」已保存`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "全局文件保存失败");
+    } finally {
+      setGlobalFileBusy(false);
+    }
+  }
+
+  async function loadGlobalFile() {
+    if (!selectedGlobalFileId) {
+      setToast("请先选择要加载的全局文件");
+      return;
+    }
+    setGlobalFileBusy(true);
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/global-files/load?id=${encodeURIComponent(selectedGlobalFileId)}`, { cache: "no-store" });
+      const result = await response.json().catch(() => ({}));
+      const payload = result.file?.payload as Partial<GlobalFilePayload> | undefined;
+      if (!response.ok || !result.file?.id || !isGlobalSettings(payload?.settings)) {
+        throw new Error(result.error || "全局文件内容不完整");
+      }
+      const settings = cloneGlobalSettings(payload.settings);
+      setState((previous) => ({
+        ...previous,
+        globalFileId: result.file.id,
+        globalFileName: result.file.name,
+        globalSettings: settings,
+        assetPrompts: normalizeProjectAssetPrompts(payload.assetPrompts),
+        globalStatus: "applied",
+        globalUpdatedAt: new Date().toISOString(),
+        globalSummary: `已从全局文件「${result.file.name}」加载到当前项目`,
+        reviews: previous.reviews.map(invalidateCompletePrompt),
+        structureStatus: "draft",
+        structureConfirmedAt: undefined,
+      }));
+      setToast(`已加载「${result.file.name}」，当前项目的 Shot 与素材未改动`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "全局文件加载失败");
+    } finally {
+      setGlobalFileBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (state.workspaceMode !== "global" || tenantScope.mode !== "server") return;
+    void refreshGlobalFiles().catch((error) => setToast(error instanceof Error ? error.message : "全局文件列表加载失败"));
+  }, [state.workspaceMode, tenantScope.mode]);
 
   async function sendGlobalAnnotation() {
     const annotation = state.globalAnnotation.trim();
@@ -5427,18 +5643,29 @@ function DirectorDesk() {
   }
 
   function renderGlobalSettingsPage() {
-    const locked = savingGlobalSettings || globalBusy;
+    const locked = savingGlobalSettings || globalBusy || globalFileBusy;
     return (
       <section className="global-settings-page">
         <div className="global-page-heading">
           <div><span>PROJECT LEVEL · NOT A SHOT</span><h1>全局设定</h1><p>这里只维护整部脚本共用的规则。它不占 Shot 编号，不进入单镜批注计数，也不代替逐镜签字盖章。</p></div>
           <button className="button secondary" type="button" onClick={returnToShots}>返回镜头审核</button>
         </div>
+        <section className="global-file-toolbar" aria-label="跨项目全局文件">
+          <div><span>GLOBAL FILE LIBRARY</span><b>{state.globalFileName || "当前项目尚未关联全局文件"}</b><small>世界观、美术风格、改编重点及参考资产可跨第6话、第7话等项目复用。</small></div>
+          <select aria-label="选择全局文件" value={selectedGlobalFileId} disabled={locked || tenantScope.mode !== "server"} onChange={(event) => setSelectedGlobalFileId(event.target.value)}>
+            <option value="">{globalFiles.length ? "选择全局文件" : "暂无全局文件"}</option>
+            {globalFiles.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
+          </select>
+          <button className="button secondary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => void saveGlobalFile({ createNew: true })}>新建全局文件</button>
+          <button className="button secondary" type="button" disabled={locked || tenantScope.mode !== "server" || !selectedGlobalFileId} onClick={() => void loadGlobalFile()}>加载全局文件</button>
+          <button className="button primary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => void saveGlobalFile()}>{globalFileBusy ? "保存中…" : "保存全局文件"}</button>
+        </section>
         {renderGlobalTaskProgress()}
         <fieldset className="global-settings-fields" disabled={locked} aria-busy={locked}>
           <section className="global-setting-card project-background-canon">
             <div className="global-setting-heading"><span>00 · WORLD</span><h2>项目故事背景</h2><p>整套漫画只写一次。它负责时代、世界观和改编边界；每格漫画仍是剧情、台词、动作和站位的最高证据。</p></div>
             <TextField label="故事背景／世界观" value={state.globalSettings.storyBackground} rows={9} onChange={(value) => updateGlobalString("storyBackground", value)} />
+            <TextField label="视频改编重点" value={state.globalSettings.adaptationFocus} rows={7} onChange={(value) => updateGlobalString("adaptationFocus", value)} />
           </section>
           <section className="global-setting-card character-canon">
             <div className="global-setting-heading"><span>01 · CHARACTERS</span><h2>人物全局设定</h2><p>身份、发型、服装、表演边界和露脸限制只在这里定义一次。</p></div>
@@ -5486,7 +5713,7 @@ function DirectorDesk() {
             onChange={(event) => updateGlobalAnnotation(event.target.value)}
           />
           <div className="global-annotation-actions">
-            <button className="button secondary" type="button" disabled={locked || bridge.busy || !bridge.connected} onClick={() => void saveGlobalSettings()}>{savingGlobalSettings ? "正在回写源文件…" : "保存全局设定"}</button>
+            <button className="button secondary" type="button" disabled={locked || bridge.busy || !bridge.connected} onClick={() => void saveGlobalSettings()}>{savingGlobalSettings ? "正在保存项目副本…" : "保存到当前项目"}</button>
             <button className="button primary" type="button" disabled={locked || bridge.busy || !bridge.connected || !state.globalAnnotation.trim()} onClick={() => void sendGlobalAnnotation()}>{globalBusy ? "全局批注处理中…" : "发送全局批注"}</button>
           </div>
           <div className={`global-setting-status ${state.globalStatus}`}><i /><b>{state.globalStatus === "sending" ? "写作模型正在处理全局批注" : state.globalStatus === "error" ? "全局设定处理失败" : state.globalStatus === "draft" ? "全局设定有未保存修改" : "全局设定已写入源文件"}</b><small>{state.globalSummary || "所有Shot将读取已生效的全局规则。"}</small></div>
@@ -6037,7 +6264,7 @@ function DirectorDesk() {
             </select>
             <small>拆图 LOW · 单镜提示词/审核 MAX</small>
           </label>
-          <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : hydrated ? "本机自动保存" : "读取工作稿"}</div>
+          <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : !hydrated || !projectArchiveLoaded ? "读取项目存档" : tenantScope.mode === "server" ? "服务器项目自动保存" : "本机自动保存"}</div>
         </div>
       </header>
 

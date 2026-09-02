@@ -214,6 +214,60 @@ test("gateway registers users, restores sessions, isolates projects and injects 
   assert.equal(response.status, 401);
 });
 
+test("gateway stores reusable global files at user level across projects", async (t) => {
+  const store = new ManjingAuthStore({ filename: ":memory:" });
+  const workerPool = { status: () => ({}), stopAll: async () => {}, get: async () => assert.fail("global library must not start a project worker") };
+  const gateway = createManjingGateway({ store, workerPool, cookieSecure: false });
+  const port = await listen(gateway.server);
+  const base = `http://127.0.0.1:${port}`;
+  t.after(async () => {
+    await close(gateway.server);
+    await gateway.close();
+  });
+
+  let response = await fetch(`${base}/auth/register`, {
+    method: "POST",
+    headers: { Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "global-file@example.com", displayName: "Global", password: "global-file-password" }),
+  });
+  const cookie = sessionCookies(response);
+  const registered = await response.json();
+
+  response = await fetch(`${base}/global-files/save`, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "城市猎人", payload: { schemaVersion: 1, settings: { storyBackground: "1987 新宿" }, referenceAssets: [] } }),
+  });
+  assert.equal(response.status, 201);
+  const globalFile = (await response.json()).file;
+  assert.equal(globalFile.name, "城市猎人");
+
+  response = await fetch(`${base}/projects`, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "城市猎人 第7话" }),
+  });
+  const episode7 = (await response.json()).project;
+  response = await fetch(`${base}/projects/select`, {
+    method: "POST",
+    headers: { Cookie: cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId: episode7.id }),
+  });
+  const episode7Cookie = replaceCookie(cookie, response, "manjing_project");
+
+  response = await fetch(`${base}/global-files/load?id=${encodeURIComponent(globalFile.id)}`, { headers: { Cookie: episode7Cookie } });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).file.payload.settings.storyBackground, "1987 新宿");
+
+  response = await fetch(`${base}/projects/rename`, {
+    method: "POST",
+    headers: { Cookie: episode7Cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId: registered.activeProject.id, name: "城市猎人 第6话" }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).project.name, "城市猎人 第6话");
+});
+
 test("gateway rejects cross-site state changes before reading credentials", async (t) => {
   const store = new ManjingAuthStore({ filename: ":memory:" });
   const workerPool = { status: () => ({}), stopAll: async () => {}, get: async () => assert.fail("must not start") };

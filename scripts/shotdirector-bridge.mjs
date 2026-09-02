@@ -1372,7 +1372,7 @@ function persistProjectGlobalSettings(state, { scopeId, savedAt }) {
 }
 
 function formatGlobalSettingsSource(settings) {
-  return `export type GlobalSettings = {\n  storyBackground: string;\n  characters: string[];\n  props: string[];\n  locations: string[];\n  timeline: string[];\n  continuity: string[];\n  finalVideoStyle: string;\n  storyboardImageStyle: string;\n  modelRules: string[];\n  negative: string[];\n};\n\nexport const globalSettings: GlobalSettings = ${JSON.stringify(settings, null, 2)};\n`;
+  return `export type GlobalSettings = {\n  storyBackground: string;\n  adaptationFocus: string;\n  characters: string[];\n  props: string[];\n  locations: string[];\n  timeline: string[];\n  continuity: string[];\n  finalVideoStyle: string;\n  storyboardImageStyle: string;\n  modelRules: string[];\n  negative: string[];\n};\n\nexport const globalSettings: GlobalSettings = ${JSON.stringify({ ...settings, adaptationFocus: String(settings.adaptationFocus || "") }, null, 2)};\n`;
 }
 
 function writeGlobalSettingsToSource(settings) {

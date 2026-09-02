@@ -587,6 +587,40 @@ export function createManjingGateway({
         sendJson(res, 200, { activeProject: project }, { "Set-Cookie": projectCookie(project.id, { secure: cookieSecure }) });
         return;
       }
+      if (req.method === "POST" && path === "/projects/rename") {
+        const payload = await readJson(req);
+        const project = store.renameProject({
+          userId: session.user.id,
+          projectId: payload.projectId,
+          name: payload.name,
+        });
+        sendJson(res, 200, { project });
+        return;
+      }
+      if (req.method === "GET" && path === "/global-files") {
+        sendJson(res, 200, { files: store.listGlobalFiles(session.user.id) });
+        return;
+      }
+      if (req.method === "GET" && path === "/global-files/load") {
+        const file = store.getGlobalFile(incomingUrl.searchParams.get("id") || "", { userId: session.user.id });
+        if (!file) {
+          sendJson(res, 404, { error: "全局文件不存在" });
+          return;
+        }
+        sendJson(res, 200, { file });
+        return;
+      }
+      if (req.method === "POST" && path === "/global-files/save") {
+        const payload = await readJson(req);
+        const file = store.saveGlobalFile({
+          userId: session.user.id,
+          globalFileId: payload.globalFileId,
+          name: payload.name,
+          payload: payload.payload,
+        });
+        sendJson(res, payload.globalFileId ? 200 : 201, { file });
+        return;
+      }
 
       const project = activeProjectFor(store, session.user.id, req);
       if (!project) {

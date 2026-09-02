@@ -5,6 +5,7 @@ import { isGlobalSettings } from "../scripts/project-global-settings.mjs";
 
 const partialProjectSettings = {
   storyBackground: "",
+  adaptationFocus: "保留原作因果和日语对白。",
   characters: [],
   props: [],
   locations: [],
