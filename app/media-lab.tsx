@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { manjingScopedBrowserStorage, manjingSessionFetch, type ManjingWorkspaceScope } from "./manjing-auth-client";
 import { repairKnownMangaPanelCoverage } from "./manga-panel-mapping.mjs";
 
 export type MediaKind = "video" | "manga";
@@ -145,6 +146,13 @@ export type MediaAnalysisResult = {
   assetPrompts?: MediaAssetPrompt[];
   /** Optional keeps analyses made before research provenance was introduced readable. */
   research?: MediaResearch;
+  researchPolicy?: {
+    requestedMode: "off" | "supplement";
+    effectiveMode: "off" | "supplement";
+    supportsWebSearch: boolean;
+    downgraded: boolean;
+    provider: string;
+  };
   shots: MediaDraftShot[];
   scriptMarkdown: string;
   requestId?: string;
@@ -156,8 +164,10 @@ export type MediaAnalysisResult = {
 
 export type MediaLabProps = {
   bridgeBase: string;
+  sessionScope: ManjingWorkspaceScope;
   pairingToken?: string;
   connected: boolean;
+  supportsWebSearch?: boolean;
   generationModel: "seedance-2.0" | "seedance-2.5";
   defaultStoryBackground: string;
   defaultArtStyle: string;
@@ -195,13 +205,16 @@ type PersistedMediaState = {
 };
 
 const storageKey = "shotdirector-material-analysis-v1";
+const authenticatedFetch = manjingSessionFetch;
 const videoExtensions = new Set(["mp4", "mov", "mkv", "webm", "m4v", "avi"]);
 const mangaExtensions = new Set(["png", "jpg", "jpeg", "webp"]);
+const cityHunterLiveActionStyle = "昭和62年（1987年）东京新宿背景的写实日本真人都市犯罪动作电影。全部人物由真实日本演员出演，呈现真实皮肤纹理、毛发、汗液、呼吸、眼神焦点、肌肉受力、衣料褶皱、车辆重量和可信物理动作。采用1980年代日本35mm彩色胶片质感：细密有机颗粒、中等反差、黑位略抬、高光轻微晕染、暗部保留人物与建筑细节；自然暖中性日本人肤色。冬季新宿使用冷蓝环境光、暖黄钨丝灯与少量红紫霓虹反射的真实混合光。摄影硬朗、轴线和空间方向清楚，动作遵循真实物理路径；表演遵循先看见或听见、理解、行动、结果停顿，不同人物不得同步做相同表情。全程自然日语对白、无BGM，中文仅作制作备注。禁止漫画、动画、赛璐璐、二次元、游戏CG、3D塑料人物、现代数码锐化、过度霓虹、现代车辆、智能手机、LED屏、字幕、水印和乱码文字。";
+const unconfirmedArtStylePattern = /待从原始|未明确前|不向视频提示词擅自添加/;
 
-function readPersistedState(): PersistedMediaState {
+function readPersistedState(sessionScope: ManjingWorkspaceScope): PersistedMediaState {
   if (typeof window === "undefined") return {};
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as PersistedMediaState;
+    const parsed = JSON.parse(manjingScopedBrowserStorage(sessionScope).getItem(storageKey) || "{}") as PersistedMediaState;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -257,7 +270,7 @@ function downloadText(name: string, text: string, type: string) {
 }
 
 function safeFileName(value: string) {
-  return value.replace(/[\\/:*?"<>|]+/g, "-").trim() || "镜导素材分析";
+  return value.replace(/[\\/:*?"<>|]+/g, "-").trim() || "漫镜素材分析";
 }
 
 function authorizedPreviewUrl(value: string, pairingToken?: string) {
@@ -313,8 +326,10 @@ const naturalPageCollator = new Intl.Collator("zh-CN", { numeric: true, sensitiv
 
 export function MediaLab({
   bridgeBase,
+  sessionScope,
   pairingToken,
   connected,
+  supportsWebSearch = false,
   generationModel,
   defaultStoryBackground,
   defaultArtStyle,
@@ -322,7 +337,11 @@ export function MediaLab({
   onBack,
   onCreateDraft,
 }: MediaLabProps) {
-  const [restored] = useState(readPersistedState);
+  const mediaBrowserStorage = useMemo(
+    () => manjingScopedBrowserStorage(sessionScope),
+    [sessionScope],
+  );
+  const [restored] = useState(() => readPersistedState(sessionScope));
   const [kind, setKind] = useState<MediaKind>(initialKind || (restored.kind === "manga" ? "manga" : "video"));
   const [readingDirection, setReadingDirection] = useState<ReadingDirection>(
     restored.readingDirection === "left-to-right" ? "left-to-right" : "right-to-left",
@@ -345,6 +364,7 @@ export function MediaLab({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const previewUrlsRef = useRef<Set<string>>(new Set());
+  const recentUploadsRecoveryRef = useRef<Set<MediaKind>>(new Set());
 
   const visibleQueue = useMemo(() => queue.filter((item) => item.kind === kind), [kind, queue]);
   const visibleResult = useMemo(() => {
@@ -364,7 +384,17 @@ export function MediaLab({
   }, [visibleResult]);
   const jobRunning = job?.status === "running";
   const backgroundConfirmed = Boolean(storyBackground.trim());
-  const artStyleConfirmed = Boolean(finalArtStyle.trim()) && !/待从原始|未明确前|不向视频提示词擅自添加/.test(finalArtStyle);
+  const resolvedFinalArtStyle = /城市猎人|CITY\s*HUNTER/i.test(storyBackground)
+    && (!finalArtStyle.trim() || unconfirmedArtStylePattern.test(finalArtStyle))
+    ? cityHunterLiveActionStyle
+    : finalArtStyle;
+  const artStyleConfirmed = Boolean(resolvedFinalArtStyle.trim()) && !unconfirmedArtStylePattern.test(resolvedFinalArtStyle);
+  const analyzeBlockers = [
+    !connected || !pairingToken ? "本地桥接未连接" : "",
+    !visibleQueue.length ? "尚未选择漫画" : "",
+    !backgroundConfirmed ? "项目故事背景" : "",
+    !artStyleConfirmed ? "最终视频美术风格" : "",
+  ].filter(Boolean);
   const canAnalyze = connected && Boolean(pairingToken) && visibleQueue.length > 0 && backgroundConfirmed && artStyleConfirmed && !submitting && !jobRunning;
 
   useEffect(() => {
@@ -383,11 +413,11 @@ export function MediaLab({
       }));
     const value: PersistedMediaState = { kind, readingDirection, brief, storyBackground, finalArtStyle, allowWebResearch, job, result, uploads: serializableQueue };
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(value));
+      mediaBrowserStorage.setItem(storageKey, JSON.stringify(value));
     } catch {
       // Analysis remains usable when private browsing or a storage quota blocks persistence.
     }
-  }, [allowWebResearch, brief, finalArtStyle, job, kind, queue, readingDirection, result, storyBackground]);
+  }, [allowWebResearch, brief, finalArtStyle, job, kind, mediaBrowserStorage, queue, readingDirection, result, storyBackground]);
 
   useEffect(() => {
     const urls = previewUrlsRef.current;
@@ -396,6 +426,46 @@ export function MediaLab({
       urls.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!connected || !pairingToken || visibleQueue.length || submitting || jobRunning) return;
+    if (recentUploadsRecoveryRef.current.has(kind)) return;
+    recentUploadsRecoveryRef.current.add(kind);
+    let cancelled = false;
+
+    const recoverRecentUploads = async () => {
+      try {
+        const response = await authenticatedFetch(`${bridgeBase}/media-recent-uploads?kind=${kind}&maxAgeMinutes=1440`, {
+          headers: { "x-shotdirector-token": pairingToken },
+          cache: "no-store",
+        });
+        const payload = await responseJson(response);
+        if (!response.ok) throw new Error(serverError(payload, "无法恢复最近上传的素材"));
+        const uploads = Array.isArray(payload.uploads) ? payload.uploads as MediaUpload[] : [];
+        if (cancelled || !uploads.length) return;
+        const restoredQueue = uploads.map((upload): QueueItem => ({
+          localId: `recovered-${upload.mediaId}`,
+          kind: upload.kind,
+          name: upload.originalName,
+          mime: upload.mime,
+          size: upload.size,
+          status: "uploaded",
+          mediaId: upload.mediaId,
+          uploadedAt: upload.uploadedAt,
+          previewUrl: authorizedPreviewUrl(`${bridgeBase}/media-source/${upload.mediaId}`, pairingToken),
+        }));
+        setQueue((current) => current.some((item) => item.kind === kind) ? current : [...current, ...restoredQueue]);
+        setResult((current) => current?.kind === kind ? undefined : current);
+        setError("");
+        setNotice(`已自动恢复最近上传的 ${uploads.length} 张${kind === "manga" ? "漫画" : "视频素材"}，不用重新上传`);
+      } catch (caught) {
+        if (!cancelled) setError(errorMessage(caught, "无法恢复最近上传的素材"));
+      }
+    };
+
+    void recoverRecentUploads();
+    return () => { cancelled = true; };
+  }, [bridgeBase, connected, jobRunning, kind, pairingToken, submitting, visibleQueue.length]);
 
   useEffect(() => {
     if (!jobRunning || !job?.requestId || !pairingToken) return;
@@ -411,7 +481,7 @@ export function MediaLab({
     const poll = async () => {
       controller = new AbortController();
       try {
-        const response = await fetch(`${bridgeBase}/media-job-result?requestId=${encodeURIComponent(requestId)}`, {
+        const response = await authenticatedFetch(`${bridgeBase}/media-job-result?requestId=${encodeURIComponent(requestId)}`, {
           headers: { "x-shotdirector-token": pairingToken },
           cache: "no-store",
           signal: controller.signal,
@@ -426,7 +496,7 @@ export function MediaLab({
               kind: current?.kind || (incomingJob.type === "media-manga" ? "manga" : "video"),
             }));
           }
-          setNotice(incomingJob?.message || "素材仍在分析，请保持镜导页面打开");
+          setNotice(incomingJob?.message || "素材仍在分析，请保持漫镜页面打开");
           setError("");
           schedule(2000);
           return;
@@ -454,7 +524,8 @@ export function MediaLab({
           return;
         }
         if (response.status === 404) {
-          const message = "这次素材任务已因本地桥接重启或过期而中断，请清空当前任务后重新开始。";
+          const preservedCount = visibleQueue.length;
+          const message = `服务重启导致这次素材任务暂停；${preservedCount ? `${preservedCount} 张素材与` : ""}已完成的拆图进度仍已保留。点击「继续分析」即可从已保存进度继续，无需清空或重新上传。`;
           setJob((current) => current
             ? { ...current, status: "failed", error: message, message }
             : { requestId, status: "failed", error: message, message });
@@ -476,7 +547,7 @@ export function MediaLab({
       if (timer) window.clearTimeout(timer);
       controller?.abort();
     };
-  }, [bridgeBase, job?.requestId, jobRunning, pairingToken]);
+  }, [bridgeBase, job?.requestId, jobRunning, pairingToken, visibleQueue.length]);
 
   const revokePreview = (item: QueueItem) => {
     if (!item.previewUrl) return;
@@ -565,7 +636,7 @@ export function MediaLab({
     if (!item.file) throw new Error(`${item.name} 需要重新选择后才能上传`);
     updateQueueItem(item.localId, { status: "uploading", error: undefined });
     const query = new URLSearchParams({ kind: item.kind, name: item.name, mime: item.mime });
-    const response = await fetch(`${bridgeBase}/media-upload?${query.toString()}`, {
+    const response = await authenticatedFetch(`${bridgeBase}/media-upload?${query.toString()}`, {
       method: "POST",
       headers: {
         "Content-Type": item.mime || "application/octet-stream",
@@ -588,9 +659,17 @@ export function MediaLab({
     return uploaded;
   };
 
-  const startAnalysis = async () => {
+  const startAnalysis = async (resumeRequestId = "") => {
     if (!connected || !pairingToken) {
-      setError("本地 GPT 桥接尚未连接，暂时不能上传素材。");
+      setError("本地 Pi Agent Harness 尚未连接，暂时不能上传素材。");
+      return;
+    }
+    if (!backgroundConfirmed) {
+      setError("请先填写“项目故事背景／世界观”。已经选择的漫画不会丢失。");
+      return;
+    }
+    if (!artStyleConfirmed) {
+      setError("请先填写并确认“最终视频美术风格”。已经选择的漫画不会丢失。");
       return;
     }
     if (kind === "video" && visibleQueue.length !== 1) {
@@ -604,7 +683,7 @@ export function MediaLab({
 
     setSubmitting(true);
     setError("");
-    setNotice("正在上传素材……");
+    setNotice(resumeRequestId ? "正在从已保存的拆图进度继续……" : "正在上传素材……");
     try {
       const uploaded: QueueItem[] = [];
       for (const item of visibleQueue) {
@@ -617,7 +696,7 @@ export function MediaLab({
         }
       }
       setNotice(kind === "video" ? "视频上传完成，正在启动完整拉片……" : "漫画上传完成，正在启动逐页拆解……");
-      const response = await fetch(`${bridgeBase}/media-analyze`, {
+      const response = await authenticatedFetch(`${bridgeBase}/media-analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-shotdirector-token": pairingToken },
         body: JSON.stringify({
@@ -625,11 +704,12 @@ export function MediaLab({
           mediaIds: uploaded.map((item) => item.mediaId),
           generationModel,
           storyBackground: storyBackground.trim(),
-          defaultArtStyle: finalArtStyle.trim(),
-          webResearch: kind === "manga" && allowWebResearch ? "supplement" : "off",
+          defaultArtStyle: resolvedFinalArtStyle.trim(),
+          webResearch: kind === "manga" && supportsWebSearch && allowWebResearch ? "supplement" : "off",
           readingDirection,
           brief: brief.trim(),
           submittedAt: new Date().toISOString(),
+          ...(resumeRequestId ? { resumeRequestId } : {}),
         }),
       });
       const payload = await responseJson(response);
@@ -639,7 +719,9 @@ export function MediaLab({
       }
       setJob({ ...incomingJob, kind, status: "running" });
       setResult((current) => current?.kind === kind ? undefined : current);
-      setNotice(incomingJob.message || "任务已开始，页面会自动更新处理状态");
+      setNotice(incomingJob.message || (resumeRequestId
+        ? "已从保存进度继续，页面会自动更新处理状态"
+        : "任务已开始，页面会自动更新处理状态"));
     } catch (caught) {
       setError(errorMessage(caught, "无法启动素材分析"));
       setNotice("");
@@ -650,17 +732,21 @@ export function MediaLab({
 
   const recoverGeneratedResult = async () => {
     if (!connected || !pairingToken) {
-      setError("本地 GPT 桥接尚未连接，暂时不能恢复结果。");
+      setError("本地 Pi Agent Harness 尚未连接，暂时不能恢复结果。");
       return;
     }
     setRecovering(true);
     setError("");
     setNotice("正在检查本地已经生成的完整结果……");
     try {
-      const response = await fetch(`${bridgeBase}/media-recover`, {
+      const response = await authenticatedFetch(`${bridgeBase}/media-recover`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-shotdirector-token": pairingToken },
-        body: JSON.stringify({ kind }),
+        body: JSON.stringify({
+          kind,
+          requestId: job?.requestId,
+          sourceFiles: visibleQueue.map((item) => item.name),
+        }),
       });
       const payload = await responseJson(response);
       const recovered = payload.result as MediaAnalysisResult | undefined;
@@ -706,7 +792,7 @@ export function MediaLab({
           <h1 id="media-lab-title">漫画转分镜与视频拉片</h1>
           <p>先保留每页、每格和原文证据，再拆成可单点修改、可全局批改、可反推源文件的 Shot 草稿。</p>
         </div>
-        <button type="button" className="media-back" onClick={onBack}>返回镜导</button>
+        <button type="button" className="media-back" onClick={onBack}>返回漫镜</button>
       </header>
 
       <div className="media-tabs" role="tablist" aria-label="素材分析类型">
@@ -737,7 +823,7 @@ export function MediaLab({
             <h2 id="media-input-title">{kind === "video" ? "上传想模仿的视频" : "上传想视频化的漫画"}</h2>
           </div>
           <span className={connected ? "media-connection is-connected" : "media-connection"}>
-            {connected ? "GPT 桥接已连接" : "GPT 桥接未连接"}
+            {connected ? "Pi Agent Harness 已连接" : "Pi Agent Harness 未连接"}
           </span>
         </div>
 
@@ -794,21 +880,28 @@ export function MediaLab({
 
         {kind === "manga" ? (
           <label className="media-research-toggle">
-            <input type="checkbox" checked={allowWebResearch} onChange={(event) => setAllowWebResearch(event.target.checked)} />
-            <span><strong>联网补充公开剧情背景</strong><small>默认关闭。开启后只补充作品、人物、时代和地点背景；漫画画格仍是剧情、对白、动作和站位的最高证据。</small></span>
+            <input
+              type="checkbox"
+              checked={supportsWebSearch && allowWebResearch}
+              disabled={!supportsWebSearch}
+              onChange={(event) => setAllowWebResearch(event.target.checked)}
+            />
+            <span><strong>联网补充公开剧情背景</strong><small>{supportsWebSearch
+              ? "默认关闭。开启后只补充作品、人物、时代和地点背景；漫画画格仍是剧情、对白、动作和站位的最高证据。"
+              : "当前 GLM/Kimi 写作 API 没有联网工具，已强制关闭；模型不会把编造的来源当成证据。"}</small></span>
           </label>
         ) : null}
 
         <label className="media-brief">
           <span>最终视频美术风格（自动写入全部资产提示词）</span>
           <textarea
-            value={finalArtStyle}
+            value={resolvedFinalArtStyle}
             onChange={(event) => setFinalArtStyle(event.target.value)}
             rows={3}
             maxLength={3000}
             placeholder="例如：填写最终视频的媒介、年代质感、色彩、照明、摄影和禁止风格。"
           />
-          {!artStyleConfirmed ? <small className="media-inline-error">请先确认最终成片风格；漫画黑白、网点或赛璐璐不会自动当作视频风格。</small> : null}
+          {!artStyleConfirmed ? <small className="media-inline-error">请先确认最终成片风格；来源素材的画法不会自动当作视频风格。</small> : null}
         </label>
 
         <label className="media-brief">
@@ -862,15 +955,26 @@ export function MediaLab({
         <div className="media-submit-row">
           <div>
             <strong>{generationModel === "seedance-2.5" ? "Seedance 2.5" : "Seedance 2.0"}</strong>
-            <span>{generationModel === "seedance-2.5" ? " · 每镜 4–30 秒 · 最多 50 个全能参考" : " · 每镜 4–15 秒 · 最多 9 个全能参考"}</span>
+            <span>{generationModel === "seedance-2.5" ? " · 每镜 6–30 秒 · 适合连续多画格" : " · 每镜 6–15 秒 · 最多 9 个全能参考"}</span>
           </div>
-          <button type="button" className="media-primary" onClick={startAnalysis} disabled={!canAnalyze}>
+          <button
+            type="button"
+            className="media-primary"
+            onClick={() => { void startAnalysis(); }}
+            disabled={submitting || jobRunning}
+            aria-disabled={!canAnalyze}
+            title={analyzeBlockers.length ? `尚缺：${analyzeBlockers.join("、")}` : "开始上传并拆解漫画"}
+          >
             {submitting ? "正在上传……" : kind === "video" ? "开始完整拉片" : "开始拆成可审核分镜"}
           </button>
           <button type="button" className="media-secondary" onClick={clearCurrent} disabled={submitting || jobRunning || (!visibleQueue.length && !visibleResult)}>清空当前</button>
         </div>
 
-        {!pairingToken && connected ? <p className="media-inline-error">桥接已响应，但页面还没有配对令牌；请刷新镜导后重试。</p> : null}
+        {!submitting && !jobRunning && analyzeBlockers.length ? (
+          <p className="media-inline-error" role="status">按钮尚未解锁：请先填写或确认「{analyzeBlockers.join("、")}」。已选的漫画仍保留在队列中。</p>
+        ) : null}
+
+        {!pairingToken && connected ? <p className="media-inline-error">桥接已响应，但页面还没有配对令牌；请刷新漫镜后重试。</p> : null}
         {notice ? <p className="media-notice" role="status" aria-live="polite">{notice}</p> : null}
         {error ? <p className="media-error" role="alert">{error}</p> : null}
       </section>
@@ -905,10 +1009,13 @@ export function MediaLab({
           ) : null}
           {job.status === "failed" ? (
             <div className="media-job-actions">
+              <button type="button" className="media-primary" onClick={() => { void startAnalysis(job.requestId); }} disabled={recovering || submitting}>
+                继续分析
+              </button>
               <button type="button" className="media-primary" onClick={recoverGeneratedResult} disabled={recovering || submitting}>
                 {recovering ? "正在恢复……" : "恢复已生成结果"}
               </button>
-              <span>如果模型已经写完结果，只恢复本地文件，不会再次调用 GPT。</span>
+              <span>「继续分析」保留原素材并复用已完成的拆图进度；「恢复已生成结果」只读取已写完的文件，不会再次调用写作模型。</span>
             </div>
           ) : null}
         </section>
@@ -923,6 +1030,7 @@ export function MediaLab({
               <p>{visibleResult.summary}</p>
             </div>
             <div className="media-export-actions">
+              <button type="button" onClick={recoverGeneratedResult} disabled={recovering || submitting || jobRunning}>{recovering ? "正在重新读取……" : "重新读取本地结果"}</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.json`, JSON.stringify(visibleResult, null, 2), "application/json;charset=utf-8")}>下载 JSON</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.md`, visibleResult.scriptMarkdown, "text/markdown;charset=utf-8")}>下载 Markdown</button>
               <button type="button" className="media-create-draft" onClick={() => onCreateDraft({ ...visibleResult, projectBackground: storyBackground.trim() })}>进入逐镜审核（独立草稿）</button>
@@ -932,7 +1040,9 @@ export function MediaLab({
           {visibleResult.research ? (
             <section className="media-result-section media-research-result" aria-labelledby="media-research-title">
               <h3 id="media-research-title">联网背景溯源</h3>
-              <p>{visibleResult.research.mode === "off" ? "本次未启用联网补充；结果只依据项目设定与上传素材。" : visibleResult.research.used ? `已用 ${visibleResult.research.sources.length} 个公开来源补充背景；未用于改写漫画证据。` : "已允许联网，但没有采用可确认的外部资料。"}</p>
+              <p>{visibleResult.researchPolicy?.downgraded
+                ? `本次曾请求联网补充，但 ${visibleResult.researchPolicy.provider} 没有联网工具，已降级为 off；结果只依据项目设定与上传素材。`
+                : visibleResult.research.mode === "off" ? "本次未启用联网补充；结果只依据项目设定与上传素材。" : visibleResult.research.used ? `已用 ${visibleResult.research.sources.length} 个公开来源补充背景；未用于改写漫画证据。` : "已允许联网，但没有采用可确认的外部资料。"}</p>
               {visibleResult.research.sources.length ? (
                 <ul>
                   {visibleResult.research.sources.map((source) => <li key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><span>{source.usedFor}</span></li>)}
@@ -1088,7 +1198,7 @@ export function MediaLab({
           </section>
 
           <section className="media-result-section" aria-labelledby="media-shots-title">
-            <h3 id="media-shots-title">可进入镜导的 Shot 草稿 · {visibleResult.shots.length} 镜</h3>
+            <h3 id="media-shots-title">可进入漫镜的 Shot 草稿 · {visibleResult.shots.length} 镜</h3>
             <div className="media-shot-list">
               {visibleResult.shots.map((shot) => (
                 <details key={shot.id} className="media-shot-card">

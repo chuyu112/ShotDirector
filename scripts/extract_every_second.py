@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Extract fixed-interval video frames and build timestamped contact sheets."""
 
-from __future__ import annotations
-
 import argparse
 import csv
 import glob
@@ -16,8 +14,8 @@ import sys
 from pathlib import Path
 
 
-def find_ffmpeg() -> Path:
-    candidates: list[Path] = []
+def find_ffmpeg():
+    candidates = []
     env_path = os.environ.get("FFMPEG_PATH")
     if env_path:
         candidates.append(Path(env_path))
@@ -48,8 +46,40 @@ def find_ffmpeg() -> Path:
     raise FileNotFoundError("FFmpeg was not found. Set FFMPEG_PATH or install imageio-ffmpeg.")
 
 
-def run(command: list[str], log_path: Path | None = None, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, text=True, capture_output=True, encoding="utf-8", errors="replace")
+def find_drawtext_font():
+    candidates = []
+    env_path = os.environ.get("MANJING_CONTACT_SHEET_FONT")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(
+        [
+            Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc"),
+            Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+            Path("C:/Windows/Fonts/arial.ttf"),
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def escape_ffmpeg_filter_path(path):
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def run(command, log_path=None, allow_failure=False):
+    # Python 3.6 does not support subprocess.run(text=True, capture_output=True).
+    result = subprocess.run(
+        command,
+        universal_newlines=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+    )
     combined = (result.stdout or "") + (result.stderr or "")
     if log_path is not None:
         log_path.write_text(combined, encoding="utf-8")
@@ -58,7 +88,7 @@ def run(command: list[str], log_path: Path | None = None, allow_failure: bool = 
     return result
 
 
-def parse_duration(text: str) -> float | None:
+def parse_duration(text):
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
     if not match:
         return None
@@ -66,14 +96,14 @@ def parse_duration(text: str) -> float | None:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
-def timecode(seconds: float) -> str:
+def timecode(seconds):
     whole = int(round(seconds))
     hours, remainder = divmod(whole, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input_video", type=Path)
     parser.add_argument("output_dir", type=Path)
@@ -131,12 +161,13 @@ def main() -> int:
             seconds = index * args.interval
             writer.writerow([index + 1, f"{seconds:.3f}", timecode(seconds), str(frame)])
 
-    font = "C\\:/Windows/Fonts/arial.ttf"
+    font = find_drawtext_font()
     tile_count = args.cols * args.rows
     frame_rate = f"1/{args.interval}"
+    font_option = f"fontfile='{escape_ffmpeg_filter_path(font)}':" if font else ""
     filter_chain = (
         f"scale={args.thumb_width}:-2,"
-        f"drawtext=fontfile='{font}':text='%{{pts\\:hms}}':"
+        f"drawtext={font_option}text='%{{pts\\:hms}}':"
         "x=8:y=8:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.72:boxborderw=5,"
         f"tile={args.cols}x{args.rows}:nb_frames={tile_count}:padding=6:margin=12:color=white"
     )
@@ -145,7 +176,7 @@ def main() -> int:
         [
             str(ffmpeg), "-hide_banner", "-loglevel", "warning", "-y",
             "-framerate", frame_rate, "-start_number", "1", "-i", str(frame_pattern),
-            "-vf", filter_chain, "-frames:v", str(sheet_count), "-fps_mode", "vfr",
+            "-vf", filter_chain, "-frames:v", str(sheet_count), "-vsync", "vfr",
             "-q:v", "2", str(sheets / "sheet_%03d.jpg"),
         ],
         log_path=out / "contact_sheet_generation.txt",

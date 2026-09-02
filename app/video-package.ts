@@ -1,5 +1,6 @@
 import type { GlobalSettings } from "./global-settings";
 import type { StoryboardShot } from "./storyboard-data";
+import { buildOmniReferenceBindings, referenceSignature, validatePromptReferenceCoverage } from "./reference-contract.mjs";
 
 export type VideoPackageStatus = "blocked" | "running" | "stale" | "warning" | "ready";
 
@@ -20,6 +21,7 @@ export type VideoPackageInput = {
   shot: StoryboardShot;
   approved: boolean;
   approvedAt?: string;
+  promptReviewCurrent: boolean;
   layoutViewKeys: string[];
   directorViewKeys: string[];
   whiteboxLocks: WhiteboxLock[];
@@ -33,6 +35,7 @@ export type VideoPackageInput = {
 
 export type VideoGenerationPackage = {
   packageId: string;
+  shotUid?: string;
   shotId: string;
   title: string;
   timecode: string;
@@ -56,6 +59,14 @@ export type VideoGenerationPackage = {
     artworkCandidates: string[];
     selectedArtwork?: string;
     omniReferences: string[];
+    referenceBindings: Array<{
+      id: string;
+      label: string;
+      kind: "scene" | "character" | "prop" | "extra";
+      imageIndex: number;
+      token: string;
+    }>;
+    referenceSignature: string;
   };
 };
 
@@ -72,6 +83,22 @@ function hashText(value: string) {
   return (hash >>> 0).toString(36);
 }
 
+/**
+ * Keep asynchronous-generation revisions tied to the stable Shot identity and
+ * the creative source, not to editable timeline labels. Renumbering/reordering
+ * may change `id` and `timecode` while the underlying Shot remains the same.
+ *
+ * Legacy Shots without a `shotUid` still fall back to `id` so two otherwise
+ * identical legacy Shots cannot accidentally share a revision.
+ */
+function shotSourceRevisionPayload(shot: StoryboardShot) {
+  const { id, timecode: _timecode, shotUid, ...source } = shot;
+  return {
+    shotIdentity: shotUid || `legacy-shot:${id}`,
+    ...source,
+  };
+}
+
 export function buildShotUpstreamRevision(input: {
   projectTitle: string;
   modelId: string;
@@ -82,7 +109,43 @@ export function buildShotUpstreamRevision(input: {
     projectTitle: input.projectTitle,
     modelId: input.modelId,
     globalSettings: input.globalSettings,
-    shot: input.shot,
+    shot: shotSourceRevisionPayload(input.shot),
+  }))}`;
+}
+
+export function buildCompleteShotPromptRevision(input: {
+  projectTitle: string;
+  modelId: string;
+  globalSettings: GlobalSettings;
+  shot: StoryboardShot;
+  shotAnnotations: Record<string, string>;
+  panelAnnotations: Record<string, string>;
+  sourceMangaRequestId: string;
+}) {
+  return `complete-${hashText(JSON.stringify({
+    projectTitle: input.projectTitle,
+    modelId: input.modelId,
+    globalSettings: input.globalSettings,
+    shot: shotSourceRevisionPayload(input.shot),
+    shotAnnotations: input.shotAnnotations,
+    panelAnnotations: input.panelAnnotations,
+    sourceMangaRequestId: input.sourceMangaRequestId,
+  }))}`;
+}
+
+export function buildPromptReviewRevision(input: {
+  shotId: string;
+  completePrompt: string;
+  completePromptSourceRevision?: string;
+  completePromptGeneratorId: string;
+  reviewerId: string;
+}) {
+  return `review-${hashText(JSON.stringify({
+    shotId: input.shotId,
+    completePrompt: input.completePrompt,
+    completePromptSourceRevision: input.completePromptSourceRevision || "",
+    completePromptGeneratorId: input.completePromptGeneratorId || "legacy-unknown",
+    reviewerId: input.reviewerId,
   }))}`;
 }
 
@@ -165,7 +228,7 @@ function actionTimeline(shot: StoryboardShot) {
   }).join("\n");
 }
 
-function buildDefaultPrompt(input: VideoPackageInput, selectedArtwork?: string) {
+function buildDefaultPrompt(input: VideoPackageInput, selectedArtwork: string | undefined, referenceBindings: ReturnType<typeof buildOmniReferenceBindings>) {
   const shot = input.shot;
   const globalRules = relevantGlobalRules(input.globalSettings, shot, input.modelLabel);
   const finalVideoStyle = input.globalSettings.finalVideoStyle.trim() || shot.artStyle;
@@ -176,7 +239,7 @@ function buildDefaultPrompt(input: VideoPackageInput, selectedArtwork?: string) 
     ? `${input.layoutViewKeys.join("、")} TOP VIEW 只作为站位、轨迹与机位依据，忽略其中的文字标签和箭头样式。`
     : "本镜没有独立TOP VIEW，按构图与摄影机文字执行。";
   const artworkLine = selectedArtwork
-    ? `已选临时分镜图：${selectedArtwork}。只借其剧情、构图、站位与动作，不把临时赛璐璐画法带入成片。`
+    ? `已选临时分镜图：${selectedArtwork}。只借其剧情、构图、站位与动作，不改变最终成片风格。`
     : "尚未选定临时分镜图；不得自行补充新剧情或新造型。";
 
   return compact([
@@ -196,7 +259,10 @@ function buildDefaultPrompt(input: VideoPackageInput, selectedArtwork?: string) 
     `连续性硬锁：${shot.continuity.join("；")}`,
     globalRules.length ? `本镜相关全局规则：${globalRules.join("；")}` : "",
     `导演结构参考：${layoutLine}${whiteboxLine}${artworkLine}`,
-    `全能参考（${shot.omniReferences.length}/${input.referenceLimit}）：${shot.omniReferences.join("；") || "无"}`,
+    referenceBindings.length
+      ? `参考图绑定（上传顺序唯一权威）：${referenceBindings.map((item) => `${item.token}=${item.label}`).join("；")}。提示词中的 ${referenceBindings.map((item) => item.token).join("、")} 必须与该顺序一致。`
+      : "参考图绑定：无。不得虚构 @图片 引用。",
+    `全能参考（${shot.omniReferences.length}/${input.referenceLimit}）：${referenceBindings.map((item) => item.label).join("；") || "无"}`,
     `禁止：${compact([...input.globalSettings.negative, ...shot.negative]).join("；")}`,
     "不要生成字幕、对白气泡、水印或乱码文字。不得添加BGM、旁白或内心独白。不得把生图提示词、白模材质或临时分镜画风复制成最终视频风格。",
   ]).join("\n\n");
@@ -204,6 +270,8 @@ function buildDefaultPrompt(input: VideoPackageInput, selectedArtwork?: string) 
 
 export function buildVideoGenerationPackage(input: VideoPackageInput): VideoGenerationPackage {
   const selectedArtwork = input.artworkNames[input.selectedArtworkIndex] || input.artworkNames[0];
+  const referenceBindings = buildOmniReferenceBindings(input.shot.omniReferences, { limit: input.referenceLimit });
+  const bindingsSignature = referenceSignature(referenceBindings);
   const upstreamRevision = buildShotUpstreamRevision(input);
   const staleWhiteboxLocks = input.whiteboxLocks.filter((item) => item.sourceRevision !== upstreamRevision);
   const activeWhiteboxLocks = input.whiteboxLocks.filter((item) => item.sourceRevision === upstreamRevision);
@@ -213,22 +281,25 @@ export function buildVideoGenerationPackage(input: VideoPackageInput): VideoGene
     projectTitle: input.projectTitle,
     modelId: input.modelId,
     globalSettings: input.globalSettings,
-    shot: input.shot,
+    shot: shotSourceRevisionPayload(input.shot),
     approved: input.approved,
     approvedAt: input.approvedAt,
     layoutViewKeys: input.layoutViewKeys,
     directorViewKeys: input.directorViewKeys,
     whiteboxLocks: input.whiteboxLocks,
     selectedArtwork,
+    bindingsSignature,
   };
   const sourceRevision = `vp-${hashText(JSON.stringify(revisionPayload))}`;
-  const defaultPrompt = buildDefaultPrompt(promptInput, artworkStale ? undefined : selectedArtwork);
+  const defaultPrompt = buildDefaultPrompt(promptInput, artworkStale ? undefined : selectedArtwork, referenceBindings);
   const hasCustomPrompt = typeof input.customPrompt === "string";
   const customPromptStale = hasCustomPrompt
     && Boolean(input.customPromptSourceRevision)
     && input.customPromptSourceRevision !== sourceRevision;
   const warnings: string[] = [];
   if (!input.approved) warnings.push("脚本尚未独立盖章");
+  if (input.approved && !input.approvedAt) warnings.push("审批记录缺少签字时间");
+  if (!input.promptReviewCurrent) warnings.push("完整提示词尚未通过当前版本的独立审查");
   if (input.shot.duration < input.minDuration || input.shot.duration > input.maxDuration) {
     warnings.push(`时长不符合 ${input.modelLabel} 的 ${input.minDuration}–${input.maxDuration} 秒限制`);
   }
@@ -240,23 +311,28 @@ export function buildVideoGenerationPackage(input: VideoPackageInput): VideoGene
   if (artworkStale) warnings.push("已选临时分镜图来自旧版脚本或全局设定");
   if (input.artworkStatus === "error") warnings.push("最近一次分镜出图失败");
   if (customPromptStale) warnings.push("自定义视频提示词来自旧版脚本或旧资产");
+  const referenceCoverage = validatePromptReferenceCoverage(hasCustomPrompt ? input.customPrompt || "" : defaultPrompt, referenceBindings);
+  if (referenceCoverage.missing.length) warnings.push(`提示词缺少参考图绑定：${referenceCoverage.missing.join("、")}`);
+  if (referenceCoverage.unknown.length) warnings.push(`提示词包含不存在的参考图编号：${referenceCoverage.unknown.join("、")}`);
 
-  const blocked = !input.approved
+  const approvalReady = input.approved && Boolean(input.approvedAt) && input.promptReviewCurrent;
+  const blocked = !approvalReady
     || input.shot.duration < input.minDuration
     || input.shot.duration > input.maxDuration
     || input.shot.omniReferences.length > input.referenceLimit;
-  const status: VideoPackageStatus = input.artworkStatus === "generating"
-    ? "running"
-    : blocked
-      ? "blocked"
-      : customPromptStale || staleWhiteboxLocks.length > 0 || artworkStale
+  const status: VideoPackageStatus = blocked
+    ? "blocked"
+    : input.artworkStatus === "generating"
+      ? "running"
+      : customPromptStale || staleWhiteboxLocks.length > 0 || artworkStale || !referenceCoverage.valid
         ? "stale"
         : !activeWhiteboxLocks.length || !selectedArtwork || !input.layoutViewKeys.length
           ? "warning"
           : "ready";
 
   return {
-    packageId: `video-package-${hashText(`${input.projectTitle}::${input.shot.id}`)}`,
+    packageId: `video-package-${hashText(`${input.projectTitle}::${input.shot.shotUid || input.shot.id}`)}`,
+    shotUid: input.shot.shotUid,
     shotId: input.shot.id,
     title: input.shot.title,
     timecode: input.shot.timecode,
@@ -272,8 +348,14 @@ export function buildVideoGenerationPackage(input: VideoPackageInput): VideoGene
       {
         id: "script",
         label: "分镜脚本",
-        status: input.approved ? "ready" : "blocked",
-        detail: input.approved ? `已盖章${input.approvedAt ? ` · ${input.approvedAt}` : ""}` : "需要单独签字盖章",
+        status: approvalReady ? "ready" : "blocked",
+        detail: !input.approved
+          ? "需要单独签字盖章"
+          : !input.approvedAt
+            ? "审批记录缺少签字时间"
+            : !input.promptReviewCurrent
+              ? "独立 Reviewer 报告已过期或尚未通过"
+              : `已盖章 · ${input.approvedAt}`,
       },
       {
         id: "layout",
@@ -308,6 +390,8 @@ export function buildVideoGenerationPackage(input: VideoPackageInput): VideoGene
       artworkCandidates: input.artworkNames,
       selectedArtwork,
       omniReferences: input.shot.omniReferences,
+      referenceBindings,
+      referenceSignature: bindingsSignature,
     },
   };
 }

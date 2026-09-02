@@ -1,27 +1,37 @@
 {
-  "name": "shotdirector-storyboard-review",
+  "name": "manjing-comic-director",
   "version": "0.1.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k -n SITE,GPT-BRIDGE \"vinext dev\" \"node scripts/shotdirector-bridge.mjs\"",
+    "dev": "concurrently -k -n SITE,PI-HARNESS \"vinext dev --hostname 0.0.0.0 --port 3000\" \"node --env-file-if-exists=.env.bridge.local scripts/shotdirector-bridge.mjs\"",
     "dev:site": "vinext dev",
-    "dev:bridge": "node scripts/shotdirector-bridge.mjs",
+    "dev:bridge": "node --env-file-if-exists=.env.bridge.local scripts/shotdirector-bridge.mjs",
     "build": "vinext build",
+    "build:server": "node scripts/build-server.mjs",
     "start": "vinext start",
+    "start:web": "vinext start --hostname 0.0.0.0 --port 3000",
+    "start:gateway": "node --env-file-if-exists=.env.server server/manjing-gateway.mjs",
+    "test:server": "node --test tests/server-auth-store.test.mjs tests/server-gateway.test.mjs tests/compatible-chat-structured-provider.test.mjs tests/doubao-responses-provider.test.mjs tests/text-model-catalog.test.mjs tests/model-image-atlas.test.mjs tests/openai-responses-provider.test.mjs tests/openai-image-provider.test.mjs tests/libtv-server-worker.test.mjs tests/server-auth-ui.test.mjs tests/server-browser-storage.test.mjs tests/tenant-worker-pool.test.mjs tests/server-deployment.test.mjs tests/merge-model-env.test.mjs tests/server-runtime-smoke.test.mjs tests/server-production-chain.test.mjs tests/video-extractor-server.test.mjs tests/global-settings-persistence.test.mjs tests/draft-sync-policy.test.mjs tests/media-job-resume.test.mjs",
+    "test:production-chain": "node --test --test-concurrency=1 tests/server-production-chain.test.mjs",
     "test": "npm run build && node --test",
+    "test:harness": "node --test tests/pi-agent-runtime.test.mjs tests/manjing-agent-contract.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
     "drizzle-orm": "0.45.2",
-    "next": "16.2.6",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "sharp": "0.34.5",
-    "three": "^0.180.0"
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sharp": "0.35.4",
+    "three": "^0.180.0",
+    "vinext": "1.0.0-beta.8"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -32,17 +42,20 @@
     "@types/react-dom": "19.2.3",
     "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
+    "@vitejs/plugin-rsc": "0.5.34",
     "concurrently": "9.2.1",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "react-server-dom-webpack": "19.2.6",
+    "eslint-config-next": "16.3.3",
+    "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vinext": "0.0.50",
-    "vite": "8.0.13",
+    "vite": "8.2.2",
     "wrangler": "4.92.0"
+  },
+  "overrides": {
+    "fast-uri": "3.1.5",
+    "ws": "8.21.3"
   },
   "type": "module"
 }

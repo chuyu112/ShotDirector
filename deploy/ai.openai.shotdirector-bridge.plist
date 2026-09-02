@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.openai.shotdirector-bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file-if-exists=.env.bridge.local</string>
+    <string>scripts/shotdirector-bridge.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/Admin/Documents/Documents/镜导 ShotDirector</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/Admin</string>
+    <key>USERPROFILE</key>
+    <string>/Users/Admin</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>3</integer>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/Admin/Library/Logs/ShotDirector/bridge.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/Admin/Library/Logs/ShotDirector/bridge-error.log</string>
+</dict>
+</plist>

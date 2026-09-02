@@ -1059,7 +1059,7 @@ export function WhiteboxEditor({
     if (!dataUrl) return;
     const link = document.createElement("a");
     link.href = dataUrl;
-    link.download = `镜导-${shotId}-${viewLabel}-3D白模-16x9.png`;
+    link.download = `漫镜-${shotId}-${viewLabel}-3D白模-16x9.png`;
     link.click();
   }
 

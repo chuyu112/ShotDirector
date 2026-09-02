@@ -1,23 +1,39 @@
 "use client";
 
-import { ChangeEvent, CSSProperties, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, FormEvent, ReactNode, UIEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { blockingPlans, type BlockingMarker, type BlockingMovement } from "./blocking-plans";
 import { globalSettings as sourceGlobalSettings, type GlobalSettings } from "./global-settings";
 import { defaultArtStyle, inferredVideoArtStyle, legacyStoryboardArtStyle, mistakenStoryboardAsVideoArtStyle, storyboardArtworkStyle, storyboardShots, type StoryboardShot, type StoryboardSegment } from "./storyboard-data";
 import { buildCoverageReport, changedShotFields, defaultDirectorRecipeId, directorRecipes, getDirectorRecipe, sourceDocumentFromShots, sourceTextForShot, type CoverageStatus } from "./director-workflow";
 import { MediaLab, type MediaAnalysisResult } from "./media-lab";
-import { buildShotUpstreamRevision, buildVideoGenerationPackage, type VideoGenerationPackage, type VideoPackageStatus } from "./video-package";
+import { buildCompleteShotPromptRevision, buildPromptReviewRevision, buildShotUpstreamRevision, buildVideoGenerationPackage, type VideoGenerationPackage, type VideoPackageStatus } from "./video-package";
+import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
+import { ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
+import {
+  browserAgentRevision,
+  browserDraftSnapshot,
+  shouldApplyAgentDraft,
+  shouldSurfaceMediaRecoveryFailure,
+} from "./draft-sync-policy.mjs";
 
 type ViewId = "script" | "artwork" | "confirm";
 type WorkspaceMode = "shots" | "global" | "materials" | "coverage" | "assets";
+type DeskMode = "creator" | "strict-review";
+type ReasoningEffort = "low" | "high" | "max";
 type SectionId = "characters" | "scene" | "story" | "action" | "continuity" | "style" | "director";
 type GenerationModel = "seedance-2.0" | "seedance-2.5";
 type DirectorVisualMode = "top" | "whitebox";
 type ScriptStatus = "draft" | "sending" | "applied" | "error";
+type StructureStatus = "draft" | "confirmed";
 type ArtworkStatus = "empty" | "generating" | "ready" | "error";
+type CompleteShotPromptStatus = "empty" | "generating" | "ready" | "stale" | "error";
+type PromptReviewStatus = "empty" | "reviewing" | "ready" | "stale" | "error";
+type PromptReviewVerdict = "discussion-ready" | "needs-revision";
+type PromptReviewSeverity = "blocking" | "warning" | "suggestion";
 type AssetFilter = "all" | "attention" | "ready" | "running";
+type WritingModelId = "codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "gpt-5.6-luna" | "deepseek-v4-flash" | "seed-2.1-pro" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
 type AssetImageRatio = "16:9" | "9:16" | "1:1" | "3:4" | "4:3" | "3:2" | "2:3" | "4:5" | "5:4" | "21:9";
@@ -53,6 +69,51 @@ const assetImageModels: Array<{ id: AssetImageModel; label: string }> = [
 ];
 const assetImageRatios: AssetImageRatio[] = ["16:9", "9:16", "1:1", "3:4", "4:3", "3:2", "2:3", "4:5", "5:4", "21:9"];
 const assetImageResolutions: AssetImageResolution[] = ["1K", "2K", "4K"];
+
+async function copyTextToClipboard(value: string) {
+  if (!value) return false;
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Public-IP HTTP pages and restricted webviews may expose the API but deny writes.
+      // Fall through to the selection-based copy path while the click is still active.
+    }
+  }
+
+  if (typeof document === "undefined" || !document.body) return false;
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.setAttribute("aria-hidden", "true");
+  Object.assign(textarea.style, {
+    position: "fixed",
+    top: "0",
+    left: "-9999px",
+    width: "1px",
+    height: "1px",
+    opacity: "0",
+    pointerEvents: "none",
+  });
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  } finally {
+    textarea.remove();
+    activeElement?.focus({ preventScroll: true });
+  }
+  return copied;
+}
 
 function assetImageRatiosFor(model: AssetImageModel) {
   return model === "Seedream 5.0 Pro"
@@ -92,6 +153,103 @@ type AnnotationResult = {
   finishedAt?: string;
 };
 
+type CompleteShotPromptResearch = {
+  used: boolean;
+  queries: string[];
+  sources: Array<{ title: string; url: string; usedFor: string }>;
+  notes: string[];
+};
+
+type CompleteShotPromptResult = {
+  status: "completed";
+  shotId: string;
+  projectUid?: string;
+  shotUid?: string;
+  generatorId?: string;
+  generatorProvider?: string;
+  requestedGeneratorId?: string;
+  summary: string;
+  prompt: string;
+  research: CompleteShotPromptResearch;
+  warnings: string[];
+  sourceRevision: string;
+  generatedAt: string;
+  error?: string;
+};
+
+type ReviewerOption = {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  available: boolean;
+  reason?: string;
+  evidenceMode?: "direct-images" | "structured-panel-evidence";
+};
+
+type WritingModelOption = {
+  id: WritingModelId;
+  label: string;
+  hint: string;
+  provider: string;
+  model: string;
+  available: boolean;
+  selected?: boolean;
+  reason?: string;
+  supportsImages?: boolean;
+};
+
+const writingModelCatalog: WritingModelOption[] = [
+  { id: "codex-gpt-5.6-sol", label: "Codex · GPT-5.6 Sol", hint: "超级管理员专用 · 多模态", provider: "codex", model: "gpt-5.6-sol", available: false, reason: "仅超级管理员可用" },
+  { id: "glm-5.3-flash", label: "GLM-5.3-Flash", hint: "默认 · 多模态", provider: "glm", model: "glm-5.3-flash", available: false, reason: "正在读取服务器状态" },
+  { id: "kimi-k3", label: "Kimi K3", hint: "聊天与创作", provider: "kimi", model: "k3", available: false, reason: "正在读取服务器状态" },
+  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "稳定长文", provider: "openai-compatible-responses", model: "gpt-5.6-luna", available: false, reason: "正在读取服务器 env" },
+  { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "快速文字创作", provider: "deepseek", model: "deepseek-v4-flash", available: false, reason: "正在读取服务器 env" },
+  { id: "seed-2.1-pro", label: "Seed 2.1 Pro", hint: "长篇文字与创意写作", provider: "doubao-responses", model: "doubao-seed-2-1-pro-260628", available: false, reason: "正在读取服务器 env" },
+  { id: "glm-5.3", label: "GLM 5.3", hint: "严格审核 · 文字推理", provider: "glm", model: "glm-5.3", available: false, reason: "正在读取服务器 env" },
+  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "复杂写作与严格审核", provider: "openai-compatible-responses", model: "gpt-5.6-sol", available: false, reason: "正在读取服务器 env" },
+  { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "复杂文字创作与严格审核", provider: "deepseek", model: "deepseek-v4-pro", available: false, reason: "正在读取服务器 env" },
+];
+const serverSelectableWritingModelIds = new Set<WritingModelId>(writingModelCatalog.map((model) => model.id));
+
+type PromptReviewFinding = {
+  id: string;
+  severity: PromptReviewSeverity;
+  category: string;
+  title: string;
+  detail: string;
+  suggestion: string;
+  panelIds: string[];
+};
+
+type PromptReviewReport = {
+  verdict: PromptReviewVerdict;
+  summary: string;
+  strengths: string[];
+  checks: {
+    sourceBoundary: boolean;
+    characterContinuity: boolean;
+    timingFeasible: boolean;
+    dialogueFeasible: boolean;
+    cameraAndActionCoherent: boolean;
+    soundAndNegativeComplete: boolean;
+  };
+  findings: PromptReviewFinding[];
+};
+
+type PromptReviewResult = {
+  status: "completed";
+  shotId: string;
+  reviewerId: string;
+  reviewerModel?: string;
+  reviewerLabel: string;
+  report: PromptReviewReport;
+  sourceRevision: string;
+  reviewedAt: string;
+  requestId?: string;
+  error?: string;
+};
+
 type AnnotationBatchResult = {
   status?: string;
   shots: StoryboardShot[];
@@ -119,6 +277,25 @@ type ShotReview = {
   videoPrompt?: string;
   videoPromptSourceRevision?: string;
   videoPackageSyncedAt?: string;
+  completePromptStatus?: CompleteShotPromptStatus;
+  completePrompt?: string;
+  completePromptSummary?: string;
+  completePromptResearch?: CompleteShotPromptResearch;
+  completePromptWarnings?: string[];
+  completePromptGeneratedAt?: string;
+  completePromptSourceRevision?: string;
+  completePromptConfirmedAt?: string;
+  completePromptGeneratorId?: string;
+  completePromptGeneratorProvider?: string;
+  completePromptRequestedGeneratorId?: string;
+  promptReviewerId?: string;
+  promptReviewerModel?: string;
+  promptReviewStatus?: PromptReviewStatus;
+  promptReviewReport?: PromptReviewReport;
+  promptReviewSourceRevision?: string;
+  promptReviewedAt?: string;
+  promptReviewRequestId?: string;
+  promptReviewError?: string;
   selectedDirectorView?: string;
   whiteboxScenes: Record<string, WhiteboxScene>;
   whiteboxReferences?: Record<string, { lockedAt: string; sourceRevision?: string }>;
@@ -165,6 +342,7 @@ function buildShotNavigationGroups(reviews: ShotReview[]): ShotNavigationGroup[]
 
 type ReviewState = {
   stateSchemaVersion: number;
+  projectUid: string;
   projectTitle: string;
   sourceDocument: string;
   sourceName: string;
@@ -178,27 +356,75 @@ type ReviewState = {
   globalSummary?: string;
   globalUpdatedAt?: string;
   sourceMangaRequestId?: string;
+  sourceMangaPanels?: Record<string, MangaPanelUnderstanding>;
+  sourceMangaPanelUnderstandingVersion?: number;
+  sourceMangaPanelAnnotations?: Record<string, string>;
+  structureStatus?: StructureStatus;
+  structureConfirmedAt?: string;
   currentShot: number;
   view: ViewId;
   reviews: ShotReview[];
 };
 
+type MangaPanelUnderstanding = {
+  sourceObservation: string;
+  textSummary: string;
+  dialogue: Array<{ speaker: string; text: string; confidence: "high" | "medium" | "low" }>;
+  characters: string[];
+  relationAndPlot: string;
+};
+
+const mangaPanelUnderstandingVersion = 2;
+
 type BridgeState = {
   connected: boolean;
   busy: boolean;
+  serverMode?: boolean;
+  modelProvider?: {
+    id: string;
+    selectionId?: WritingModelId;
+    model: string;
+    label?: string;
+    configured: boolean;
+    supportsWebSearch?: boolean;
+    supportsImages?: boolean;
+  };
   pairingToken?: string;
   activeJob?: BridgeJob;
   lastJob?: BridgeJob;
+  promptJobs?: BridgeJob[];
+  lastPromptJobs?: BridgeJob[];
   artworkJobs?: BridgeJob[];
   lastArtworkJobs?: BridgeJob[];
   assetJobs?: BridgeJob[];
   lastAssetJobs?: BridgeJob[];
   libtv?: LibtvState;
+  writingModels?: WritingModelOption[];
+  reasoningPolicy?: {
+    selected: ReasoningEffort;
+    options: ReasoningEffort[];
+    taskOverrides: {
+      mangaSplit: "low";
+      completeShotPrompt: "max";
+      strictReview: "max";
+    };
+  };
+  reviewers?: ReviewerOption[];
+  harness?: {
+    harnessVersion: string;
+    runs: Array<{
+      runId: string;
+      agentRole: "creator" | "review" | "memory";
+      kind?: string | null;
+      status: "running" | "completed" | "failed" | "aborted";
+      updatedAt?: string;
+    }>;
+  };
 };
 
 type LibtvState = {
   installed: boolean;
-  status: "checking" | "missing" | "needs_login" | "logging_in" | "ready" | "error";
+  status: "checking" | "missing" | "needs_login" | "needs_code" | "logging_in" | "ready" | "error";
   message?: string;
   checkedAt?: string;
   accountName?: string;
@@ -231,8 +457,11 @@ type BridgeJobEvent = {
 };
 
 type BridgeJob = {
-  type: "annotation" | "annotation-batch" | "global-annotation" | "artwork" | "asset-artwork" | "load-script";
+  type: "annotation" | "annotation-batch" | "global-annotation" | "complete-shot-prompt" | "prompt-review" | "artwork" | "asset-artwork" | "load-script";
   shotId: string;
+  projectUid?: string;
+  shotUid?: string;
+  sourceRevision?: string;
   projectTitle?: string;
   assetId?: string;
   assetKind?: ShotAssetKind;
@@ -242,26 +471,39 @@ type BridgeJob = {
   stage?: string;
   message?: string;
   startedAt?: string;
+  updatedAt?: string;
   finishedAt?: string;
   events?: BridgeJobEvent[];
   error?: string;
+  remoteTaskId?: string;
+  retryPolicy?: "manual-check-required" | "manual-retry-allowed";
 };
 
 const defaultProjectTitle = "未命名项目";
-const storageKey = "shotdirector-storyboard-review-v12";
+const legacyUnknownModelId = "legacy-unknown";
+const defaultPromptReviewerId = "kimi-k3";
+const storageKey = "shotdirector-storyboard-review-v15";
 const materialDraftStoragePrefix = "shotdirector-storyboard-draft-v1::";
-const legacyStorageKeys = ["shotdirector-storyboard-review-v11", "shotdirector-storyboard-review-v10", "shotdirector-storyboard-review-v9", "shotdirector-storyboard-review-v8", "shotdirector-storyboard-review-v7", "shotdirector-storyboard-review-v6", "shotdirector-storyboard-review-v5"];
-const stateSchemaVersion = 12;
+const recentMaterialDraftKey = "shotdirector-recent-material-draft-v1";
+const legacyStorageKeys = ["shotdirector-storyboard-review-v14", "shotdirector-storyboard-review-v13", "shotdirector-storyboard-review-v12", "shotdirector-storyboard-review-v11", "shotdirector-storyboard-review-v10", "shotdirector-storyboard-review-v9", "shotdirector-storyboard-review-v8", "shotdirector-storyboard-review-v7", "shotdirector-storyboard-review-v6", "shotdirector-storyboard-review-v5"];
+const stateSchemaVersion = 16;
 const artworkDb = "shotdirector-artwork-v1";
-const bridgeBase = "http://127.0.0.1:4317";
+const configuredApiBase = process.env.NEXT_PUBLIC_MANJING_API_BASE?.trim();
+const bridgeBase = (configuredApiBase || "http://127.0.0.1:4317").replace(/\/+$/, "");
+const bridgeFetch = manjingSessionFetch;
+// In server mode the browser authenticates with its HttpOnly session cookie and
+// the gateway injects the real per-tenant worker token. Keep a non-secret local
+// sentinel so the existing local-bridge guards stay usable without exposing the
+// internal worker credential to the browser.
+const serverGatewayPairingSentinel = "server-session";
 const storyboardSourceRevision = "blank-project-v1";
 const absoluteMaxOmniReferences = 50;
 const staleSendingGraceMs = 4000;
 const staleArtworkGraceMs = 4000;
 
 const generationModels: Array<{ id: GenerationModel; label: string; limit: number; minDuration: number; maxDuration: number }> = [
-  { id: "seedance-2.0", label: "Seedance 2.0", limit: 9, minDuration: 4, maxDuration: 15 },
-  { id: "seedance-2.5", label: "Seedance 2.5", limit: 50, minDuration: 4, maxDuration: 30 },
+  { id: "seedance-2.0", label: "Seedance 2.0", limit: 9, minDuration: 6, maxDuration: 15 },
+  { id: "seedance-2.5", label: "Seedance 2.5", limit: 50, minDuration: 6, maxDuration: 30 },
 ];
 
 function referenceLimitFor(model: GenerationModel) {
@@ -271,6 +513,138 @@ function referenceLimitFor(model: GenerationModel) {
 function durationRangeFor(model: GenerationModel) {
   const target = generationModels.find((item) => item.id === model);
   return { min: target?.minDuration ?? 4, max: target?.maxDuration ?? 15 };
+}
+
+type ShotTimingEstimate = {
+  dialogueSeconds: number;
+  visualSeconds: number;
+  actionReactionSeconds: number;
+  requiredSeconds: number;
+  deltaSeconds: number;
+  localWindowOverrunSeconds: number;
+  status: "comfortable" | "tight" | "over" | "over-model";
+  dialogueSource: "generated-japanese" | "source-dialogue" | "none";
+};
+
+type TimingDialogueLine = { speaker: string; text: string; windowSeconds?: number };
+
+function splitTimingDialogueLine(value: string): TimingDialogueLine {
+  const cleaned = value.replace(/^\s*\d+[.、)）]\s*/, "").trim();
+  const match = cleaned.match(/^([^：:\n｜]{1,32})[：:]\s*(.+)$/);
+  return match ? { speaker: match[1].trim(), text: match[2].trim() } : { speaker: "", text: cleaned };
+}
+
+function generatedJapaneseDialogue(prompt?: string): TimingDialogueLine[] {
+  if (!prompt?.trim()) return [];
+  const results: TimingDialogueLine[] = [];
+  let currentWindow: number | undefined;
+  let pendingSpeaker = "";
+  let simpleDialogueSection = false;
+  for (const rawLine of prompt.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const range = line.match(/(\d+(?:\.\d+)?)\s*[–—-]\s*(\d+(?:\.\d+)?)\s*秒/);
+    if (range) currentWindow = Math.max(0, Number(range[2]) - Number(range[1]));
+    else if (/^【[^】]+】/.test(line)) currentWindow = undefined;
+    if (/^(?:【[^】]*】\s*)?(?:成片)?日语对白[：:]?$/.test(line) || /^成片对白严格限定/.test(line)) {
+      simpleDialogueSection = true;
+      currentWindow = undefined;
+      pendingSpeaker = "";
+      continue;
+    }
+    if (/^(?:中文备注|声音|声音氛围|禁止|跨镜连续性)[：:]/.test(line)) simpleDialogueSection = false;
+
+    const sameLine = line.match(/^\s*(?:\d+[.、)）]\s*)?([^：:\n｜]{1,32})（日(?:语|語)）[：:]\s*[「“\"]?([^｜」”\"]+)[」”\"]?/);
+    if (sameLine) {
+      results.push({ speaker: sameLine[1].trim(), text: sameLine[2].trim(), windowSeconds: currentWindow });
+      pendingSpeaker = "";
+      continue;
+    }
+    const speakerOnly = line.match(/^([^：:\n｜]{1,32})（日(?:语|語)）[：:]\s*$/);
+    if (speakerOnly) {
+      pendingSpeaker = speakerOnly[1].trim();
+      continue;
+    }
+    if (pendingSpeaker) {
+      const quoted = line.match(/^[「“\"](.+?)[」”\"]$/);
+      if (quoted) results.push({ speaker: pendingSpeaker, text: quoted[1].trim(), windowSeconds: currentWindow });
+      pendingSpeaker = "";
+      continue;
+    }
+    if (simpleDialogueSection) {
+      const quotedLine = line.match(/^([^：:\n｜]{1,32})[：:]\s*[「“\"](.+?)[」”\"]$/);
+      if (quotedLine) results.push({ speaker: quotedLine[1].trim(), text: quotedLine[2].trim() });
+    }
+  }
+  return results;
+}
+
+function dialogueLineSeconds(text: string) {
+  const spoken = text.replace(/（[^）]*仅制作备注[^）]*）/g, "").trim();
+  const visible = spoken.replace(/[\s、，,；;。！？!?…—「」『』“”‘’（）()：:・]/g, "");
+  if (!visible) return 0;
+
+  if (/[ぁ-んァ-ヶー]/.test(visible)) {
+    // 7 个有效字符/秒是项目的实测成片节奏，已经包含自然标点与换气，不再重复加停顿。
+    return [...visible].length / 7;
+  }
+  if (/\p{Script=Han}/u.test(visible)) return [...visible].length / 4;
+  const words = visible.split(/\s+/).filter(Boolean).length || 1;
+  return words / 2.5;
+}
+
+function estimateShotTiming(input: {
+  dialogue?: string[];
+  completePrompt?: string;
+  panelCount: number;
+  assignedDuration: number;
+  model: GenerationModel;
+}): ShotTimingEstimate {
+  const promptDialogue = generatedJapaneseDialogue(input.completePrompt);
+  const sourceDialogue = (input.dialogue || []).map(splitTimingDialogueLine).filter((item) => item.text);
+  const lines = promptDialogue.length ? promptDialogue : sourceDialogue;
+  let speakerChanges = 0;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index - 1].speaker && lines[index].speaker && lines[index - 1].speaker !== lines[index].speaker) speakerChanges += 1;
+  }
+  const dialogueSeconds = lines.reduce((total, item) => total + dialogueLineSeconds(item.text), 0);
+  const panelCount = Math.max(1, input.panelCount || 1);
+  // 漫画画格不是平均分秒：首个构图负责建立空间，后续瞬间反应格只追加较短识读时间。
+  const visualSeconds = Math.max(1.8, 1.2 + Math.max(0, panelCount - 1) * 0.55);
+  // 对白、包扎、眼神和构图可以并行；只有视觉动作链本身比对白更长时，才由视觉侧决定总时长。
+  const actionReactionSeconds = Math.min(4, 0.8 + Math.max(0, panelCount - 1) * 0.18 + speakerChanges * 0.22);
+  const rawSeconds = Math.max(dialogueSeconds, visualSeconds + actionReactionSeconds);
+  const requiredSeconds = Math.ceil(rawSeconds);
+  const localWindowOverrunSeconds = lines.reduce((largest, item) => item.windowSeconds === undefined
+    ? largest
+    : Math.max(largest, dialogueLineSeconds(item.text) - item.windowSeconds), 0);
+  const range = durationRangeFor(input.model);
+  const deltaSeconds = input.assignedDuration - requiredSeconds;
+  const status = requiredSeconds > range.max
+    ? "over-model"
+    : deltaSeconds < 0 || localWindowOverrunSeconds > 0.15
+      ? "over"
+      : deltaSeconds < 1.5
+        ? "tight"
+        : "comfortable";
+  return {
+    dialogueSeconds,
+    visualSeconds,
+    actionReactionSeconds,
+    requiredSeconds,
+    deltaSeconds,
+    localWindowOverrunSeconds,
+    status,
+    dialogueSource: promptDialogue.length ? "generated-japanese" : sourceDialogue.length ? "source-dialogue" : "none",
+  };
+}
+
+function timingEstimateLabel(estimate: ShotTimingEstimate, assignedDuration: number) {
+  if (estimate.status === "over-model") return `估算需 ${estimate.requiredSeconds}s · 超出当前模型上限`;
+  if (estimate.deltaSeconds < 0) return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 超时 ${Math.abs(estimate.deltaSeconds)}s`;
+  if (estimate.localWindowOverrunSeconds > 0.15) return `整体可装下 · 单句窗口抢词 ${estimate.localWindowOverrunSeconds.toFixed(1)}s`;
+  if (estimate.deltaSeconds === 0) return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 刚好`;
+  if (estimate.status === "tight") return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 偏挤`;
+  return `估算需 ${estimate.requiredSeconds}s · 当前 ${assignedDuration}s · 余量 ${estimate.deltaSeconds}s`;
 }
 
 const sections: Array<{ id: SectionId; number: string; title: string; hint: string }> = [
@@ -349,6 +723,141 @@ function cloneGlobalSettings(settings: GlobalSettings = sourceGlobalSettings): G
   };
 }
 
+function cityHunterEpisodeNumber(projectTitle: string) {
+  if (!/城市猎人|CITY\s*HUNTER/i.test(projectTitle)) return undefined;
+  const matched = projectTitle.match(/第\s*(\d+)\s*[话話]/);
+  return matched ? Number(matched[1]) : undefined;
+}
+
+function stripEpisode5BandageContamination(value: string) {
+  return value
+    // Episode 5 starts after the old hand-injury continuity. Keep legitimate
+    // right-hand actions from the panels, but remove inherited injury rules.
+    .replace(/獠的左掌包扎、/g, "")
+    .replace(/左掌包扎、/g, "")
+    .replace(/(?:本话)?(?:延续)?左掌贯通伤[^。；\n]*[。；]?/g, "")
+    .replace(/(?:冴羽獠|獠)?的?左掌[^。；\n]*(?:包扎|绷带|贯通伤|伤口|受伤)[^。；\n]*[。；]?/g, "")
+    .replace(/(?:完整)?(?:包扎|绷带)[^。；\n]*(?:左掌|左手)[^。；\n]*[。；]?/g, "")
+    .replace(/左手[^。；\n]*(?:承重|抓握|发力|持枪|托枪|参与)[^。；\n]*[。；]?/g, "")
+    .replace(/负责判断风险并处理獠的左掌伤口/g, "负责判断风险并提供情报支援")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/，\s*，/g, "，")
+    .replace(/；\s*；/g, "；")
+    .replace(/。\s*。/g, "。")
+    .replace(/：\s*[；。]/g, "：")
+    .trim();
+}
+
+function sanitizeEpisode5Value<T>(value: T): T {
+  if (typeof value === "string") return stripEpisode5BandageContamination(value) as T;
+  if (Array.isArray(value)) return value.map((item) => sanitizeEpisode5Value(item)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeEpisode5Value(item)])) as T;
+  }
+  return value;
+}
+
+function completeGlobalSettingsForReviews(projectTitle: string, reviews: ShotReview[], settings: GlobalSettings): GlobalSettings {
+  const unique = (values: string[]) => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  const episodeNumber = cityHunterEpisodeNumber(projectTitle);
+  const isCityHunterProject = episodeNumber !== undefined || /城市猎人|CITY\s*HUNTER/i.test(projectTitle);
+  const isCityHunterEpisode3 = episodeNumber === 3;
+  const isCityHunterEpisode5 = episodeNumber === 5;
+  const projectSettings = isCityHunterEpisode5 ? sanitizeEpisode5Value(cloneGlobalSettings(settings)) : cloneGlobalSettings(settings);
+  const shots = reviews.map((review) => normalizeShot(review.shot));
+  if (!shots.some((shot) => shot.sourcePanels?.length)) return projectSettings;
+  const characters = unique(shots.flatMap((shot) => shot.characters));
+  const props = unique(shots.flatMap((shot) => shot.props));
+  const locations = unique(shots.map((shot) => shot.scene));
+  const continuity = unique(shots.flatMap((shot) => shot.continuity));
+  const negative = unique(shots.flatMap((shot) => shot.negative));
+  const timeline = shots.map((shot) => `Shot ${shot.id} · ${shot.timecode} · ${shot.title}：${shot.story}`);
+  const styleCandidates = unique(shots.map((shot) => shot.artStyle).filter((style) => (
+    style && !/待从原始|未明确前|不向视频提示词擅自添加/.test(style)
+  )));
+  const cityHunterProfiles: Record<string, string> = {
+    "冴羽獠": `冴羽獠：全名固定为冴羽獠，30岁，身高186cm，肩宽、身体强壮；以东京新宿为据点的地下清道夫“城市猎人”，枪法精准、观察与犯罪心理判断敏锐。日常状态嘻嘻哈哈、爱开玩笑、略带无赖和轻佻感，表情活跃；只有真正涉及死亡、灭口、保护委托人或进入战斗的大事时，才短暂转为严肃正经、冷静果断。严肃状态结束后自然恢复轻松，不得全程板脸。${isCityHunterEpisode3 ? "本话延续左掌贯通伤并完成包扎，主要持枪和控制动作由右手完成。" : ""}`,
+    "槇村": `槇村秀幸：全名固定为槇村秀幸，32岁，身高180cm，体型偏瘦；冴羽獠在故事早期的搭档与情报支援者，理性、稳重，负责判断风险并提供情报支援；不能误写成槇村香。${isCityHunterEpisode3 ? "本话负责处理獠的左掌伤口。" : ""}`,
+    "槇村秀幸": `槇村秀幸：全名固定为槇村秀幸，32岁，身高180cm，体型偏瘦；冴羽獠在故事早期的搭档与情报支援者，理性、稳重，负责判断风险并提供情报支援；不能误写成槇村香。${isCityHunterEpisode3 ? "本话负责处理獠的左掌伤口。" : ""}`,
+    "槇村香": "槇村香：19岁，身高170cm，槇村秀幸的妹妹；真实日本年轻女演员，短发、带女孩稚气，外形与服装具有偏男性化的中性气质，但声音明确为自然年轻女声。她直率、倔强、行动果断，不能误写成男性或槇村秀幸。",
+    "香": "槇村香：19岁，身高170cm，槇村秀幸的妹妹；真实日本年轻女演员，短发、带女孩稚气，外形与服装具有偏男性化的中性气质，但声音明确为自然年轻女声。她直率、倔强、行动果断，不能误写成男性或槇村秀幸。",
+    "亜月菜摘": "亜月菜摘：24岁，身高167cm，遇害少女亜月裕子的姐姐和本案委托人；自然披散长发，因追查妹妹死因雇佣城市猎人。她勇敢、直率但并非职业战斗人员，本话既是需要保护的委托人，也被獠作为引出凶手的公开诱饵。",
+    "菜摘": "亜月菜摘：24岁，身高167cm，遇害少女亜月裕子的姐姐和本案委托人；自然披散长发，因追查妹妹死因雇佣城市猎人。她勇敢、直率但并非职业战斗人员，本话既是需要保护的委托人，也被獠作为引出凶手的公开诱饵。",
+    "亜月裕子": "亜月裕子：17岁高中生、菜摘的妹妹，上一话被BMW恶魔杀害；她是案件的受害者与菜摘委托獠的直接动因，本话不得让她无依据复活或重新佩戴已经失去连续依据的象牙白围巾。",
+    "裕子": "亜月裕子：17岁高中生、菜摘的妹妹，上一话被BMW恶魔杀害；她是案件的受害者与菜摘委托獠的直接动因，本话不得让她无依据复活或重新佩戴已经失去连续依据的象牙白围巾。",
+    "幕后男子": "BMW男子／幕后老板：与杀害裕子的黑色BMW案件相关的连环凶手或幕后者，享乐主义、冷酷且会灭口情报贩子；五官继续隐藏，不能提前把其他刺客或情报贩子自动等同于他。",
+    "BMW男子": "BMW男子／幕后老板：与杀害裕子的黑色BMW案件相关的连环凶手或幕后者，享乐主义、冷酷且会灭口情报贩子；五官继续隐藏，不能提前把其他刺客或情报贩子自动等同于他。",
+    "情报贩子": "情报贩子：为BMW男子提供街头消息的下线；察觉菜摘雇佣城市猎人后拒绝继续合作，并因失去利用价值被老板开枪灭口。",
+    "刺客": "公寓刺客：受命进入公寓刺杀城市猎人的执行者，使用半自动手枪并误射床铺；不自动等同BMW司机，最终被獠从侧后方以右手持枪控制。",
+  };
+  const profiledCharacters = isCityHunterProject
+    ? unique(unique([...(projectSettings.characters || []), ...characters]).map((name) => (
+        cityHunterProfiles[name]
+        || Object.entries(cityHunterProfiles).find(([key]) => key.length >= 2 && name.includes(key))?.[1]
+        || name
+      )))
+    : projectSettings.characters.length ? projectSettings.characters : characters;
+  const derivedBackground = isCityHunterEpisode3
+    ? `《城市猎人》第3话紧接第2话“BMW的恶魔”事件，时代与空间锁定为昭和62年（1987年）冬季的东京新宿。冴羽獠30岁、186cm、肩宽强壮，是以新宿为据点、拥有顶尖枪法与敏锐洞察力的地下清道夫“城市猎人”；搭档槇村秀幸32岁、180cm、体型偏瘦；本案委托人亜月菜摘24岁、167cm，是遇害少女亜月裕子的姐姐。裕子遭黑色BMW相关凶手杀害后，菜摘雇佣獠追查；BMW男子仍未落网，司机五官不能提前揭示。獠在上一话追查中左掌受到贯通伤，本话开始由槇村秀幸完成清洁和包扎，因此左手持续受伤并保持绷带，持枪和主要控制动作由右手完成。黑色BMW只是獠公开放出的诱饵线索，他的目的是真正引出掌握街头情报、已经连续杀害五名女性的幕后凶手。本话从情报贩子向老板发出最后警告并遭灭口开始，随后转入獠、槇村秀幸与菜摘的公寓诱敌、夜袭反制及翌夜歌舞伎町威胁。全片角色只说自然日语，画面、字幕与声音中不得出现中文；全程无BGM，只保留日语对白、同期环境声和动作音效。漫画画格、原文对白和用户批注是最高事实依据；联网资料只补充人物身份、作品时代与新宿世界观，不得改写本话事件。`
+    : isCityHunterEpisode5
+      ? `《城市猎人》第5话《闇からの狙撃者！之卷》。时间固定为昭和62年（1987年）春季东京新宿。冴羽獠与槇村秀幸仍是“城市猎人”搭档，19岁的槇村香在本话进入故事。香因偏男性化的中性装束引发街头性别误会，随后被卷入精品店人口贩卖组织设置的试衣间机关；獠进入黑暗空间救援，并面对占据夜视优势的敌人。具体人物身份、对白、动作、枪械、服装、场景和结果全部以本次上传的原作画格与用户批注为最高证据；不得混入第4话BMW案件、亜月菜摘、亜月裕子、港区追逐或冬季天气。全片角色只说自然日语，中文只作制作备注；全程无BGM，只保留日语对白、同期环境声和动作音效。`
+    : `${projectTitle}。故事按当前漫画画格顺序连续展开。主要人物：${characters.join("、") || "以画格为准"}。主要地点：${locations.join("、") || "以画格为准"}。剧情链：${timeline.join("；")}。漫画画格、原文对白和用户批注是最高事实依据，背景只补充时代、人物关系和因果，不得替画格编造事件。`;
+  const cityHunterStyle = isCityHunterEpisode5
+    ? "昭和62年（1987年）春季东京新宿背景的写实日本真人35mm电影风格。所有角色由真实日本演员出演，并按现实世界重新选角、化妆和造型；保留冴羽獠肩宽强壮的体格、槇村秀幸偏瘦的轮廓与槇村香19岁、170cm、带稚气的中性气质。摄影采用1980年代日本35mm彩色胶片质感，颗粒细密，反差克制，高光轻微晕染，暗部保留层次；春季自然日光、旧式荧光灯和钨丝灯形成可信混合光。街道、公寓、精品店、地下仓库、招牌、电话、枪械、服装与室内陈设严格符合1987年日本。表演遵循真人物理，视线先行、重心清楚、动作利落，幽默、警惕和危险落在细小表情与人物距离上。角色五官、体型、参考服装和场景光色跨镜统一。整体保持真实摄影、真实布景、真实材质与克制调色，避免塑料质感、现代数字设备、现代车辆、过度霓虹、水印、乱码文字和任何中文画面文字。"
+    : "昭和62年（1987年）东京新宿背景的写实日本真人35mm电影风格。所有角色均由真实日本演员出演，并按现实世界重新选角、化妆和造型，呈现真实皮肤纹理、毛发、眼神、呼吸、肌肉受力与衣料褶皱。摄影采用1980年代日本35mm胶片质感，颗粒细密，反差克制，高光轻微晕染，暗部保留层次；街道、公寓、招牌、电话、枪械、车辆、服装与室内陈设严格符合1987年日本。表演和动作遵循真人物理，视线先行、重心转移清楚。整体保持真实摄影、真实布景、真实材质与克制调色，避免塑料质感、现代数字设备、现代车辆、过度霓虹、水印、乱码文字和任何中文画面文字。";
+  const currentStyle = projectSettings.finalVideoStyle?.trim();
+  const rejectedCityHunterAnimationStyle = isCityHunterProject && /\u8d5b\u7490\u7490|\u624b\u7ed8\u52a8\u753b|\u7981\u6b62\u771f\u4eba\u5199\u5b9e/.test(currentStyle || "");
+  const validCurrentStyle = currentStyle && !rejectedCityHunterAnimationStyle && !/待从原始|未明确前|不向视频提示词擅自添加/.test(currentStyle);
+  const enforceShowa62 = (value: string) => {
+    const normalized = value
+      .replaceAll("昭和60年（1985年）", "昭和62年（1987年）")
+      .replaceAll("昭和60年", "昭和62年")
+      .replaceAll("1985年", "1987年");
+    return /昭和62年/.test(normalized) ? normalized : `时代硬锁：昭和62年（1987年）。${normalized}`;
+  };
+  return {
+    ...projectSettings,
+    storyBackground: isCityHunterProject
+      ? enforceShowa62(projectSettings.storyBackground?.trim() || derivedBackground)
+      : projectSettings.storyBackground?.trim() || derivedBackground,
+    characters: profiledCharacters,
+    props: projectSettings.props.length ? projectSettings.props : props,
+    locations: projectSettings.locations.length ? projectSettings.locations : locations,
+    timeline: unique([
+      ...(isCityHunterProject ? [isCityHunterEpisode5
+        ? "时代烙印：昭和62年（1987年）春季东京新宿；街道、公寓、精品店、车辆、枪械、服装、电话和室内设施均保持昭和末期形态，禁止任何现代数字生活痕迹。"
+        : "时代烙印：昭和62年（1987年）东京新宿；街道、公寓、车辆、枪械、服装、电话和室内设施均保持昭和末期形态，禁止任何现代数字生活痕迹。"] : []),
+      ...(projectSettings.timeline.length ? projectSettings.timeline : timeline),
+    ]),
+    continuity: unique([
+      ...(projectSettings.continuity || []),
+      ...continuity,
+      ...(isCityHunterProject ? [
+        "全片对白统一为自然日语；中文原文只作制作理解依据，不得成为角色台词、旁白、字幕或画面文字。",
+        "全程无BGM；只保留日语对白、同期环境声、脚步、枪械、衣料、车辆和其他剧情动作音效。",
+        "中文只允许作为导演阅读的制作备注；日语台词后的中文释义不得朗读、不得上字幕、不得出现在画面中。",
+        "人物表演遵循触发—行动—反应：说话时有明确对象，眼神先于头部和身体，动作完成后保留可见的情绪结果与关系反馈。",
+      ] : []),
+    ]),
+    finalVideoStyle: isCityHunterProject
+      ? enforceShowa62(validCurrentStyle ? currentStyle : cityHunterStyle)
+      : validCurrentStyle ? currentStyle : styleCandidates[0] || "以当前漫画画格的角色与场景证据为准，保持跨镜统一的传统手绘动画成片风格。",
+    modelRules: unique([
+      ...(projectSettings.modelRules || []),
+      ...(isCityHunterProject ? [
+        "活人感表演：每镜只有一个主事件，明确触发、执行和结果；主要人物发起动作，其他人物依次回应，禁止所有人同步乱动。",
+        "说话、动作、眼神和情绪必须互相因果：先看见或听见，再理解，再行动，最后让情绪落在眼睛、嘴角、下颌、肩颈、手部停顿和身体重心上。",
+        "小动作低频且有目的，优先目光追随、重心转移、空间让位、手部停顿、道具交接和同伴反馈；禁止靠反复眨眼、摸头发、拉衣服或叹气伪装自然。",
+      ] : []),
+    ]),
+    negative: unique([
+      ...(projectSettings.negative || []),
+      ...negative,
+      ...(isCityHunterProject ? ["禁止成片出现中文对白、中文字幕、中文旁白和中文画面文字；提示词中的中文制作备注不属于成片内容。", "禁止任何背景音乐、配乐、主题曲或情绪音乐。"] : []),
+    ]),
+  };
+}
+
 function isGlobalSettings(value: unknown): value is GlobalSettings {
   if (!value || typeof value !== "object") return false;
   const settings = value as Record<string, unknown>;
@@ -358,8 +867,12 @@ function isGlobalSettings(value: unknown): value is GlobalSettings {
     && typeof settings.storyboardImageStyle === "string";
 }
 
-function createReview(sourceShot: StoryboardShot, useDefaultProjectPlans = true): ShotReview {
-  const shot = normalizeShot(sourceShot);
+function createReview(sourceShot: StoryboardShot, useDefaultProjectPlans = true, projectUid = "project-legacy", identitySeed = sourceShot.id): ShotReview {
+  const normalized = normalizeShot(sourceShot);
+  const shot = {
+    ...normalized,
+    shotUid: ensureShotUid(normalized.shotUid, projectUid, `${identitySeed}::${(normalized.sourcePanels || []).join("|")}`),
+  };
   const directorViews = getDirectorViews(shot, useDefaultProjectPlans);
   return {
     shot,
@@ -369,18 +882,43 @@ function createReview(sourceShot: StoryboardShot, useDefaultProjectPlans = true)
     selectedDirectorView: directorViews[0].key,
     whiteboxScenes: ensureWhiteboxScenes(undefined, directorViews.map((view) => ({ key: view.key, title: view.title })), shot.id, useDefaultProjectPlans),
     seededAssetReferenceIds: [],
+    promptReviewStatus: "empty",
     approved: false,
     versions: [],
   };
 }
 
-function createReviews(shots: StoryboardShot[], useDefaultProjectPlans = true): ShotReview[] {
-  return shots.map((shot) => createReview(shot, useDefaultProjectPlans));
+function invalidatePromptReview(review: ShotReview): ShotReview {
+  return {
+    ...review,
+    promptReviewStatus: review.promptReviewReport ? "stale" : "empty",
+    promptReviewSourceRevision: undefined,
+    promptReviewedAt: undefined,
+    promptReviewRequestId: undefined,
+    promptReviewError: undefined,
+    approved: false,
+    approvedAt: undefined,
+  };
+}
+
+function invalidateCompletePrompt(review: ShotReview): ShotReview {
+  if (!review.completePromptConfirmedAt && !review.completePrompt && !review.promptReviewReport) return review;
+  return {
+    ...invalidatePromptReview(review),
+    completePromptStatus: review.completePrompt ? "stale" : "empty",
+    completePromptConfirmedAt: undefined,
+  };
+}
+
+function createReviews(shots: StoryboardShot[], useDefaultProjectPlans = true, projectUid = "project-legacy"): ShotReview[] {
+  return shots.map((shot, index) => createReview(shot, useDefaultProjectPlans, projectUid, `${index}::${shot.id}`));
 }
 
 function createInitialState(): ReviewState {
+  const projectUid = ensureProjectUid("", storyboardSourceRevision);
   return {
     stateSchemaVersion,
+    projectUid,
     projectTitle: defaultProjectTitle,
     sourceDocument: sourceDocumentFromShots(storyboardShots),
     sourceName: "空白项目模板",
@@ -391,9 +929,10 @@ function createInitialState(): ReviewState {
     assetPrompts: [],
     globalAnnotation: "",
     globalStatus: "applied",
+    structureStatus: "confirmed",
     currentShot: 0,
     view: "script",
-    reviews: createReviews(storyboardShots, false),
+    reviews: createReviews(storyboardShots, false, projectUid),
   };
 }
 
@@ -426,14 +965,53 @@ function normalizeProjectAssetPrompts(value: unknown): ProjectAssetPrompt[] {
   return Array.isArray(value) ? value.filter(isProjectAssetPrompt) : [];
 }
 
+function normalizeMangaPanelUnderstandings(value: unknown): Record<string, MangaPanelUnderstanding> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([panelId, candidate]) => {
+    if (!/^P\d{2}-(?:[RL]-)?G\d{2}$/i.test(panelId) || !candidate || typeof candidate !== "object") return [];
+    const item = candidate as Partial<MangaPanelUnderstanding>;
+    if (typeof item.sourceObservation !== "string" || typeof item.textSummary !== "string") return [];
+    const dialogue = Array.isArray(item.dialogue) ? item.dialogue.flatMap((line) => (
+      line && typeof line === "object"
+      && typeof line.speaker === "string"
+      && typeof line.text === "string"
+      && (line.confidence === "high" || line.confidence === "medium" || line.confidence === "low")
+        ? [{ speaker: line.speaker, text: line.text, confidence: line.confidence }]
+        : []
+    )) : [];
+    return [[panelId, {
+      sourceObservation: item.sourceObservation,
+      textSummary: item.textSummary,
+      dialogue,
+      characters: isStringArray(item.characters) ? item.characters : [],
+      relationAndPlot: typeof item.relationAndPlot === "string" ? item.relationAndPlot : item.textSummary,
+    }]];
+  }));
+}
+
+function mangaPanelUnderstandingsFrom(result: MediaAnalysisResult): Record<string, MangaPanelUnderstanding> {
+  return Object.fromEntries((result.mangaPages || []).flatMap((page) => page.panels.map((panel) => {
+    const sourceShot = result.shots.find((shot) => shot.sourcePanels.includes(panel.id));
+    const dialogue = result.sourceText
+      .filter((line) => line.location === panel.id)
+      .map((line) => ({ speaker: line.speaker, text: line.text, confidence: line.confidence }));
+    const characters = sourceShot?.characters || [...new Set(dialogue.map((line) => line.speaker).filter((speaker) => !/^(旁白|拟声词|画面文字|标题)$/.test(speaker)))];
+    const relationAndPlot = sourceShot
+      ? `${panel.textSummary} 本格属于“${sourceShot.title}”：${sourceShot.story}`
+      : panel.textSummary;
+    return [panel.id, { sourceObservation: panel.sourceObservation, textSummary: panel.textSummary, dialogue, characters, relationAndPlot }];
+  })));
+}
+
+function normalizeMangaPanelAnnotations(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([panelId, note]) => /^P\d{2}-(?:[RL]-)?G\d{2}$/i.test(panelId) && typeof note === "string"));
+}
+
 function mergeProjectAssetPrompts(existing: unknown, incoming: unknown): ProjectAssetPrompt[] {
   const result = [...normalizeProjectAssetPrompts(existing)];
   for (const candidate of normalizeProjectAssetPrompts(incoming)) {
-    const candidateName = candidate.name.normalize("NFKC").trim().toLocaleLowerCase();
-    const index = result.findIndex((item) => item.id === candidate.id || (
-      item.kind === candidate.kind
-      && item.name.normalize("NFKC").trim().toLocaleLowerCase() === candidateName
-    ));
+    const index = result.findIndex((item) => item.id === candidate.id);
     if (index < 0) {
       result.push(candidate);
       continue;
@@ -468,6 +1046,38 @@ function normalizeShot(shot: StoryboardShot, _migrateLegacyProject = false): Sto
   };
 }
 
+type StableShotIdentity = {
+  shotUid: string;
+  fallbackId: string;
+};
+
+function stableShotIdentity(shot: StoryboardShot): StableShotIdentity {
+  return {
+    shotUid: String(shot.shotUid || "").trim(),
+    fallbackId: shot.id,
+  };
+}
+
+function matchesStableShotIdentity(shot: StoryboardShot, identity: StableShotIdentity) {
+  const shotUid = String(shot.shotUid || "").trim();
+  return identity.shotUid ? shotUid === identity.shotUid : shot.id === identity.fallbackId;
+}
+
+function bridgeJobMatchesStableShot(job: BridgeJob | undefined, projectUid: string, identity: StableShotIdentity) {
+  if (!job) return false;
+  if (job.projectUid && job.projectUid !== projectUid) return false;
+  const jobShotUid = String(job.shotUid || "").trim();
+  if (identity.shotUid && jobShotUid) return identity.shotUid === jobShotUid;
+  return job.shotId === identity.fallbackId;
+}
+
+function completePromptResultMatchesStableShot(result: CompleteShotPromptResult, projectUid: string, identity: StableShotIdentity) {
+  if (result.projectUid && result.projectUid !== projectUid) return false;
+  const resultShotUid = String(result.shotUid || "").trim();
+  if (identity.shotUid && resultShotUid) return identity.shotUid === resultShotUid;
+  return result.shotId === identity.fallbackId;
+}
+
 function isLegacyDefaultTimelineState(_incoming: ReviewState) {
   return false;
 }
@@ -482,8 +1092,12 @@ function isBlankInitialReviewState(incoming: ReviewState) {
   ));
 }
 
-function normalizeReviewForResume(review: ShotReview, _useDefaultProjectPlans = false): ShotReview {
-  const shot = normalizeShot(review.shot);
+function normalizeReviewForResume(review: ShotReview, projectUid = "project-legacy", identitySeed = review.shot.id, _useDefaultProjectPlans = false): ShotReview {
+  const normalizedShot = normalizeShot(review.shot);
+  const shot = {
+    ...normalizedShot,
+    shotUid: ensureShotUid(normalizedShot.shotUid, projectUid, `${identitySeed}::${(normalizedShot.sourcePanels || []).join("|")}`),
+  };
   const hasRecoverableSubmission = review.pendingSubmission?.shotId === shot.id;
   const directorViews = getDirectorViews(shot, false);
   const whiteboxScenes = ensureWhiteboxScenes(
@@ -516,6 +1130,48 @@ function normalizeReviewForResume(review: ShotReview, _useDefaultProjectPlans = 
       ? review.videoPromptSourceRevision || "legacy-unsynced"
       : undefined,
     videoPackageSyncedAt: typeof review.videoPackageSyncedAt === "string" ? review.videoPackageSyncedAt : undefined,
+    completePromptStatus: review.completePromptStatus === "generating"
+      || review.completePromptStatus === "ready"
+      || review.completePromptStatus === "stale"
+      || review.completePromptStatus === "error"
+      ? review.completePromptStatus
+      : "empty",
+    completePrompt: typeof review.completePrompt === "string" ? review.completePrompt : undefined,
+    completePromptSummary: typeof review.completePromptSummary === "string" ? review.completePromptSummary : undefined,
+    completePromptResearch: review.completePromptResearch && typeof review.completePromptResearch === "object"
+      ? review.completePromptResearch
+      : undefined,
+    completePromptWarnings: Array.isArray(review.completePromptWarnings) ? review.completePromptWarnings.filter((item) => typeof item === "string") : [],
+    completePromptGeneratedAt: typeof review.completePromptGeneratedAt === "string" ? review.completePromptGeneratedAt : undefined,
+    completePromptSourceRevision: typeof review.completePromptSourceRevision === "string" ? review.completePromptSourceRevision : undefined,
+    completePromptConfirmedAt: typeof review.completePromptConfirmedAt === "string" ? review.completePromptConfirmedAt : undefined,
+    completePromptGeneratorId: typeof review.completePromptGeneratorId === "string" && review.completePromptGeneratorId.trim()
+      ? review.completePromptGeneratorId.trim()
+      : review.completePrompt ? legacyUnknownModelId : undefined,
+    completePromptGeneratorProvider: typeof review.completePromptGeneratorProvider === "string" && review.completePromptGeneratorProvider.trim()
+      ? review.completePromptGeneratorProvider.trim()
+      : undefined,
+    completePromptRequestedGeneratorId: typeof review.completePromptRequestedGeneratorId === "string" && review.completePromptRequestedGeneratorId.trim()
+      ? review.completePromptRequestedGeneratorId.trim()
+      : undefined,
+    promptReviewerId: typeof review.promptReviewerId === "string" && review.promptReviewerId.trim()
+      ? review.promptReviewerId.trim()
+      : defaultPromptReviewerId,
+    promptReviewerModel: typeof review.promptReviewerModel === "string" && review.promptReviewerModel.trim()
+      ? review.promptReviewerModel.trim()
+      : undefined,
+    promptReviewStatus: review.promptReviewStatus === "reviewing"
+      ? "stale"
+      : review.promptReviewStatus === "ready" || review.promptReviewStatus === "stale" || review.promptReviewStatus === "error"
+        ? review.promptReviewStatus
+        : "empty",
+    promptReviewReport: review.promptReviewReport && typeof review.promptReviewReport === "object"
+      ? review.promptReviewReport
+      : undefined,
+    promptReviewSourceRevision: typeof review.promptReviewSourceRevision === "string" ? review.promptReviewSourceRevision : undefined,
+    promptReviewedAt: typeof review.promptReviewedAt === "string" ? review.promptReviewedAt : undefined,
+    promptReviewRequestId: typeof review.promptReviewRequestId === "string" ? review.promptReviewRequestId : undefined,
+    promptReviewError: typeof review.promptReviewError === "string" ? review.promptReviewError : undefined,
     seededAssetReferenceIds: Array.isArray(review.seededAssetReferenceIds)
       ? review.seededAssetReferenceIds.filter((item) => typeof item === "string")
       : [],
@@ -528,16 +1184,52 @@ function normalizeReviewForResume(review: ShotReview, _useDefaultProjectPlans = 
 }
 
 function normalizeStateForResume(incoming: ReviewState): ReviewState {
+  const serializedIncoming = JSON.stringify(incoming);
+  const episode5HadBandageContamination = cityHunterEpisodeNumber(incoming.projectTitle || "") === 5
+    && /左掌贯通伤|左掌包扎|左掌[^。；\n]*(?:绷带|包扎|贯通伤|伤口|受伤)|(?:绷带|包扎)[^。；\n]*(?:左掌|左手)|左手[^。；\n]*(?:承重|抓握|发力|持枪|托枪|参与)|处理獠的左掌伤口/.test(serializedIncoming);
+  if (episode5HadBandageContamination) incoming = sanitizeEpisode5Value(incoming);
   const requiresExplicitRestamp = !incoming.stateSchemaVersion || incoming.stateSchemaVersion < 7;
-  const sourceReviews = incoming.reviews.length ? incoming.reviews : createReviews(storyboardShots, false);
-  const reviews = sourceReviews.map((review) => {
-    const normalized = normalizeReviewForResume(review);
+  const projectUid = ensureProjectUid(incoming.projectUid, `${incoming.sourceMangaRequestId || ""}::${incoming.projectTitle || defaultProjectTitle}::${incoming.sourceName || ""}`);
+  const sourceReviews = incoming.reviews.length ? incoming.reviews : createReviews(storyboardShots, false, projectUid);
+  const reviews = sourceReviews.map((review, index) => {
+    const normalized = normalizeReviewForResume(review, projectUid, `${index}::${review.shot.id}`);
     return requiresExplicitRestamp ? { ...normalized, approved: false, approvedAt: undefined } : normalized;
   });
   const currentShot = Math.min(Math.max(0, incoming.currentShot || 0), Math.max(0, reviews.length - 1));
+  const resumedGlobalSettings = completeGlobalSettingsForReviews(
+    incoming.projectTitle || defaultProjectTitle,
+    reviews,
+    cloneGlobalSettings(isGlobalSettings(incoming.globalSettings) ? incoming.globalSettings : sourceGlobalSettings),
+  );
+  const replacedCityHunterAnimationStyle = /城市猎人|CITY\s*HUNTER/i.test(incoming.projectTitle || "")
+    && /\u8d5b\u7490\u7490|\u624b\u7ed8\u52a8\u753b|\u7981\u6b62\u771f\u4eba\u5199\u5b9e/.test(incoming.globalSettings?.finalVideoStyle || "")
+    && /写实日本真人都市动作电影/.test(resumedGlobalSettings.finalVideoStyle);
+  const resumedReviews = replacedCityHunterAnimationStyle
+    ? reviews.map((item) => ({
+        ...item,
+        completePromptStatus: "empty" as CompleteShotPromptStatus,
+        completePrompt: undefined,
+        completePromptSummary: "最终美术风格已改为写实真人电影，请按新风格重新生成。",
+        completePromptResearch: undefined,
+        completePromptWarnings: [],
+        completePromptGeneratedAt: undefined,
+        completePromptSourceRevision: undefined,
+        completePromptConfirmedAt: undefined,
+      }))
+    : reviews;
+  const migratedReviews = episode5HadBandageContamination
+    ? resumedReviews.map((item) => ({
+        ...invalidatePromptReview(item),
+        completePromptStatus: item.completePrompt ? "stale" as CompleteShotPromptStatus : item.completePromptStatus,
+        completePromptSummary: item.completePrompt
+          ? "已全局移除第5话误继承的左掌伤势与包扎规则；请继续讨论或重新生成后再审查。"
+          : item.completePromptSummary,
+      }))
+    : resumedReviews;
   return {
     ...incoming,
     stateSchemaVersion,
+    projectUid,
     projectTitle: incoming.projectTitle || defaultProjectTitle,
     sourceDocument: typeof incoming.sourceDocument === "string" && incoming.sourceDocument.trim()
       ? incoming.sourceDocument
@@ -546,14 +1238,16 @@ function normalizeStateForResume(incoming: ReviewState): ReviewState {
       ? incoming.sourceName
       : "载入项目",
     selectedRecipeId: getDirectorRecipe(incoming.selectedRecipeId).id,
-    generationModel: incoming.generationModel || "seedance-2.0",
+    generationModel: incoming.generationModel === "seedance-2.0" || incoming.generationModel === "seedance-2.5"
+      ? incoming.generationModel
+      : "seedance-2.0",
     workspaceMode: incoming.workspaceMode === "global"
       || incoming.workspaceMode === "materials"
       || incoming.workspaceMode === "coverage"
       || incoming.workspaceMode === "assets"
       ? incoming.workspaceMode
       : "shots",
-    globalSettings: cloneGlobalSettings(isGlobalSettings(incoming.globalSettings) ? incoming.globalSettings : sourceGlobalSettings),
+    globalSettings: resumedGlobalSettings,
     assetPrompts: normalizeProjectAssetPrompts(incoming.assetPrompts),
     globalAnnotation: typeof incoming.globalAnnotation === "string" ? incoming.globalAnnotation : "",
     globalStatus: incoming.globalStatus === "sending"
@@ -561,14 +1255,29 @@ function normalizeStateForResume(incoming: ReviewState): ReviewState {
       || incoming.globalStatus === "draft"
       ? incoming.globalStatus
       : "applied",
-    globalSummary: typeof incoming.globalSummary === "string" ? incoming.globalSummary : undefined,
+    globalSummary: episode5HadBandageContamination
+      ? "已迁移第5话项目：全局移除误继承自旧话的左掌伤势、绷带及左手限制。"
+      : typeof incoming.globalSummary === "string" ? incoming.globalSummary : undefined,
     globalUpdatedAt: typeof incoming.globalUpdatedAt === "string" ? incoming.globalUpdatedAt : undefined,
     sourceMangaRequestId: /^[a-f0-9-]{36}$/i.test(incoming.sourceMangaRequestId || "")
       ? incoming.sourceMangaRequestId
       : undefined,
+    sourceMangaPanels: normalizeMangaPanelUnderstandings(incoming.sourceMangaPanels),
+    sourceMangaPanelUnderstandingVersion: incoming.sourceMangaPanelUnderstandingVersion === mangaPanelUnderstandingVersion
+      ? mangaPanelUnderstandingVersion
+      : undefined,
+    sourceMangaPanelAnnotations: normalizeMangaPanelAnnotations(incoming.sourceMangaPanelAnnotations),
+    structureStatus: replacedCityHunterAnimationStyle || episode5HadBandageContamination
+      ? "draft"
+      : incoming.structureStatus === "draft" || incoming.structureStatus === "confirmed"
+      ? incoming.structureStatus
+      : incoming.sourceMangaRequestId ? "draft" : "confirmed",
+    structureConfirmedAt: replacedCityHunterAnimationStyle || episode5HadBandageContamination
+      ? undefined
+      : typeof incoming.structureConfirmedAt === "string" ? incoming.structureConfirmedAt : undefined,
     currentShot,
     view: requiresExplicitRestamp ? "script" : incoming.view,
-    reviews,
+    reviews: migratedReviews,
   };
 }
 
@@ -593,12 +1302,13 @@ function applyAnnotationResultToState(
   if (expectedSubmissionAt && current.pendingSubmission?.submittedAt !== expectedSubmissionAt) return previous;
   if (current.scriptStatus === "applied" && !current.pendingSubmission) return previous;
 
-  const summary = result.summary || "GPT已应用批注";
+  const summary = result.summary || "写作模型已应用批注";
   const version = (current.versions.at(-1)?.version ?? 0) + 1;
+  const revisedShot = normalizeShot({ ...result.shot, shotUid: current.shot.shotUid }, previous.projectTitle === defaultProjectTitle);
   const reviews = [...previous.reviews];
   reviews[reviewIndex] = {
     ...current,
-    shot: normalizeShot(result.shot, previous.projectTitle === defaultProjectTitle),
+    shot: revisedShot,
     annotations: emptyAnnotations(),
     pendingSubmission: undefined,
     scriptStatus: "applied",
@@ -616,7 +1326,7 @@ function applyAnnotationResultToState(
       version,
       createdAt: result.finishedAt || new Date().toISOString(),
       summary,
-      shot: normalizeShot(result.shot, previous.projectTitle === defaultProjectTitle),
+      shot: revisedShot,
       previousShot: current.shot,
       annotations: current.pendingSubmission?.annotations || current.annotations,
       recipeId: previous.selectedRecipeId,
@@ -635,19 +1345,17 @@ function applyBatchAnnotationResultToState(
   expectedSubmissionAt?: string,
 ): ReviewState {
   if (!Array.isArray(result.shots) || !result.shots.length || !result.shots.every(isStoryboardShot)) return previous;
-  const returned = new Map(result.shots.map((shot) => [
-    shot.id,
-    normalizeShot(shot, previous.projectTitle === defaultProjectTitle),
-  ]));
+  const returned = new Map(result.shots.map((shot) => [shot.id, shot]));
   let appliedCount = 0;
   const reviews = previous.reviews.map((current) => {
-    const revisedShot = returned.get(current.shot.id);
-    if (!revisedShot) return current;
+    const returnedShot = returned.get(current.shot.id);
+    if (!returnedShot) return current;
+    const revisedShot = normalizeShot({ ...returnedShot, shotUid: current.shot.shotUid }, previous.projectTitle === defaultProjectTitle);
     if (expectedSubmissionAt && current.pendingSubmission?.submittedAt !== expectedSubmissionAt) return current;
     if (current.scriptStatus === "applied" && !current.pendingSubmission) return current;
 
     appliedCount += 1;
-    const summary = result.summary || "GPT已应用全片批注";
+    const summary = result.summary || "写作模型已应用全片批注";
     const version = (current.versions.at(-1)?.version ?? 0) + 1;
     return {
       ...current,
@@ -734,7 +1442,7 @@ function getArtworkPrompt(shot: StoryboardShot, projectTitle: string, generation
     : "";
   const globalRules = globalRulesForShot(shot, settings);
 
-  return `只生成《${projectTitle}》镜头 ${shot.id}，不要生成其他镜头。\n出图模型：Lib Image。\n用途：为 ${generationModels.find((item) => item.id === generationModel)?.label} 视频生成准备临时赛璐璐风格分镜参考图；它只负责锁定剧情、场景、站位和动作，不代表最终视频美术风格，也不是视频提示词的复制品。\n项目故事背景（只作时代与因果上下文，不得覆盖本镜证据）：${settings.storyBackground}\n临时工作分镜画法：${settings.storyboardImageStyle || storyboardArtworkStyle}\n适用于本镜的全局硬锁（优先级最高）：${globalRules.join("；")}\n人物：${shot.characters.join("；")}\n关键物品：${shot.props.join("；")}\n场景：${shot.scene}\n全能参考（${omniReferences.length}/${referenceLimit}）：${omniReferences.join("；")}\n剧情：${shot.story}\n站位与构图：${shot.composition}\n镜头：${shot.camera}\n动作：${shot.action}${segments}\n\n连续性：${shot.continuity.join("；")}\n禁止：${shot.negative.join("；")}\n\n全能参考总数严禁超过 ${referenceLimit} 个；普通物品不占参考位。无对白气泡、无水印。让导演一眼看懂剧情、物品、场景、站位、视线和动作路径。不要把这张临时赛璐璐分镜的画风反推为最终视频画风。`;
+  return `只生成《${projectTitle}》镜头 ${shot.id}，不要生成其他镜头。\n出图模型：Lib Image。\n用途：为 ${generationModels.find((item) => item.id === generationModel)?.label} 视频生成准备临时导演预演分镜参考图；它只负责锁定剧情、场景、站位和动作，不代表最终视频美术风格，也不是视频提示词的复制品。\n项目故事背景（只作时代与因果上下文，不得覆盖本镜证据）：${settings.storyBackground}\n临时工作分镜画法：${settings.storyboardImageStyle || storyboardArtworkStyle}\n适用于本镜的全局硬锁（优先级最高）：${globalRules.join("；")}\n人物：${shot.characters.join("；")}\n关键物品：${shot.props.join("；")}\n场景：${shot.scene}\n全能参考（${omniReferences.length}/${referenceLimit}）：${omniReferences.join("；")}\n剧情：${shot.story}\n站位与构图：${shot.composition}\n镜头：${shot.camera}\n动作：${shot.action}${segments}\n\n连续性：${shot.continuity.join("；")}\n禁止：${shot.negative.join("；")}\n\n全能参考总数严禁超过 ${referenceLimit} 个；普通物品不占参考位。无对白气泡、无水印。让导演一眼看懂剧情、物品、场景、站位、视线和动作路径。临时工作图只提供构图与动作依据，不改变最终视频画风。`;
 }
 
 function openArtworkDb(): Promise<IDBDatabase> {
@@ -748,21 +1456,23 @@ function openArtworkDb(): Promise<IDBDatabase> {
   });
 }
 
-async function putArtworks(shotId: string, dataUrls: string[]) {
+async function putArtworks(storageScope: string, shotId: string, dataUrls: string[]) {
+  if (!storageScope) throw new Error("图片租户作用域尚未确认");
   const db = await openArtworkDb();
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction("images", "readwrite");
-    transaction.objectStore("images").put(dataUrls, shotId);
+    transaction.objectStore("images").put(dataUrls, `${storageScope}::${shotId}`);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
   db.close();
 }
 
-async function getArtworks(shotId: string): Promise<string[]> {
+async function getArtworks(storageScope: string, shotId: string): Promise<string[]> {
+  if (!storageScope) throw new Error("图片租户作用域尚未确认");
   const db = await openArtworkDb();
   const value = await new Promise<string | string[] | undefined>((resolve, reject) => {
-    const request = db.transaction("images", "readonly").objectStore("images").get(shotId);
+    const request = db.transaction("images", "readonly").objectStore("images").get(`${storageScope}::${shotId}`);
     request.onsuccess = () => resolve(request.result as string | string[] | undefined);
     request.onerror = () => reject(request.error);
   });
@@ -770,11 +1480,12 @@ async function getArtworks(shotId: string): Promise<string[]> {
   return Array.isArray(value) ? value : value ? [value] : [];
 }
 
-async function deleteArtworks(shotId: string) {
+async function deleteArtworks(storageScope: string, shotId: string) {
+  if (!storageScope) throw new Error("图片租户作用域尚未确认");
   const db = await openArtworkDb();
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction("images", "readwrite");
-    transaction.objectStore("images").delete(shotId);
+    transaction.objectStore("images").delete(`${storageScope}::${shotId}`);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
@@ -813,20 +1524,12 @@ function deriveShotAssets(shot: StoryboardShot): ShotAssetEntry[] {
   });
 }
 
-function targetSourcePanelsForAsset(asset: ShotAssetEntry, reviews: ShotReview[]) {
-  return [...new Set(reviews.flatMap((review) => (
-    deriveShotAssets(review.shot).some((candidate) => candidate.id === asset.id)
-      ? review.shot.sourcePanels || []
-      : []
-  )))];
+function shotAssetStorageKey(projectTitle: string, shotId: string, asset: ShotAssetEntry) {
+  return `${projectTitle}::shot-asset-v2::shot-${encodeURIComponent(shotId)}::${asset.kind}::${encodeURIComponent(asset.name.normalize("NFKC"))}`;
 }
 
-function shotAssetStorageKey(projectTitle: string, asset: ShotAssetEntry) {
-  return `${projectTitle}::shot-asset-v1::${asset.kind}::${encodeURIComponent(asset.name.normalize("NFKC"))}`;
-}
-
-function shotAssetAttemptStorageKey(projectTitle: string, asset: ShotAssetEntry) {
-  return `${shotAssetStorageKey(projectTitle, asset)}::attempt`;
+function shotAssetAttemptStorageKey(projectTitle: string, shotId: string, asset: ShotAssetEntry) {
+  return `${shotAssetStorageKey(projectTitle, shotId, asset)}::attempt`;
 }
 
 function defaultShotAssetPrompt(asset: ShotAssetEntry, shot: StoryboardShot, settings: GlobalSettings) {
@@ -835,12 +1538,13 @@ function defaultShotAssetPrompt(asset: ShotAssetEntry, shot: StoryboardShot, set
   const backgroundSummary = settings.storyBackground.split("。").map((item) => item.trim()).filter(Boolean).slice(0, 2).join("。 ");
   const style = compactStyle.trim() && compactStyle !== defaultArtStyle
     ? `最终视频美术风格：${compactStyle}。`
-    : "最终视频美术风格尚未确认；只锁定漫画可见身份与外观，不擅自套用漫画、赛璐璐或真人风格。";
+    : "最终视频美术风格尚未确认；只锁定来源中可见的身份与外观，不擅自套用任何画风。";
   const sourcePanels = shot.sourcePanels?.length ? `漫画来源格：${shot.sourcePanels.join("、")}。` : "";
   const common = `${backgroundSummary ? `项目背景：${backgroundSummary}。` : ""}${style}${sourcePanels}单一资产参考图，不是剧情分镜，不做多格拼图；干净背景，无文字、无水印，不生成无关人物或物品。`;
   if (asset.kind === "character") {
     const matchingReference = shot.omniReferences.find((item) => isShotAssetReference(item, asset));
-    return `人物资产：${asset.name}。从漫画画格中提取并保持该人物可见的年龄感、体型、脸型、发型、服装、身份气质和表情特征；漫画未画清的颜色、纹样或身体细节不要臆测。角色依据：${matchingReference || asset.name}。本镜身份与行为：${shot.story} ${shot.action}。制作清晰、可复用的单人角色设定参考图，全身为主，站姿自然，正面略带三分之二角度，双手完整可见。${common}`;
+    const profile = settings.characters.find((item) => item.includes(asset.name)) || asset.name;
+    return `人物资产：${asset.name}。全局人物画像：${profile}。从漫画画格中提取并保持该人物可见的年龄感、体型、脸型、发型、服装、身份气质和表情特征；漫画未画清的颜色、纹样或身体细节不要臆测。角色依据：${matchingReference || asset.name}。本镜身份与行为：${shot.story} ${shot.action}。只生成 Shot ${shot.id} 使用的独立人物参考图，不自动覆盖或替换其他 Shot 的资产。全身为主，站姿自然，正面略带三分之二角度，双手完整可见。${common}`;
   }
   if (asset.kind === "scene") {
     return `场景资产：${asset.name}。制作干净的场景空间参考图，清楚表现建筑结构、出入口、楼梯、可站位区域与纵深；本镜场景依据：${shot.scene}。画面内不出现人物。${common}`;
@@ -848,9 +1552,8 @@ function defaultShotAssetPrompt(asset: ShotAssetEntry, shot: StoryboardShot, set
   return `关键道具资产：${asset.name}。制作单件道具的清晰外观参考图，完整展示轮廓、材质、比例与关键结构，物体居中且不被遮挡。${common}`;
 }
 
-function projectAssetPromptFor(prompts: ProjectAssetPrompt[] | undefined, asset: ShotAssetEntry) {
-  return (prompts || []).find((item) => item.id === asset.id)
-    || (prompts || []).find((item) => item.kind === asset.kind && shotAssetId(item.kind, cleanShotAssetName(item.name, item.kind)) === asset.id);
+function projectAssetPromptFor(prompts: ProjectAssetPrompt[] | undefined, asset: ShotAssetEntry, shotId: string) {
+  return (prompts || []).find((item) => item.shotIds.length === 1 && item.shotIds[0] === shotId && item.kind === asset.kind && shotAssetId(item.kind, cleanShotAssetName(item.name, item.kind)) === asset.id);
 }
 
 function projectAssetPromptText(record?: ProjectAssetPrompt) {
@@ -891,8 +1594,8 @@ function artworkSourceRevisionForShot(shotId: string) {
   return storyboardSourceRevision;
 }
 
-async function getArtworksForShot(projectTitle: string, shotId: string) {
-  return getArtworks(artworkStorageKey(projectTitle, shotId));
+async function getArtworksForShot(storageScope: string, projectTitle: string, shotId: string) {
+  return getArtworks(storageScope, artworkStorageKey(projectTitle, shotId));
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -924,9 +1627,8 @@ function ArtworkPlaceholder({ shotId, generating = false }: { shotId: string; ge
 }
 
 function mangaPanelCropUrl(requestId: string, panelId: string, pairingToken?: string) {
-  const url = new URL(`/media-panel/${encodeURIComponent(requestId)}/${encodeURIComponent(panelId)}`, bridgeBase);
-  if (pairingToken) url.searchParams.set("token", pairingToken);
-  return url.toString();
+  const path = `${bridgeBase}/media-panel/${encodeURIComponent(requestId)}/${encodeURIComponent(panelId)}`;
+  return pairingToken ? `${path}?token=${encodeURIComponent(pairingToken)}` : path;
 }
 
 function MangaPanelCard({ requestId, panelId, pairingToken }: { requestId: string; panelId: string; pairingToken?: string }) {
@@ -987,7 +1689,7 @@ function ScriptBlock({
         <textarea
           rows={3}
           value={note}
-          placeholder={`给“${section.title}”写批注；可以先写，最后统一发送给 GPT`}
+          placeholder={`给“${section.title}”写批注；可以先写，最后统一发送给写作模型`}
           onChange={(event) => onAnnotation(event.target.value)}
         />
       </label>
@@ -1185,16 +1887,29 @@ function StageSketch({
   );
 }
 
-export default function Home() {
+function DirectorDesk() {
+  const tenantScope = useManjingWorkspaceScope();
+  const scopedBrowserStorage = useMemo(
+    () => manjingScopedBrowserStorage(tenantScope),
+    [tenantScope],
+  );
+  const artworkStorageScope = tenantScope.storageScope;
   const [state, setState] = useState<ReviewState>(createInitialState);
+  const [deskMode, setDeskMode] = useState<DeskMode>("creator");
   const [hydrated, setHydrated] = useState(false);
   const [activeStorageKey, setActiveStorageKey] = useState(storageKey);
   const [materialDraftMode, setMaterialDraftMode] = useState(false);
   const [bridge, setBridge] = useState<BridgeState>({ connected: false, busy: false });
   const [artworkRecord, setArtworkRecord] = useState<{ shotId: string; dataUrls: string[] }>({ shotId: "", dataUrls: [] });
   const [toast, setToast] = useState("");
+  const [editingProjectTitle, setEditingProjectTitle] = useState(false);
+  const [projectTitleDraft, setProjectTitleDraft] = useState("");
   const [showLoader, setShowLoader] = useState(false);
   const [loadingScript, setLoadingScript] = useState(false);
+  const [switchingWritingModelId, setSwitchingWritingModelId] = useState<WritingModelId | "">("");
+  const [switchingReasoningEffort, setSwitchingReasoningEffort] = useState(false);
+  const [writingModelOrder, setWritingModelOrder] = useState<WritingModelId[]>(() => writingModelCatalog.map((model) => model.id));
+  const [dragOverWritingModelId, setDragOverWritingModelId] = useState<WritingModelId | "">("");
   const [loggingIntoLibtv, setLoggingIntoLibtv] = useState(false);
   const [stampingShotId, setStampingShotId] = useState("");
   const [savingGlobalSettings, setSavingGlobalSettings] = useState(false);
@@ -1212,26 +1927,109 @@ export default function Home() {
   const [shotAssetPrompts, setShotAssetPrompts] = useState<Record<string, string>>({});
   const [shotAssetImageSettings, setShotAssetImageSettings] = useState<Record<string, ShotAssetImageSettings>>({});
   const [generatingShotAssetKeys, setGeneratingShotAssetKeys] = useState<Record<string, boolean>>({});
+  const [selectedStructurePanelIds, setSelectedStructurePanelIds] = useState<string[]>([]);
+  const [panelSelectionAnchor, setPanelSelectionAnchor] = useState("");
+  const [structureHistory, setStructureHistory] = useState<ShotReview[][]>([]);
+  const [zoomedStructurePanelId, setZoomedStructurePanelId] = useState("");
+  const [panelAssemblyScrollMetrics, setPanelAssemblyScrollMetrics] = useState({
+    scrollLeft: 0,
+    scrollWidth: 0,
+    clientWidth: 0,
+  });
   const fileInput = useRef<HTMLInputElement>(null);
   const scriptInput = useRef<HTMLInputElement>(null);
   const artworkScroller = useRef<HTMLDivElement>(null);
+  const panelAssemblyBottomScroller = useRef<HTMLDivElement>(null);
+  const panelAssemblyScrollFrame = useRef(0);
+  const importingMaterialDraftId = useRef("");
   const staleSendingSince = useRef<Record<string, number>>({});
   const staleArtworkSince = useRef<Record<string, number>>({});
   const recoveringAnnotationJob = useRef("");
   const recoveringArtworkJob = useRef("");
+  const recoveringCompletePrompt = useRef("");
+  const recoveringPromptReview = useRef("");
   const currentShotIdRef = useRef("");
+  const writingModelMenuRef = useRef<HTMLDetailsElement>(null);
+  const draggedWritingModelIdRef = useRef<WritingModelId | "">("");
+  const touchWritingModelPointerRef = useRef<number | null>(null);
+  const touchWritingModelTargetRef = useRef<WritingModelId | "">("");
+  const suppressWritingModelClickRef = useRef(false);
+  const appliedAgentDraftRevision = useRef("");
 
   const review = state.reviews[state.currentShot];
   const shot = normalizeShot(review.shot, state.projectTitle === defaultProjectTitle);
+  const structureConfirmed = state.structureStatus !== "draft";
+  const structurePanelEntries = state.reviews.flatMap((item, reviewIndex) => (item.shot.sourcePanels || []).map((panelId) => ({
+    panelId,
+    reviewIndex,
+    shotId: item.shot.id,
+    title: item.shot.title,
+  })));
+  const panelAssemblyLayoutSignature = state.reviews
+    .map((item) => `${item.shot.id}:${(item.shot.sourcePanels || []).join(",")}`)
+    .join("|");
+  const zoomedStructurePanelIndex = structurePanelEntries.findIndex((entry) => entry.panelId === zoomedStructurePanelId);
   const shotNavigationGroups = useMemo(() => buildShotNavigationGroups(state.reviews), [state.reviews]);
   const isOpeningSubshot = isOpeningSubshotId(shot.id);
   const generationModel = state.generationModel || "seedance-2.0";
+  const writingModelOptions = useMemo(() => {
+    const live = new Map((bridge.writingModels || []).map((model) => [model.id, model]));
+    return writingModelCatalog
+      .filter((fallback) => fallback.id !== "codex-gpt-5.6-sol" || tenantScope.mode === "local" || tenantScope.role === "superadmin")
+      .map((fallback) => {
+      const remote = live.get(fallback.id);
+      const serverSelectable = serverSelectableWritingModelIds.has(fallback.id);
+      const available = serverSelectable && Boolean(remote?.available);
+      return {
+        ...fallback,
+        model: serverSelectable && remote?.model ? remote.model : fallback.model,
+        available,
+        selected: available && Boolean(remote?.selected),
+        reason: serverSelectable ? remote?.reason || (available ? undefined : fallback.reason) : fallback.reason,
+      };
+      });
+  }, [bridge.writingModels, tenantScope.mode, tenantScope.role]);
+  const orderedWritingModels = useMemo(() => {
+    const models = new Map(writingModelOptions.map((model) => [model.id, model]));
+    return [
+      ...writingModelOrder.flatMap((id) => models.has(id) ? [models.get(id)!] : []),
+      ...writingModelOptions.filter((model) => !writingModelOrder.includes(model.id)),
+    ];
+  }, [writingModelOptions, writingModelOrder]);
+  const activeWritingModel = writingModelOptions.find((model) => model.selected && model.available)
+    || (bridge.modelProvider?.configured
+      ? writingModelOptions.find((model) => model.id === bridge.modelProvider?.selectionId && model.available)
+        || writingModelOptions.find((model) => model.provider === bridge.modelProvider?.id && model.available)
+      : undefined);
+  const writingModelSummary = switchingWritingModelId
+    ? "切换中…"
+    : activeWritingModel?.label || (bridge.connected ? "暂无可用模型" : "未连接");
+  const selectedReasoningEffort = bridge.reasoningPolicy?.selected || "high";
+  const reviewerOptions = bridge.reviewers?.length ? bridge.reviewers : [{ id: defaultPromptReviewerId, label: "Kimi K3 · 独立 Agent", provider: "kimi", model: "k3", available: bridge.connected }];
+  const savedPromptReviewer = reviewerOptions.find((item) => item.id === review.promptReviewerId);
+  const selectedPromptReviewer = savedPromptReviewer || reviewerOptions.find((item) => item.available) || reviewerOptions[0];
+  const selectedPromptReviewerId = selectedPromptReviewer?.id || defaultPromptReviewerId;
+  const currentPromptReviewRevision = review.completePrompt?.trim() ? buildPromptReviewRevision({
+    shotId: shot.id,
+    completePrompt: review.completePrompt,
+    completePromptSourceRevision: review.completePromptSourceRevision,
+    completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
+    reviewerId: review.promptReviewerId || selectedPromptReviewerId,
+  }) : "";
+  const promptReviewArtifactIsCurrent = review.promptReviewStatus === "ready"
+    && Boolean(review.promptReviewReport)
+    && review.promptReviewSourceRevision === currentPromptReviewRevision;
+  const promptReviewIsCurrent = promptReviewArtifactIsCurrent
+    && review.promptReviewReport?.verdict === "discussion-ready";
   const workspaceScope = materialDraftMode ? "material-draft" : "main";
   const projectStorageTitle = materialDraftMode ? `${state.projectTitle}::${activeStorageKey}` : state.projectTitle;
   const projectScopeId = materialDraftMode ? activeStorageKey.slice(materialDraftStoragePrefix.length) : "main";
   const mangaSourceRequestId = /^[a-f0-9-]{36}$/i.test(state.sourceMangaRequestId || "")
     ? state.sourceMangaRequestId as string
     : materialDraftMode && shot.sourcePanels?.length && /^[a-f0-9-]{36}$/i.test(projectScopeId) ? projectScopeId : "";
+  const zoomedStructurePanelUrl = zoomedStructurePanelId && mangaSourceRequestId
+    ? mangaPanelCropUrl(mangaSourceRequestId, zoomedStructurePanelId, bridge.pairingToken)
+    : "";
   const shotAssets = useMemo(
     () => deriveShotAssets(shot),
     [shot.characters.join("\n"), shot.props.join("\n"), shot.scene],
@@ -1242,28 +2040,28 @@ export default function Home() {
     return `${itemShot.id}:${deriveShotAssets(itemShot).map((asset) => asset.id).join(",")}`;
   }).join("|");
   function resolvedShotAssetPrompt(asset: ShotAssetEntry, targetShot = shot) {
-    const assetKey = shotAssetStorageKey(projectStorageTitle, asset);
+    const assetKey = shotAssetStorageKey(projectStorageTitle, targetShot.id, asset);
     if (Object.prototype.hasOwnProperty.call(shotAssetPrompts, assetKey)) return shotAssetPrompts[assetKey];
-    const analyzedPrompt = projectAssetPromptText(projectAssetPromptFor(state.assetPrompts, asset));
+    const analyzedPrompt = projectAssetPromptText(projectAssetPromptFor(state.assetPrompts, asset, targetShot.id));
     return analyzedPrompt || defaultShotAssetPrompt(asset, targetShot, state.globalSettings);
   }
 
   function updateShotAssetPrompt(asset: ShotAssetEntry, value: string) {
-    const assetKey = shotAssetStorageKey(projectStorageTitle, asset);
+    const assetKey = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
     setShotAssetPrompts((current) => ({ ...current, [assetKey]: value }));
     setState((previous) => {
       const prompts = normalizeProjectAssetPrompts(previous.assetPrompts);
-      const existing = projectAssetPromptFor(prompts, asset);
+      const existing = projectAssetPromptFor(prompts, asset, shot.id);
       const existingIndex = existing ? prompts.findIndex((item) => item.id === existing.id) : -1;
       const nextRecord: ProjectAssetPrompt = {
-        id: existing?.id || asset.id,
+        id: existing?.id || `${shot.id}::${asset.id}`,
         kind: asset.kind,
         name: asset.name,
         sourceObservation: existing?.sourceObservation || "由漫画分镜资产清单自动建立；外观观察待复核。",
         prompt: value,
         negative: [],
-        sourcePanels: existing?.sourcePanels || targetSourcePanelsForAsset(asset, previous.reviews),
-        shotIds: [...new Set([...(existing?.shotIds || []), shot.id])],
+        sourcePanels: existing?.sourcePanels || shot.sourcePanels || [],
+        shotIds: [shot.id],
       };
       const assetPrompts = [...prompts];
       if (existingIndex >= 0) assetPrompts[existingIndex] = nextRecord;
@@ -1297,7 +2095,7 @@ export default function Home() {
   );
   const videoPackages = useMemo(() => {
     const model = generationModels.find((item) => item.id === generationModel) || generationModels[0];
-    return state.reviews.map((item) => {
+    return state.reviews.filter((item) => item.approved).map((item) => {
       const views = getDirectorViews(item.shot, useDefaultProjectPlans);
       const layoutViewKeys = views
         .map((view) => view.key)
@@ -1305,6 +2103,17 @@ export default function Home() {
       const artworkNames = item.artworkNames?.length
         ? item.artworkNames
         : item.artworkName ? [item.artworkName] : [];
+      const reviewerId = item.promptReviewerId || "kimi-k3";
+      const promptReviewCurrent = item.promptReviewStatus === "ready"
+        && item.promptReviewReport?.verdict === "discussion-ready"
+        && Boolean(item.completePrompt?.trim())
+        && item.promptReviewSourceRevision === buildPromptReviewRevision({
+          shotId: item.shot.id,
+          completePrompt: item.completePrompt || "",
+          completePromptSourceRevision: item.completePromptSourceRevision,
+          completePromptGeneratorId: item.completePromptGeneratorId || legacyUnknownModelId,
+          reviewerId,
+        });
       return buildVideoGenerationPackage({
         projectTitle: state.projectTitle,
         modelId: model.id,
@@ -1316,6 +2125,7 @@ export default function Home() {
         shot: item.shot,
         approved: item.approved,
         approvedAt: item.approvedAt,
+        promptReviewCurrent,
         layoutViewKeys,
         directorViewKeys: views.map((view) => view.key),
         whiteboxLocks: Object.entries(item.whiteboxReferences || {}).map(([key, value]) => ({
@@ -1332,13 +2142,33 @@ export default function Home() {
       });
     });
   }, [generationModel, state.globalSettings, state.projectTitle, state.reviews, useDefaultProjectPlans]);
-  const currentVideoPackage = videoPackages.find((item) => item.shotId === shot.id) || videoPackages[0];
+  const currentVideoPackage = videoPackages.find((item) => item.shotId === shot.id);
   const selectedAssetShotId = assetSelectedShotId || shot.id;
   const selectedAssetPackage = videoPackages.find((item) => item.shotId === selectedAssetShotId) || videoPackages[0];
   const selectedAssetReview = state.reviews.find((item) => item.shot.id === selectedAssetPackage?.shotId) || state.reviews[0];
   const assetReadyCount = videoPackages.filter((item) => item.status === "ready").length;
   const assetAttentionCount = videoPackages.filter((item) => item.status === "blocked" || item.status === "stale" || item.status === "warning").length;
   const assetRunningCount = videoPackages.filter((item) => item.status === "running").length;
+  const productionPipeline = useMemo(() => deriveProductionPipeline({
+    hasMangaSource: Boolean(state.sourceMangaRequestId || state.reviews.some((item) => item.shot.sourcePanels?.length)),
+    structureConfirmed,
+    shotCount: state.reviews.length,
+    scriptAppliedCount: state.reviews.filter((item) => item.scriptStatus === "applied").length,
+    promptReadyCount: state.reviews.filter((item) => item.completePromptStatus === "ready" && item.completePrompt?.trim()).length,
+    promptReviewedCount: state.reviews.filter((item) => {
+      if (item.promptReviewStatus !== "ready" || item.promptReviewReport?.verdict !== "discussion-ready" || !item.completePrompt?.trim()) return false;
+      const reviewerId = item.promptReviewerId || "kimi-k3";
+      return item.promptReviewSourceRevision === buildPromptReviewRevision({
+        shotId: item.shot.id,
+        completePrompt: item.completePrompt,
+        completePromptSourceRevision: item.completePromptSourceRevision,
+        completePromptGeneratorId: item.completePromptGeneratorId || legacyUnknownModelId,
+        reviewerId,
+      });
+    }).length,
+    approvedCount,
+    videoReadyCount: assetReadyCount,
+  }), [approvedCount, assetReadyCount, state.reviews, state.sourceMangaRequestId, structureConfirmed]);
   const annotationBusy = bridge.busy && (
     (bridge.activeJob?.type === "annotation" && bridge.activeJob.shotId === shot.id)
     || bridge.activeJob?.type === "annotation-batch"
@@ -1353,6 +2183,13 @@ export default function Home() {
   const libtvReady = bridge.libtv?.status === "ready";
   const referenceLimit = referenceLimitFor(generationModel);
   const durationRange = durationRangeFor(generationModel);
+  const shotTimingEstimate = estimateShotTiming({
+    dialogue: shot.dialogue,
+    completePrompt: review.completePrompt,
+    panelCount: shot.sourcePanels?.length || 1,
+    assignedDuration: shot.duration,
+    model: generationModel,
+  });
   const referenceCount = shot.omniReferences.length;
   const referencesOverLimit = referenceCount > referenceLimit;
   const durationOutOfRange = shot.duration < durationRange.min || shot.duration > durationRange.max;
@@ -1367,6 +2204,92 @@ export default function Home() {
   }, [shot.id]);
 
   useEffect(() => {
+    const requested = new URL(window.location.href).searchParams.get("mode");
+    if (requested === "review" || requested === "strict-review") setDeskMode("strict-review");
+  }, []);
+
+  useEffect(() => {
+    if (structureConfirmed) return;
+    const bottomScroller = panelAssemblyBottomScroller.current;
+    if (!bottomScroller) return;
+
+    const updateScrollMetrics = () => {
+      window.cancelAnimationFrame(panelAssemblyScrollFrame.current);
+      panelAssemblyScrollFrame.current = window.requestAnimationFrame(() => {
+        setPanelAssemblyScrollMetrics({
+          scrollLeft: bottomScroller.scrollLeft,
+          scrollWidth: bottomScroller.scrollWidth,
+          clientWidth: bottomScroller.clientWidth,
+        });
+      });
+    };
+    updateScrollMetrics();
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateScrollMetrics);
+    resizeObserver?.observe(bottomScroller);
+    [...bottomScroller.children].forEach((child) => resizeObserver?.observe(child));
+    window.addEventListener("resize", updateScrollMetrics);
+
+    return () => {
+      window.cancelAnimationFrame(panelAssemblyScrollFrame.current);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateScrollMetrics);
+    };
+  }, [panelAssemblyLayoutSignature, structureConfirmed]);
+
+  function syncPanelAssemblyFromTop(event: FormEvent<HTMLInputElement>) {
+    const bottomScroller = panelAssemblyBottomScroller.current;
+    const scrollLeft = Number(event.currentTarget.value);
+    if (bottomScroller && Math.abs(bottomScroller.scrollLeft - scrollLeft) > 0.5) {
+      bottomScroller.scrollLeft = scrollLeft;
+    }
+    setPanelAssemblyScrollMetrics((current) => ({ ...current, scrollLeft }));
+  }
+
+  function syncPanelAssemblyFromBottom(event: UIEvent<HTMLDivElement>) {
+    const bottomScroller = event.currentTarget;
+    window.cancelAnimationFrame(panelAssemblyScrollFrame.current);
+    panelAssemblyScrollFrame.current = window.requestAnimationFrame(() => {
+      setPanelAssemblyScrollMetrics({
+        scrollLeft: bottomScroller.scrollLeft,
+        scrollWidth: bottomScroller.scrollWidth,
+        clientWidth: bottomScroller.clientWidth,
+      });
+    });
+  }
+
+  function beginRenameProject() {
+    setProjectTitleDraft(state.projectTitle);
+    setEditingProjectTitle(true);
+  }
+
+  function cancelRenameProject() {
+    setProjectTitleDraft("");
+    setEditingProjectTitle(false);
+  }
+
+  function renameProject() {
+    const nextTitle = projectTitleDraft.trim();
+    if (!nextTitle) {
+      setToast("项目名称不能为空");
+      return;
+    }
+    if (nextTitle === state.projectTitle) {
+      cancelRenameProject();
+      return;
+    }
+    setState((previous) => ({
+      ...previous,
+      projectTitle: nextTitle,
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+    }));
+    setEditingProjectTitle(false);
+    setProjectTitleDraft("");
+    setToast(`项目已改名为《${nextTitle}》；旧提示词已标记为待更新`);
+  }
+
+  useEffect(() => {
     if (state.view !== "artwork" || artworkCandidates.length < 2) return;
     const frame = window.requestAnimationFrame(() => {
       const scroller = artworkScroller.current;
@@ -1378,22 +2301,35 @@ export default function Home() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      try {
+      void (async () => {
+        let redirectingToRecentDraft = false;
+        try {
         const query = new URLSearchParams(window.location.search);
         const resetRequested = query.get("reset") === "all";
         if (resetRequested) {
-          window.localStorage.clear();
-          window.sessionStorage.clear();
-          window.indexedDB.deleteDatabase(artworkDb);
+          scopedBrowserStorage.clear();
+          if (tenantScope.mode === "local") window.sessionStorage.clear();
+          if (tenantScope.mode === "local") window.indexedDB.deleteDatabase(artworkDb);
           window.history.replaceState({}, "", window.location.pathname);
         }
         const requestedDraftId = resetRequested ? "" : query.get("draft") || "";
         const validDraftId = /^[a-f0-9-]{36}$/i.test(requestedDraftId) ? requestedDraftId : "";
+        const mainWorkspaceRequested = query.get("main") === "1";
+        if (!resetRequested && !validDraftId && !mainWorkspaceRequested) {
+          const recentDraftId = scopedBrowserStorage.getItem(recentMaterialDraftKey) || "";
+          const recentDraftStorageKey = `${materialDraftStoragePrefix}${recentDraftId}`;
+          if (/^[a-f0-9-]{36}$/i.test(recentDraftId) && scopedBrowserStorage.getItem(recentDraftStorageKey)) {
+            redirectingToRecentDraft = true;
+            window.location.replace(`/?draft=${encodeURIComponent(recentDraftId)}`);
+            return;
+          }
+        }
         const targetStorageKey = validDraftId ? `${materialDraftStoragePrefix}${validDraftId}` : storageKey;
         setActiveStorageKey(targetStorageKey);
         setMaterialDraftMode(Boolean(validDraftId));
-        const currentSaved = resetRequested ? null : localStorage.getItem(targetStorageKey);
-        const legacySaved = resetRequested || validDraftId ? null : legacyStorageKeys.map((key) => localStorage.getItem(key)).find(Boolean) || null;
+        if (validDraftId) scopedBrowserStorage.setItem(recentMaterialDraftKey, validDraftId);
+        const currentSaved = resetRequested ? null : scopedBrowserStorage.getItem(targetStorageKey);
+        const legacySaved = resetRequested || validDraftId || tenantScope.mode === "server" ? null : legacyStorageKeys.map((key) => scopedBrowserStorage.getItem(key)).find(Boolean) || null;
         let saved = currentSaved || legacySaved;
         if (currentSaved && legacySaved) {
           const currentCandidate = JSON.parse(currentSaved) as ReviewState;
@@ -1406,21 +2342,26 @@ export default function Home() {
         if (saved) {
           const parsed = JSON.parse(saved) as ReviewState;
           if (parsed.reviews?.length && parsed.reviews.every((item) => isStoryboardShot(item.shot))) {
+            const storedAgentRevision = browserAgentRevision(parsed);
+            if (storedAgentRevision) appliedAgentDraftRevision.current = storedAgentRevision;
             setState(normalizeStateForResume(repairKnownMangaDraftState(parsed, validDraftId)));
           }
         }
-      } catch {
+        } catch {
         // A damaged local draft should not block the tool.
-      } finally {
-        setHydrated(true);
-      }
+        } finally {
+          if (!redirectingToRecentDraft) setHydrated(true);
+        }
+      })();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [scopedBrowserStorage, tenantScope.mode]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(activeStorageKey, JSON.stringify(state));
-  }, [activeStorageKey, state, hydrated]);
+    if (hydrated) scopedBrowserStorage.setItem(activeStorageKey, JSON.stringify(
+      browserDraftSnapshot(state, appliedAgentDraftRevision.current),
+    ));
+  }, [activeStorageKey, hydrated, scopedBrowserStorage, state]);
 
   useEffect(() => {
     const syncAcrossTabs = (event: StorageEvent) => {
@@ -1428,6 +2369,11 @@ export default function Home() {
       try {
         const incoming = JSON.parse(event.newValue) as ReviewState;
         if (incoming.reviews?.length && incoming.reviews.every((item) => isStoryboardShot(item.shot))) {
+          const incomingAgentRevision = browserAgentRevision(incoming);
+          // Ignore another tab until it has applied the same server revision.
+          // Its server POST is rejected by the matching revision guard too.
+          if (appliedAgentDraftRevision.current && incomingAgentRevision !== appliedAgentDraftRevision.current) return;
+          if (incomingAgentRevision) appliedAgentDraftRevision.current = incomingAgentRevision;
           setState(normalizeStateForResume(repairKnownMangaDraftState(incoming, projectScopeId)));
         }
       } catch {
@@ -1441,19 +2387,26 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     const checkBridge = () => {
-      fetch(`${bridgeBase}/health`, { cache: "no-store" })
+      bridgeFetch(`${bridgeBase}/health`, { cache: "no-store" })
         .then((response) => response.json())
         .then((value) => {
           if (active) setBridge({
             connected: Boolean(value.connected),
             busy: Boolean(value.busy),
-            pairingToken: value.pairingToken,
+            serverMode: Boolean(value.serverMode),
+            modelProvider: value.modelProvider,
+            pairingToken: value.pairingToken || (value.serverMode ? serverGatewayPairingSentinel : undefined),
             activeJob: value.activeJob,
             lastJob: value.lastJob,
+            promptJobs: Array.isArray(value.promptJobs) ? value.promptJobs : [],
+            lastPromptJobs: Array.isArray(value.lastPromptJobs) ? value.lastPromptJobs : [],
             artworkJobs: Array.isArray(value.artworkJobs) ? value.artworkJobs : [],
             lastArtworkJobs: Array.isArray(value.lastArtworkJobs) ? value.lastArtworkJobs : [],
             assetJobs: Array.isArray(value.assetJobs) ? value.assetJobs : [],
             lastAssetJobs: Array.isArray(value.lastAssetJobs) ? value.lastAssetJobs : [],
+            writingModels: Array.isArray(value.writingModels) ? value.writingModels : [],
+            reviewers: Array.isArray(value.reviewers) ? value.reviewers : [],
+            harness: value.harness && Array.isArray(value.harness.runs) ? value.harness : undefined,
             libtv: value.libtv,
           });
         })
@@ -1468,6 +2421,404 @@ export default function Home() {
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const defaults = writingModelCatalog.map((model) => model.id);
+    let nextOrder = defaults;
+    try {
+      const parsed = JSON.parse(scopedBrowserStorage.getItem("manjing-writing-model-order:v1") || "[]") as unknown;
+      if (Array.isArray(parsed)) {
+        const allowed = new Set<WritingModelId>(defaults);
+        const saved = [...new Set(parsed.filter((id): id is WritingModelId => typeof id === "string" && allowed.has(id as WritingModelId)))];
+        nextOrder = [...saved, ...defaults.filter((id) => !saved.includes(id))];
+      }
+    } catch {
+      // A damaged browser preference must not block the writing workflow.
+    }
+    const frame = window.requestAnimationFrame(() => setWritingModelOrder(nextOrder));
+    return () => window.cancelAnimationFrame(frame);
+  }, [scopedBrowserStorage, tenantScope.storageScope]);
+
+  function persistWritingModelOrder(nextOrder: WritingModelId[]) {
+    setWritingModelOrder(nextOrder);
+    try {
+      scopedBrowserStorage.setItem("manjing-writing-model-order:v1", JSON.stringify(nextOrder));
+    } catch {
+      // Browser storage may be disabled; the current tab still keeps the order.
+    }
+  }
+
+  function moveWritingModelBefore(source: WritingModelId, target: WritingModelId) {
+    if (source === target) return;
+    const nextOrder = orderedWritingModels.map((model) => model.id).filter((id) => id !== source);
+    const targetIndex = nextOrder.indexOf(target);
+    nextOrder.splice(targetIndex < 0 ? nextOrder.length : targetIndex, 0, source);
+    persistWritingModelOrder(nextOrder);
+  }
+
+  function moveWritingModelByOffset(source: WritingModelId, offset: -1 | 1) {
+    const nextOrder = orderedWritingModels.map((model) => model.id);
+    const sourceIndex = nextOrder.indexOf(source);
+    const targetIndex = Math.max(0, Math.min(nextOrder.length - 1, sourceIndex + offset));
+    if (sourceIndex < 0 || sourceIndex === targetIndex) return;
+    [nextOrder[sourceIndex], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[sourceIndex]];
+    persistWritingModelOrder(nextOrder);
+  }
+
+  function beginTouchWritingModelDrag(event: React.PointerEvent<HTMLSpanElement>, model: WritingModelOption) {
+    if (event.pointerType === "mouse" || !model.available || !bridge.connected || bridge.busy || switchingWritingModelId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    touchWritingModelPointerRef.current = event.pointerId;
+    touchWritingModelTargetRef.current = model.id;
+    draggedWritingModelIdRef.current = model.id;
+    setDragOverWritingModelId(model.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveTouchWritingModelDrag(event: React.PointerEvent<HTMLSpanElement>) {
+    if (touchWritingModelPointerRef.current !== event.pointerId || !draggedWritingModelIdRef.current) return;
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-writing-model-id]")?.dataset.writingModelId;
+    if (writingModelCatalog.some((model) => model.id === target)) {
+      touchWritingModelTargetRef.current = target as WritingModelId;
+      setDragOverWritingModelId(target as WritingModelId);
+    }
+  }
+
+  function finishTouchWritingModelDrag(event: React.PointerEvent<HTMLSpanElement>, canceled = false) {
+    if (touchWritingModelPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = draggedWritingModelIdRef.current;
+    const target = touchWritingModelTargetRef.current;
+    if (!canceled && source && target) moveWritingModelBefore(source, target);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    touchWritingModelPointerRef.current = null;
+    touchWritingModelTargetRef.current = "";
+    draggedWritingModelIdRef.current = "";
+    setDragOverWritingModelId("");
+    suppressWritingModelClickRef.current = true;
+    window.setTimeout(() => { suppressWritingModelClickRef.current = false; }, 0);
+  }
+
+  async function selectWritingModelOption(model: WritingModelOption) {
+    if (!model.available || !bridge.connected || !bridge.pairingToken || bridge.busy || switchingWritingModelId) return;
+    if (model.id === activeWritingModel?.id) {
+      writingModelMenuRef.current?.removeAttribute("open");
+      return;
+    }
+    setSwitchingWritingModelId(model.id);
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/writing-model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken as string },
+        body: JSON.stringify({ id: model.id }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "写作模型切换失败");
+      setBridge((current) => ({
+        ...current,
+        modelProvider: result.modelProvider || current.modelProvider,
+        writingModels: Array.isArray(result.writingModels) ? result.writingModels : current.writingModels,
+      }));
+      writingModelMenuRef.current?.removeAttribute("open");
+      setToast(`写作模型已切换为 ${model.label}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "写作模型切换失败");
+    } finally {
+      setSwitchingWritingModelId("");
+    }
+  }
+
+  async function selectReasoningEffort(effort: ReasoningEffort) {
+    if (!bridge.connected || !bridge.pairingToken || bridge.busy || switchingReasoningEffort) return;
+    setSwitchingReasoningEffort(true);
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/reasoning-effort`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken as string },
+        body: JSON.stringify({ effort }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "推理深度切换失败");
+      setBridge((current) => ({
+        ...current,
+        reasoningPolicy: result.reasoningPolicy || current.reasoningPolicy,
+      }));
+      setToast(`一般创作推理深度已切换为 ${effort.toUpperCase()}；拆图仍固定 LOW，逐 Shot 提示词与审核仍固定 MAX`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "推理深度切换失败");
+    } finally {
+      setSwitchingReasoningEffort(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!hydrated || !bridge.connected || !bridge.pairingToken) return;
+    let active = true;
+    const receiveAgentDraftUpdate = () => {
+      bridgeFetch(`${bridgeBase}/draft-state?scopeId=${encodeURIComponent(projectScopeId || "main")}`, {
+        cache: "no-store",
+        headers: { "X-Manjing-Token": bridge.pairingToken as string },
+      }).then((response) => response.json()).then((snapshot) => {
+        const revision = typeof snapshot?.agentRevision === "string" ? snapshot.agentRevision : "";
+        const incoming = snapshot?.state as ReviewState | undefined;
+        // Every open tab must apply a revision it has not seen. `agentPending`
+        // is only an acknowledgement flag and may already have been cleared by
+        // a different tab, so using it as a receive gate leaves stale tabs open.
+        if (!active || !shouldApplyAgentDraft(revision, appliedAgentDraftRevision.current)) return;
+        if (!incoming?.reviews?.length || !incoming.reviews.every((item) => isStoryboardShot(item.shot))) return;
+        appliedAgentDraftRevision.current = revision;
+        setState(normalizeStateForResume(repairKnownMangaDraftState(incoming, projectScopeId)));
+        setSelectedStructurePanelIds([]);
+        setPanelSelectionAnchor("");
+        setToast("已强制刷新 Agent 最新版本");
+      }).catch(() => {
+        // Keep the current browser draft when the local mirror is unavailable.
+      });
+    };
+    receiveAgentDraftUpdate();
+    const receiveTimer = window.setInterval(receiveAgentDraftUpdate, 900);
+    return () => {
+      active = false;
+      window.clearInterval(receiveTimer);
+    };
+  }, [bridge.connected, bridge.pairingToken, hydrated, projectScopeId]);
+
+  useEffect(() => {
+    if (!hydrated || !bridge.connected || !bridge.pairingToken) return;
+    // Capture the revision that was current when this browser-state save was
+    // scheduled. If an Agent draft arrives before the debounce expires, this
+    // save still contains the previous browser state and must not overwrite the
+    // newly received draft on disk.
+    const scheduledAgentRevision = appliedAgentDraftRevision.current;
+    const timer = window.setTimeout(() => {
+      if (scheduledAgentRevision !== appliedAgentDraftRevision.current) return;
+      bridgeFetch(`${bridgeBase}/draft-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken as string },
+        body: JSON.stringify({
+          scopeId: projectScopeId || "main",
+          storageKey: activeStorageKey,
+          state,
+          appliedAgentRevision: appliedAgentDraftRevision.current,
+        }),
+      }).catch(() => {
+        // Browser-local persistence remains authoritative if the local bridge is temporarily unavailable.
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [activeStorageKey, bridge.connected, bridge.pairingToken, hydrated, projectScopeId, state]);
+
+  useEffect(() => {
+    if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length || review.completePrompt) return;
+    if (review.completePromptSummary === "最终美术风格已改为写实真人电影，请按新风格重新生成。") return;
+    const recoveryShotIdentity = stableShotIdentity(shot);
+    const matchingLiveJob = (bridge.promptJobs || []).find((job) => (
+      job.type === "complete-shot-prompt"
+      && job.status === "running"
+      && bridgeJobMatchesStableShot(job, state.projectUid, recoveryShotIdentity)
+    ));
+    if (matchingLiveJob) return;
+    const matchingTerminalJob = (bridge.lastPromptJobs || []).find((job) => (
+      job.type === "complete-shot-prompt"
+      && job.status !== "running"
+      && bridgeJobMatchesStableShot(job, state.projectUid, recoveryShotIdentity)
+    ));
+    if (review.completePromptStatus === "generating" && !matchingTerminalJob) return;
+    const recoveryShotKey = recoveryShotIdentity.shotUid || recoveryShotIdentity.fallbackId;
+    const terminalJobStamp = matchingTerminalJob
+      ? matchingTerminalJob.finishedAt || matchingTerminalJob.updatedAt || "latest"
+      : "disk";
+    const recoveryKey = `${activeStorageKey}:${recoveryShotKey}:${terminalJobStamp}`;
+    if (recoveringCompletePrompt.current === recoveryKey) return;
+    recoveringCompletePrompt.current = recoveryKey;
+    const recoveryGlobalSettings = completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings);
+    const recoveryPanelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [
+      panelId,
+      state.sourceMangaPanelAnnotations?.[panelId] || "",
+    ]));
+    const currentSourceRevision = buildCompleteShotPromptRevision({
+      projectTitle: state.projectTitle,
+      modelId: generationModel,
+      globalSettings: recoveryGlobalSettings,
+      shot,
+      shotAnnotations: review.annotations,
+      panelAnnotations: recoveryPanelAnnotations,
+      sourceMangaRequestId: mangaSourceRequestId,
+    });
+    const recoverySourceRevision = review.completePromptStatus === "generating" && review.completePromptSourceRevision
+      ? review.completePromptSourceRevision
+      : currentSourceRevision;
+    let active = true;
+    let recovered = false;
+    const recoveryQuery = new URLSearchParams({
+      type: "complete-shot-prompt",
+      projectUid: state.projectUid,
+      shotUid: recoveryShotIdentity.shotUid,
+      shotId: recoveryShotIdentity.fallbackId,
+      sourceRevision: recoverySourceRevision,
+    });
+    bridgeFetch(`${bridgeBase}/job-result?${recoveryQuery.toString()}`, {
+      cache: "no-store",
+      headers: { "X-Manjing-Token": bridge.pairingToken },
+    }).then(async (response) => {
+      const result = await response.json() as CompleteShotPromptResult;
+      if (!response.ok) throw new Error(result.error || "没有可恢复的完整提示词");
+      if (result.status !== "completed" || !completePromptResultMatchesStableShot(result, state.projectUid, recoveryShotIdentity) || !result.prompt?.trim()) throw new Error("恢复的完整提示词与当前 Shot 不一致");
+      if (!active) return;
+      recovered = true;
+      setState((previous) => {
+        const reviews = previous.reviews.map((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity) ? {
+          ...invalidatePromptReview(item),
+          completePromptStatus: "ready" as CompleteShotPromptStatus,
+          completePrompt: result.prompt,
+          completePromptSummary: result.summary,
+          completePromptResearch: result.research,
+          completePromptWarnings: result.warnings,
+          completePromptGeneratedAt: result.generatedAt,
+          completePromptSourceRevision: result.sourceRevision,
+          completePromptConfirmedAt: item.completePromptConfirmedAt || result.generatedAt || new Date().toISOString(),
+          completePromptGeneratorId: result.generatorId?.trim() || legacyUnknownModelId,
+          completePromptGeneratorProvider: result.generatorProvider?.trim() || undefined,
+          completePromptRequestedGeneratorId: result.requestedGeneratorId?.trim() || undefined,
+        } : item);
+        const allReady = reviews.every((item) => item.completePromptConfirmedAt && item.completePromptStatus === "ready");
+        return {
+          ...previous,
+          reviews,
+          assetPrompts: mergeProjectAssetPrompts(
+            previous.assetPrompts,
+            confirmedAssetPrompts(reviews.filter((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity)), previous.globalSettings),
+          ),
+          structureStatus: allReady ? "confirmed" : previous.structureStatus,
+          structureConfirmedAt: allReady ? previous.structureConfirmedAt || new Date().toISOString() : previous.structureConfirmedAt,
+        };
+      });
+      setToast(`已从本地恢复 Shot ${shot.id} 的完整提示词讨论稿；仍需独立审查`);
+    }).catch(() => {
+      if (recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
+      if (!active) return;
+      if (review.completePromptStatus !== "generating") return;
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity) && item.completePromptStatus === "generating" ? {
+          ...item,
+          completePromptStatus: "error" as CompleteShotPromptStatus,
+          completePromptSummary: "上次生成已经结束，但没有找到可恢复结果，请重新生成。",
+        } : item),
+      }));
+    });
+    return () => {
+      active = false;
+      if (!recovered && recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
+    };
+  }, [activeStorageKey, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, generationModel, hydrated, mangaSourceRequestId, review.annotations, review.completePrompt, review.completePromptSourceRevision, review.completePromptStatus, review.completePromptSummary, shot, state.globalSettings, state.projectTitle, state.projectUid, state.reviews, state.sourceMangaPanelAnnotations]);
+
+  useEffect(() => {
+    if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
+    if (promptReviewIsCurrent) return;
+    const matchingLiveJob = bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.status === "running";
+    if (matchingLiveJob) return;
+    const matchingTerminalJob = bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.status !== "running";
+    if (review.promptReviewStatus !== "reviewing" && !matchingTerminalJob) return;
+    const recoveryReviewerId = review.promptReviewerId || selectedPromptReviewerId;
+    const sourceRevision = buildPromptReviewRevision({
+      shotId: shot.id,
+      completePrompt: review.completePrompt,
+      completePromptSourceRevision: review.completePromptSourceRevision,
+      completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
+      reviewerId: recoveryReviewerId,
+    });
+    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${bridge.lastJob?.finishedAt || "disk"}`;
+    if (recoveringPromptReview.current === recoveryKey) return;
+    recoveringPromptReview.current = recoveryKey;
+    let active = true;
+    bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
+      cache: "no-store",
+      headers: { "X-Manjing-Token": bridge.pairingToken },
+    }).then(async (response) => {
+      const result = await response.json() as PromptReviewResult;
+      if (!response.ok) throw new Error(result.error || "没有可恢复的独立审查报告");
+      if (!active || result.shotId !== shot.id || result.reviewerId !== recoveryReviewerId || result.sourceRevision !== sourceRevision || !result.report) return;
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => item.shot.id === shot.id ? {
+          ...item,
+          approved: false,
+          approvedAt: undefined,
+          promptReviewerId: result.reviewerId,
+          promptReviewerModel: result.reviewerModel?.trim() || undefined,
+          promptReviewStatus: "ready" as PromptReviewStatus,
+          promptReviewReport: result.report,
+          promptReviewSourceRevision: result.sourceRevision,
+          promptReviewedAt: result.reviewedAt,
+          promptReviewRequestId: result.requestId,
+          promptReviewError: undefined,
+        } : item),
+      }));
+      setToast(`已恢复 ${result.reviewerLabel || result.reviewerId} 的独立审查报告`);
+    }).catch(() => {
+      if (!active || review.promptReviewStatus !== "reviewing") return;
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewStatus === "reviewing" ? {
+          ...item,
+          promptReviewStatus: "error" as PromptReviewStatus,
+          promptReviewError: "上次独立审查已经结束，但没有找到与当前提示词匹配的报告，请重新提交。",
+        } : item),
+      }));
+    });
+    return () => { active = false; };
+  }, [activeStorageKey, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const requestId = query.get("importDraft") || "";
+    const validRequestId = /^[a-f0-9-]{36}$/i.test(requestId) ? requestId : "";
+    const activeDraftId = query.get("draft") || "";
+    const validActiveDraftId = /^[a-f0-9-]{36}$/i.test(activeDraftId) ? activeDraftId : "";
+    const recoverDraftUnderstandings = hydrated
+      && Boolean(validActiveDraftId)
+      && state.sourceMangaPanelUnderstandingVersion !== mangaPanelUnderstandingVersion;
+    const recoverLatest = !requestId && !activeDraftId && query.get("main") !== "1" && window.location.pathname === "/";
+    const recoveryKey = validRequestId || (recoverDraftUnderstandings ? `panel-notes:${validActiveDraftId}` : recoverLatest ? "latest" : "");
+    const directRequestId = validRequestId || (recoverDraftUnderstandings ? validActiveDraftId : "");
+    if (!recoveryKey || !bridge.pairingToken || importingMaterialDraftId.current === recoveryKey) return;
+    importingMaterialDraftId.current = recoveryKey;
+    bridgeFetch(directRequestId
+      ? `${bridgeBase}/media-job-result?requestId=${encodeURIComponent(directRequestId)}`
+      : `${bridgeBase}/media-recover`, {
+      method: directRequestId ? "GET" : "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
+      body: directRequestId ? undefined : JSON.stringify({ kind: "manga" }),
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok || payload?.status !== "completed" || !payload?.result) {
+          throw new Error(payload?.error || "素材分析结果尚未完成");
+        }
+        return payload.result as MediaAnalysisResult;
+      })
+      .then((result) => {
+        if (recoverDraftUnderstandings) {
+          setState((previous) => ({
+            ...previous,
+            sourceMangaPanels: mangaPanelUnderstandingsFrom(result),
+            sourceMangaPanelUnderstandingVersion: mangaPanelUnderstandingVersion,
+          }));
+          return;
+        }
+        createMaterialDraft(result);
+      })
+      .catch((error) => {
+        if (!shouldSurfaceMediaRecoveryFailure({ directRequestId, recoverDraftUnderstandings })) return;
+        importingMaterialDraftId.current = "";
+        setToast(error instanceof Error ? error.message : "无法恢复本地漫画草稿");
+      });
+  }, [bridge.pairingToken, hydrated, state.sourceMangaPanels]);
 
   useEffect(() => {
     if (lastJobType !== "annotation" || lastJobShotId !== shot.id || lastJobStatus !== "completed" || !bridge.pairingToken) return;
@@ -1487,9 +2838,9 @@ export default function Home() {
     let active = true;
 
     const recoveryUrl = `${bridgeBase}/job-result?type=annotation&shotId=${encodeURIComponent(shot.id)}&submittedAt=${encodeURIComponent(pendingSubmission.submittedAt)}`;
-    fetch(recoveryUrl, {
+    bridgeFetch(recoveryUrl, {
       cache: "no-store",
-      headers: { "X-ShotDirector-Token": bridge.pairingToken },
+      headers: { "X-Manjing-Token": bridge.pairingToken },
     })
       .then(async (response) => {
         const result = await response.json();
@@ -1502,7 +2853,7 @@ export default function Home() {
         if (result.shot.omniReferences.length > referenceLimit) throw new Error("取回结果的全能参考数量超过当前模型上限");
         setLastSubmission(pendingSubmission);
         setState((previous) => applyAnnotationResultToState(previous, shot.id, result, pendingSubmission.submittedAt));
-        setToast("已取回 GPT 完成的批注修改，等待当前 Shot 签字盖章");
+        setToast("已取回写作模型完成的批注修改，等待当前 Shot 签字盖章");
       })
       .catch((error) => {
         if (active) setToast(error instanceof Error ? error.message : "无法取回已完成的批注结果");
@@ -1533,9 +2884,9 @@ export default function Home() {
     let active = true;
 
     const recoveryUrl = `${bridgeBase}/job-result?type=annotation-batch&shotId=all&submittedAt=${encodeURIComponent(pendingSubmittedAt)}`;
-    fetch(recoveryUrl, {
+    bridgeFetch(recoveryUrl, {
       cache: "no-store",
-      headers: { "X-ShotDirector-Token": bridge.pairingToken },
+      headers: { "X-Manjing-Token": bridge.pairingToken },
     })
       .then(async (response) => {
         const result = await response.json() as AnnotationBatchResult & { error?: string };
@@ -1581,7 +2932,7 @@ export default function Home() {
     if (matchingLastJob?.status !== "failed" && Date.now() - firstObservedAt < staleSendingGraceMs) return;
 
     const failed = matchingLastJob?.status === "failed";
-    const message = matchingLastJob?.error || "GPT任务未在运行，已恢复为可重新发送";
+    const message = matchingLastJob?.error || "写作模型任务未在运行，已恢复为可重新发送";
     setState((previous) => {
       const reviewIndex = previous.reviews.findIndex((item) => item.shot.id === shot.id);
       if (reviewIndex < 0 || previous.reviews[reviewIndex].scriptStatus !== "sending") return previous;
@@ -1596,7 +2947,7 @@ export default function Home() {
     });
     setLastSubmission((current) => current?.shotId === shot.id ? undefined : current);
     delete staleSendingSince.current[shot.id];
-    setToast(failed ? message : "旧的‘GPT正在修改’状态已清除，批注仍然保留");
+    setToast(failed ? message : "旧的‘写作模型正在修改’状态已清除，批注仍然保留");
   }, [bridge, hydrated, review.scriptStatus, shot.id]);
 
   useEffect(() => {
@@ -1613,9 +2964,9 @@ export default function Home() {
     const recoveryKey = `${shot.id}:${lastArtworkJob?.requestId || "latest"}`;
     if (lastArtworkJob?.status === "completed" && bridge.pairingToken && recoveringArtworkJob.current !== recoveryKey) {
       recoveringArtworkJob.current = recoveryKey;
-      fetch(`${bridgeBase}/job-result?type=artwork&shotId=${encodeURIComponent(shot.id)}&projectTitle=${encodeURIComponent(projectStorageTitle)}`, {
+      bridgeFetch(`${bridgeBase}/job-result?type=artwork&shotId=${encodeURIComponent(shot.id)}&projectTitle=${encodeURIComponent(projectStorageTitle)}`, {
         cache: "no-store",
-        headers: { "X-ShotDirector-Token": bridge.pairingToken },
+        headers: { "X-Manjing-Token": bridge.pairingToken },
       })
         .then(async (response) => {
           const result = await response.json() as ArtworkResult & { error?: string };
@@ -1655,39 +3006,40 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
-    getArtworksForShot(projectStorageTitle, shot.id).then((dataUrls) => {
+    getArtworksForShot(artworkStorageScope, projectStorageTitle, shot.id).then((dataUrls) => {
       if (active) setArtworkRecord({ shotId: shot.id, dataUrls });
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [projectStorageTitle, shot.id]);
+  }, [artworkStorageScope, projectStorageTitle, shot.id]);
 
   useEffect(() => {
     let active = true;
     Promise.all(shotAssets.map(async (asset) => {
-      const key = shotAssetStorageKey(projectStorageTitle, asset);
-      return [key, await getArtworks(key)] as const;
+      const key = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
+      return [key, await getArtworks(artworkStorageScope, key)] as const;
     })).then((entries) => {
       if (!active) return;
       setShotAssetImages((current) => ({ ...current, ...Object.fromEntries(entries) }));
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [projectStorageTitle, shot.id, shotAssetSignature]);
+  }, [artworkStorageScope, projectStorageTitle, shot.id, shotAssetSignature]);
 
   useEffect(() => {
     setShotAssetImageSettings((current) => ({
       ...current,
       ...Object.fromEntries(shotAssets.map((asset) => {
-        const key = shotAssetStorageKey(projectStorageTitle, asset);
+        const key = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
         return [key, current[key] || defaultShotAssetImageSettings(asset)];
       })),
     }));
   }, [projectStorageTitle, shot.id, shotAssetSignature]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || approvedCount === 0) return;
     setState((previous) => {
       let stateChanged = false;
       const reviews = previous.reviews.map((current) => {
+        if (!current.approved) return current;
         const currentShot = normalizeShot(current.shot, previous.projectTitle === defaultProjectTitle);
         const assets = deriveShotAssets(currentShot);
         if (!assets.length) return current;
@@ -1707,29 +3059,23 @@ export default function Home() {
           ...current,
           shot: referencesChanged ? { ...currentShot, omniReferences } : current.shot,
           seededAssetReferenceIds: [...seeded],
-          scriptStatus: referencesChanged ? "draft" as const : current.scriptStatus,
-          approved: referencesChanged ? false : current.approved,
-          approvedAt: referencesChanged ? undefined : current.approvedAt,
-          artworkStatus: referencesChanged ? "empty" as const : current.artworkStatus,
-          artworkName: referencesChanged ? undefined : current.artworkName,
-          artworkNames: referencesChanged ? undefined : current.artworkNames,
-          summary: referencesChanged ? "人物、场景与关键道具已首次自动加入全能参考；可逐项取消，取消后不会回填" : current.summary,
+          summary: referencesChanged ? "本镜人物、场景与关键道具已加入本 Shot 的全能参考；不会影响其他 Shot" : current.summary,
         };
       });
       return stateChanged ? { ...previous, reviews } : previous;
     });
-  }, [activeStorageKey, hydrated, projectAssetSignature, state.projectTitle]);
+  }, [activeStorageKey, approvedCount, hydrated, projectAssetSignature, state.projectTitle]);
 
   useEffect(() => {
     if (state.workspaceMode !== "assets" || !selectedAssetPackage) return;
     let active = true;
-    getArtworksForShot(projectStorageTitle, selectedAssetPackage.shotId).then((dataUrls) => {
+    getArtworksForShot(artworkStorageScope, projectStorageTitle, selectedAssetPackage.shotId).then((dataUrls) => {
       if (active) setAssetPreviewRecord({ shotId: selectedAssetPackage.shotId, dataUrls });
     }).catch(() => {
       if (active) setAssetPreviewRecord({ shotId: selectedAssetPackage.shotId, dataUrls: [] });
     });
     return () => { active = false; };
-  }, [projectStorageTitle, selectedAssetPackage?.shotId, state.workspaceMode]);
+  }, [artworkStorageScope, projectStorageTitle, selectedAssetPackage?.shotId, state.workspaceMode]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1753,7 +3099,7 @@ export default function Home() {
 
   function invalidate(current: ShotReview): ShotReview {
     setArtworkRecord({ shotId: "", dataUrls: [] });
-    return {
+    return invalidateCompletePrompt({
       ...current,
       scriptStatus: "draft",
       artworkStatus: "empty",
@@ -1767,7 +3113,7 @@ export default function Home() {
       approved: false,
       approvedAt: undefined,
       summary: undefined,
-    };
+    });
   }
 
   function updateField<K extends keyof StoryboardShot>(field: K, value: StoryboardShot[K]) {
@@ -1775,20 +3121,795 @@ export default function Home() {
       const draft = invalidate(current);
       return { ...draft, shot: { ...draft.shot, [field]: value } };
     });
+    setState((previous) => ({ ...previous, structureStatus: "draft", structureConfirmedAt: undefined }));
   }
 
   function updateAnnotation(section: SectionId, value: string) {
-    updateReview((current) => ({
+    updateReview((current) => invalidateCompletePrompt({
       ...current,
       scriptStatus: "draft",
       approved: false,
       approvedAt: undefined,
       annotations: { ...current.annotations, [section]: value },
     }));
+    setState((previous) => ({ ...previous, structureStatus: "draft", structureConfirmedAt: undefined }));
   }
 
   function updateSegment(index: number, patch: Partial<StoryboardSegment>) {
     updateField("segments", shot.segments.map((segment, itemIndex) => itemIndex === index ? { ...segment, ...patch } : segment));
+  }
+
+  function structureTimecode(startSeconds: number, duration: number) {
+    const clock = (value: number) => `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+    return `${clock(startSeconds)}–${clock(startSeconds + duration)}`;
+  }
+
+  function resetReviewForStructure(reviewToReset: ShotReview, nextShot: StoryboardShot): ShotReview {
+    return {
+      ...createReview(nextShot, false, state.projectUid, `${nextShot.id}::${(nextShot.sourcePanels || []).join("|")}`),
+      annotations: { ...emptyAnnotations(), ...(reviewToReset.annotations || {}) },
+    };
+  }
+
+  function renumberStructure(reviews: ShotReview[]) {
+    let elapsed = 0;
+    const range = durationRangeFor(generationModel);
+    return reviews.map((item, index) => {
+      const normalized = normalizeShot(item.shot);
+      const duration = Math.max(range.min, Math.min(range.max, Math.round(normalized.duration || range.min)));
+      const nextShot = {
+        ...normalized,
+        id: String(index + 1).padStart(2, "0"),
+        duration,
+        timecode: structureTimecode(elapsed, duration),
+      };
+      elapsed += duration;
+      const structureUnchanged = item.shot.id === nextShot.id
+        && item.shot.timecode === nextShot.timecode
+        && item.shot.duration === nextShot.duration
+        && JSON.stringify(item.shot.sourcePanels || []) === JSON.stringify(nextShot.sourcePanels || []);
+      return structureUnchanged ? { ...item, shot: nextShot } : resetReviewForStructure(item, nextShot);
+    });
+  }
+
+  function updateShotDuration(reviewIndex: number, durationValue: number) {
+    if (structureConfirmed) {
+      setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
+      return;
+    }
+    const range = durationRangeFor(generationModel);
+    const duration = Math.max(range.min, Math.min(range.max, Math.round(durationValue || range.min)));
+    const targetShotId = state.reviews[reviewIndex]?.shot.id || shot.id;
+    setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => {
+      const updated = previous.reviews.map((item, index) => index === reviewIndex
+        ? resetReviewForStructure(item, { ...normalizeShot(item.shot), duration })
+        : item);
+      const reviews = renumberStructure(updated);
+      return {
+        ...previous,
+        reviews,
+        sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+        assetPrompts: [],
+        structureStatus: "draft",
+        structureConfirmedAt: undefined,
+        view: "script",
+      };
+    });
+    setToast(`Shot ${targetShotId} 已改为 ${duration} 秒；后续时间码已自动顺延`);
+  }
+
+  function updateCurrentShotDuration(durationValue: number) {
+    updateShotDuration(state.currentShot, durationValue);
+  }
+
+  function toggleStructurePanel(panelId: string, extendRange = false) {
+    if (extendRange && panelSelectionAnchor) {
+      const orderedIds = structurePanelEntries.map((entry) => entry.panelId);
+      const anchorIndex = orderedIds.indexOf(panelSelectionAnchor);
+      const targetIndex = orderedIds.indexOf(panelId);
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        const range = orderedIds.slice(start, end + 1);
+        setSelectedStructurePanelIds((current) => [...new Set([...current, ...range])]);
+        return;
+      }
+    }
+    setPanelSelectionAnchor(panelId);
+    setSelectedStructurePanelIds((current) => current.includes(panelId) ? current.filter((id) => id !== panelId) : [...current, panelId]);
+  }
+
+  function updateMangaPanelAnnotation(panelId: string, value: string) {
+    setState((previous) => ({
+      ...previous,
+      sourceMangaPanelAnnotations: { ...(previous.sourceMangaPanelAnnotations || {}), [panelId]: value },
+      reviews: previous.reviews.map((item) => item.shot.sourcePanels?.includes(panelId) ? invalidateCompletePrompt(item) : item),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+    }));
+  }
+
+  function openStructurePanelZoom(panelId: string) {
+    setZoomedStructurePanelId(panelId);
+  }
+
+  function closeStructurePanelZoom() {
+    setZoomedStructurePanelId("");
+  }
+
+  function moveStructurePanelZoom(direction: -1 | 1) {
+    if (!structurePanelEntries.length) return;
+    const nextIndex = (Math.max(0, zoomedStructurePanelIndex) + direction + structurePanelEntries.length) % structurePanelEntries.length;
+    setZoomedStructurePanelId(structurePanelEntries[nextIndex].panelId);
+  }
+
+  function scrollToCompleteShotPromptPanel() {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("complete-shot-prompt-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  function openCompleteShotPrompt(reviewIndex: number) {
+    const targetShot = state.reviews[reviewIndex]?.shot;
+    if (!targetShot) return;
+    const targetShotIdentity = stableShotIdentity(targetShot);
+    setState((previous) => {
+      const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
+      if (targetIndex < 0) return previous;
+      return { ...previous, currentShot: targetIndex, view: "script" };
+    });
+    scrollToCompleteShotPromptPanel();
+    setToast(`已打开 Shot ${targetShot.id} 的完整提示词讨论稿`);
+  }
+
+  async function generateCompleteShotPrompt(reviewIndex: number) {
+    const targetReview = state.reviews[reviewIndex];
+    if (!targetReview) return;
+    const targetShotIdentity = stableShotIdentity(targetReview.shot);
+    const submittedShotId = targetReview.shot.id;
+    const submittedProjectUid = state.projectUid;
+    if (!bridge.connected || !bridge.pairingToken) {
+      setToast("本地 Agent 未连接，暂时不能生成完整提示词");
+      return;
+    }
+    if (!mangaSourceRequestId || !targetReview.shot.sourcePanels?.length) {
+      setToast("当前 Shot 没有关联可读取的漫画画格");
+      return;
+    }
+    const effectiveGlobalSettings = completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings);
+
+    const panelAnnotations = Object.fromEntries(targetReview.shot.sourcePanels.map((panelId) => [
+      panelId,
+      state.sourceMangaPanelAnnotations?.[panelId] || "",
+    ]));
+    const sourceRevision = buildCompleteShotPromptRevision({
+      projectTitle: state.projectTitle,
+      modelId: generationModel,
+      globalSettings: effectiveGlobalSettings,
+      shot: targetReview.shot,
+      shotAnnotations: targetReview.annotations,
+      panelAnnotations,
+      sourceMangaRequestId: mangaSourceRequestId,
+    });
+    const confirmedAt = new Date().toISOString();
+    setState((previous) => {
+      const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
+      return {
+        ...previous,
+        currentShot: targetIndex >= 0 ? targetIndex : previous.currentShot,
+        view: "script",
+        globalSettings: effectiveGlobalSettings,
+        globalStatus: "applied",
+        globalSummary: "已根据漫画全片、上一话连续性和可靠资料自动补全故事背景与最终成片美术风格",
+        globalUpdatedAt: new Date().toISOString(),
+        reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+          ...invalidatePromptReview(item),
+          completePromptStatus: "generating",
+          completePromptConfirmedAt: confirmedAt,
+          completePromptSourceRevision: sourceRevision,
+        } : item),
+      };
+    });
+    setToast(`Shot ${submittedShotId} 的完整提示词讨论稿正在生成；生成后还需独立审查和你的批准`);
+    scrollToCompleteShotPromptPanel();
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/complete-shot-prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
+        body: JSON.stringify({
+          projectUid: submittedProjectUid,
+          projectTitle: state.projectTitle,
+          generationModel,
+          globalSettings: effectiveGlobalSettings,
+          sourceMangaRequestId: mangaSourceRequestId,
+          sourceRevision,
+          shot: targetReview.shot,
+          shotAnnotations: targetReview.annotations,
+          panelAnnotations,
+        }),
+      });
+      const result = await response.json() as CompleteShotPromptResult;
+      if (!response.ok) throw new Error(result.error || "完整提示词生成失败");
+      if (result.status !== "completed" || !completePromptResultMatchesStableShot(result, submittedProjectUid, targetShotIdentity) || result.sourceRevision !== sourceRevision || !result.prompt?.trim()) {
+        throw new Error("Agent 返回结果与本次确认的 Shot 不一致");
+      }
+      setState((previous) => {
+        const reviews = previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+          ...invalidatePromptReview(item),
+          completePromptStatus: "ready" as CompleteShotPromptStatus,
+          completePrompt: result.prompt,
+          completePromptSummary: result.summary,
+          completePromptResearch: result.research,
+          completePromptWarnings: result.warnings,
+          completePromptGeneratedAt: result.generatedAt,
+          completePromptSourceRevision: sourceRevision,
+          completePromptConfirmedAt: item.completePromptConfirmedAt || confirmedAt,
+          completePromptGeneratorId: result.generatorId?.trim() || legacyUnknownModelId,
+          completePromptGeneratorProvider: result.generatorProvider?.trim() || undefined,
+          completePromptRequestedGeneratorId: result.requestedGeneratorId?.trim() || undefined,
+        } : item);
+        const allReady = reviews.every((item) => item.completePromptConfirmedAt && item.completePromptStatus === "ready");
+        const targetIndex = reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
+        const completedReview = targetIndex >= 0 ? reviews[targetIndex] : undefined;
+        return {
+          ...previous,
+          currentShot: targetIndex >= 0 ? targetIndex : previous.currentShot,
+          view: "script",
+          reviews,
+          structureStatus: allReady ? "confirmed" : "draft",
+          structureConfirmedAt: allReady ? new Date().toISOString() : undefined,
+          assetPrompts: mergeProjectAssetPrompts(
+            previous.assetPrompts,
+            confirmedAssetPrompts(completedReview ? [completedReview] : [], previous.globalSettings),
+          ),
+        };
+      });
+      setToast(`Shot ${submittedShotId} 完整提示词讨论稿已生成，请提交独立 Reviewer 审查`);
+      scrollToCompleteShotPromptPanel();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "完整提示词生成失败";
+      setState((previous) => {
+        const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
+        return {
+          ...previous,
+          currentShot: targetIndex >= 0 ? targetIndex : previous.currentShot,
+          view: "script",
+          reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+            ...item,
+            completePromptStatus: "error",
+            completePromptSummary: message,
+          } : item),
+          structureStatus: "draft",
+          structureConfirmedAt: undefined,
+        };
+      });
+      setToast(message);
+      scrollToCompleteShotPromptPanel();
+    }
+  }
+
+  function updateCompleteShotPrompt(value: string) {
+    updateReview((current) => {
+      const currentGeneratorId = current.completePromptGeneratorId?.trim() || "";
+      const editedGeneratorId = currentGeneratorId.endsWith("+human-edited")
+        ? currentGeneratorId
+        : currentGeneratorId ? `${currentGeneratorId}+human-edited` : "human-edited";
+      return {
+        ...invalidatePromptReview(current),
+        completePrompt: value,
+        completePromptStatus: current.completePromptStatus === "stale" || current.completePromptStatus === "error"
+          ? current.completePromptStatus
+          : "ready",
+        completePromptGeneratorId: editedGeneratorId,
+        completePromptGeneratorProvider: "human-editor",
+      };
+    });
+  }
+
+  async function copyCompleteShotPrompt() {
+    if (!review.completePrompt?.trim()) return;
+    const copied = await copyTextToClipboard(review.completePrompt);
+    setToast(copied ? `Shot ${shot.id} 完整提示词已复制` : "无法写入剪贴板，请选中文本后手动复制");
+  }
+
+  function selectPromptReviewer(reviewerId: string) {
+    updateReview((current) => ({
+      ...invalidatePromptReview(current),
+      promptReviewerId: reviewerId,
+    }));
+  }
+
+  async function reviewCompletePrompt() {
+    if (!review.completePrompt?.trim() || review.completePromptStatus !== "ready") {
+      setToast("请先生成并确认当前完整提示词讨论稿内容");
+      return;
+    }
+    if (!bridge.connected || !bridge.pairingToken) {
+      setToast("本地桥接未启动，暂时不能提交独立审查");
+      return;
+    }
+    if (bridge.busy) {
+      setToast("另一个 Agent 任务正在处理，请等待完成");
+      return;
+    }
+    if (!selectedPromptReviewer?.available) {
+      setToast(selectedPromptReviewer?.reason || "所选 Reviewer 尚未配置");
+      return;
+    }
+    if (!mangaSourceRequestId) {
+      setToast("当前 Shot 缺少可读取的漫画原图，无法独立核对");
+      return;
+    }
+    const panelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [panelId, state.sourceMangaPanelAnnotations?.[panelId] || ""]));
+    const sourceRevision = buildPromptReviewRevision({
+      shotId: shot.id,
+      completePrompt: review.completePrompt,
+      completePromptSourceRevision: review.completePromptSourceRevision,
+      completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
+      reviewerId: selectedPromptReviewer.id,
+    });
+    setState((previous) => ({
+      ...previous,
+      reviews: previous.reviews.map((item, index) => index === state.currentShot ? {
+        ...item,
+        approved: false,
+        approvedAt: undefined,
+        promptReviewerId: selectedPromptReviewer.id,
+        promptReviewStatus: "reviewing" as PromptReviewStatus,
+        promptReviewReport: undefined,
+        promptReviewerModel: undefined,
+        promptReviewSourceRevision: sourceRevision,
+        promptReviewedAt: undefined,
+        promptReviewRequestId: undefined,
+        promptReviewError: undefined,
+      } : item),
+    }));
+    setBridge((current) => ({ ...current, busy: true }));
+    setToast(`已交给 ${selectedPromptReviewer.label} 的独立 Agent 审查；它不能改稿或批准`);
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/review-shot-prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
+        body: JSON.stringify({
+          operationMode: "strict-review",
+          projectUid: state.projectUid,
+          projectTitle: state.projectTitle,
+          generationModel,
+          globalSettings: state.globalSettings,
+          sourceMangaRequestId: mangaSourceRequestId,
+          sourceRevision,
+          completePromptSourceRevision: review.completePromptSourceRevision,
+          reviewerId: selectedPromptReviewer.id,
+          completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
+          completePrompt: review.completePrompt,
+          shot,
+          shotAnnotations: review.annotations,
+          panelAnnotations,
+        }),
+      });
+      const result = await response.json() as PromptReviewResult;
+      if (!response.ok) throw new Error(result.error || "独立审查失败");
+      if (result.status !== "completed" || result.shotId !== shot.id || result.reviewerId !== selectedPromptReviewer.id || result.sourceRevision !== sourceRevision) {
+        throw new Error("Reviewer 返回报告与当前提示词版本不一致");
+      }
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewSourceRevision === sourceRevision ? {
+          ...item,
+          approved: false,
+          approvedAt: undefined,
+          promptReviewStatus: "ready" as PromptReviewStatus,
+          promptReviewReport: result.report,
+          promptReviewerModel: result.reviewerModel?.trim() || undefined,
+          promptReviewedAt: result.reviewedAt,
+          promptReviewRequestId: result.requestId,
+          promptReviewError: undefined,
+        } : item),
+      }));
+      setToast(result.report.verdict === "needs-revision"
+        ? `${selectedPromptReviewer.label} 发现需要修改的问题，请先讨论或改稿`
+        : `${selectedPromptReviewer.label} 审查完成；报告只供讨论，仍需你亲自批准`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "独立审查失败";
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewSourceRevision === sourceRevision ? {
+          ...item,
+          promptReviewStatus: "error" as PromptReviewStatus,
+          promptReviewError: message,
+        } : item),
+      }));
+      setToast(message);
+    } finally {
+      setBridge((current) => ({ ...current, busy: false }));
+    }
+  }
+
+  function toggleStructurePanelGroup(panelIds: string[]) {
+    const allSelected = panelIds.every((panelId) => selectedStructurePanelIds.includes(panelId));
+    setSelectedStructurePanelIds((current) => allSelected
+      ? current.filter((panelId) => !panelIds.includes(panelId))
+      : [...new Set([...current, ...panelIds])]);
+    setPanelSelectionAnchor(panelIds[0] || "");
+  }
+
+  function undoStructureChange() {
+    const previousReviews = structureHistory[structureHistory.length - 1];
+    if (!previousReviews) {
+      setToast("还没有可撤销的镜头结构修改");
+      return;
+    }
+    const reviews = renumberStructure(previousReviews);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => ({
+      ...previous,
+      reviews,
+      currentShot: Math.min(previous.currentShot, reviews.length - 1),
+      sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+      assetPrompts: [],
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+      view: "script",
+    }));
+    setStructureHistory((history) => history.slice(0, -1));
+    setSelectedStructurePanelIds([]);
+    setPanelSelectionAnchor("");
+    setToast("已撤销上一步镜头结构修改");
+  }
+
+  function atomicPanelReview(origin: ShotReview, panelId: string): ShotReview {
+    const originShot = normalizeShot(origin.shot);
+    const sourceText = (originShot.sourceText || []).filter((line) => line.startsWith(`${panelId}｜`) || line.startsWith(`${panelId} `));
+    const sourceCopy = sourceText.map((line) => line.replace(new RegExp(`^${panelId}(?:｜|\\s+)`), "").trim()).filter(Boolean);
+    const dialogue = sourceCopy.filter((line) => !/^(拟声词|画面文字|画面符号)：/.test(line));
+    const panelStory = sourceCopy.join(" ") || `${panelId} 原作画格，剧情与构图以裁图为准。`;
+    const evidencedCharacters = (originShot.characters || []).filter((name) => sourceCopy.some((line) => line.includes(name)));
+    const evidencedProps = (originShot.props || []).filter((name) => sourceCopy.some((line) => line.includes(name)));
+    const panelShot: StoryboardShot = {
+      ...originShot,
+      shotUid: ensureShotUid("", state.projectUid, `panel::${panelId}`),
+      id: originShot.id,
+      title: `画格 ${panelId}`,
+      duration: 6,
+      timecode: "00:00–00:06",
+      sourcePanels: [panelId],
+      sourceText,
+      story: panelStory,
+      scene: `${panelId} 裁图中的原作空间；具体地点和时间重新按本格证据确认。`,
+      characters: evidencedCharacters,
+      props: evidencedProps,
+      omniReferences: [],
+      dialogue,
+      camera: "当前为逐格编组单位，沿用原作画格的景别、人物站位与视线方向。",
+      composition: `画格 ${panelId} 独立构图；不得把相邻画格内容提前混入。`,
+      action: "当前只锁定这一格的可见动作与状态；与其他画格组合成 Shot 后再统一生成完整动作链。",
+      continuity: [`只使用 ${panelId} 画格可见事实；不继承原 Shot 中已移到其他 Shot 的场景、人物、动作和结果。`],
+      negative: ["禁止混入当前 sourcePanels 之外的相邻画格剧情。"],
+      segments: [{ label: "0–6s", beat: panelStory, framing: "按原作画格构图", mustShow: [panelId] }],
+    };
+    return resetReviewForStructure(origin, panelShot);
+  }
+
+  function combinedPanelReview(panelReviews: ShotReview[]): ShotReview {
+    const panelShots = panelReviews.map((item) => normalizeShot(item.shot));
+    const unique = (values: string[]) => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+    const sourcePanels = unique(panelShots.flatMap((item) => item.sourcePanels || []));
+    const sourceText = unique(panelShots.flatMap((item) => item.sourceText || []));
+    const dialogue = unique(panelShots.flatMap((item) => item.dialogue || []));
+    const range = durationRangeFor(generationModel);
+    const timing = estimateShotTiming({
+      dialogue,
+      panelCount: sourcePanels.length,
+      assignedDuration: range.max,
+      model: generationModel,
+    });
+    const duration = Math.max(range.min, Math.min(range.max, timing.requiredSeconds));
+    const segments = panelShots.map((item, index): StoryboardSegment => {
+      const start = Number(((duration * index) / panelShots.length).toFixed(1));
+      const end = Number(((duration * (index + 1)) / panelShots.length).toFixed(1));
+      const format = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1);
+      return {
+        label: `${format(start)}–${format(end)}s`,
+        beat: item.story,
+        framing: item.camera || "按原作画格构图",
+        mustShow: item.sourcePanels?.length ? item.sourcePanels : [item.title],
+      };
+    });
+    const first = panelShots[0];
+    const combinedShot: StoryboardShot = {
+      ...first,
+      shotUid: ensureShotUid("", state.projectUid, `panels::${sourcePanels.join("|")}`),
+      id: first.id,
+      title: sourcePanels.length === 1 ? `画格 ${sourcePanels[0]}` : `画格组合 ${sourcePanels[0]}–${sourcePanels[sourcePanels.length - 1]}`,
+      duration,
+      timecode: structureTimecode(0, duration),
+      sourcePanels,
+      sourceText,
+      story: unique(panelShots.map((item) => item.story)).join(" "),
+      scene: unique(panelShots.map((item) => item.scene)).join("；"),
+      characters: unique(panelShots.flatMap((item) => item.characters)),
+      props: unique(panelShots.flatMap((item) => item.props)),
+      omniReferences: unique(panelShots.flatMap((item) => item.omniReferences)),
+      composition: `按原作阅读顺序组合 ${sourcePanels.join(" → ")}；每张画格都是一个独立构图节点。`,
+      camera: `按 ${sourcePanels.length} 个原作构图依次完成镜头节拍；构图切换与下方秒点严格对应。`,
+      action: `按 ${sourcePanels.join(" → ")} 的顺序生成完整动作链；按日语约7个有效字符/秒、中文约4字/秒，并允许对白与动作并行，估算需要 ${timing.requiredSeconds} 秒${timing.requiredSeconds > range.max ? `，超过当前模型 ${range.max} 秒上限，需压缩或拆分` : `，当前设置为 ${duration} 秒`}。`,
+      dialogue,
+      continuity: unique(panelShots.flatMap((item) => item.continuity)),
+      negative: unique([
+        ...panelShots.flatMap((item) => item.negative),
+        `禁止引用 ${sourcePanels[0]} 之前或 ${sourcePanels[sourcePanels.length - 1]} 之后的相邻 Shot 剧情。`,
+      ]),
+      segments,
+    };
+    return resetReviewForStructure(panelReviews[0], combinedShot);
+  }
+
+  function applyPanelGrouping(mode: "combine" | "split" | "exclude", panelIds = selectedStructurePanelIds) {
+    if (structureConfirmed) {
+      setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
+      return;
+    }
+    const selected = new Set(panelIds);
+    if (!selected.size) {
+      setToast("请先点击选择漫画画格");
+      return;
+    }
+    const entries = state.reviews.flatMap((origin, originIndex) => (origin.shot.sourcePanels || []).map((panelId) => ({
+      panelId,
+      origin,
+      originIndex,
+      atomic: atomicPanelReview(origin, panelId),
+    })));
+    const selectedIndexes = entries.map((entry, index) => selected.has(entry.panelId) ? index : -1).filter((index) => index >= 0);
+    if (mode === "combine" && selectedIndexes.some((index, order) => order > 0 && index !== selectedIndexes[order - 1] + 1)) {
+      setToast("只能把阅读顺序中相邻的画格组合成一个 Shot");
+      return;
+    }
+    const firstSelected = selectedIndexes[0];
+    const lastSelected = selectedIndexes[selectedIndexes.length - 1];
+    const groups: typeof entries[] = [];
+    let cursor = 0;
+    while (cursor < entries.length) {
+      if (mode === "exclude" && selected.has(entries[cursor].panelId)) {
+        cursor += 1;
+        continue;
+      }
+      if (mode === "combine" && cursor === firstSelected) {
+        groups.push(entries.slice(firstSelected, lastSelected + 1));
+        cursor = lastSelected + 1;
+        continue;
+      }
+      if (mode === "split" && selected.has(entries[cursor].panelId)) {
+        groups.push([entries[cursor]]);
+        cursor += 1;
+        continue;
+      }
+      const originIndex = entries[cursor].originIndex;
+      const group = [entries[cursor]];
+      cursor += 1;
+      while (cursor < entries.length
+        && entries[cursor].originIndex === originIndex
+        && !(mode === "combine" && cursor >= firstSelected && cursor <= lastSelected)
+        && !(mode === "split" && selected.has(entries[cursor].panelId))
+        && !(mode === "exclude" && selected.has(entries[cursor].panelId))) {
+        group.push(entries[cursor]);
+        cursor += 1;
+      }
+      groups.push(group);
+    }
+    if (!groups.length) {
+      setToast("项目至少需要保留一个漫画画格");
+      return;
+    }
+    const reviews = renumberStructure(groups.map((group) => {
+      const originPanels = group[0].origin.shot.sourcePanels || [];
+      const groupPanels = group.map((entry) => entry.panelId);
+      const isWholeOrigin = group.every((entry) => entry.originIndex === group[0].originIndex)
+        && originPanels.length === groupPanels.length
+        && originPanels.every((panelId, index) => panelId === groupPanels[index]);
+      return isWholeOrigin ? group[0].origin : combinedPanelReview(group.map((entry) => entry.atomic));
+    }));
+    const targetIndex = Math.max(0, groups.findIndex((group) => group.some((entry) => selected.has(entry.panelId))));
+    setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => ({
+      ...previous,
+      reviews,
+      currentShot: targetIndex,
+      sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+      assetPrompts: [],
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+      view: "script",
+    }));
+    setSelectedStructurePanelIds([]);
+    setPanelSelectionAnchor("");
+    setToast(mode === "combine"
+      ? `已把 ${selected.size} 张相邻画格组合为一个 Shot`
+      : mode === "split"
+        ? `已把 ${selected.size} 张画格拆成独立编组单位`
+        : `已从成片结构中排除 ${selected.size} 张画格；原漫画文件仍保留`);
+  }
+
+  function moveSelectedPanelsToAdjacent(direction: -1 | 1) {
+    if (!selectedStructurePanelIds.length) {
+      setToast("请先选择要移动的漫画画格");
+      return;
+    }
+    const selectedEntries = structurePanelEntries.filter((entry) => selectedStructurePanelIds.includes(entry.panelId));
+    const reviewIndexes = [...new Set(selectedEntries.map((entry) => entry.reviewIndex))];
+    if (reviewIndexes.length !== 1) {
+      setToast("移动画格时，请只选择同一个 Shot 里的相邻画格");
+      return;
+    }
+    const originIndex = reviewIndexes[0];
+    const targetIndex = originIndex + direction;
+    const targetPanels = state.reviews[targetIndex]?.shot.sourcePanels || [];
+    const originPanels = state.reviews[originIndex]?.shot.sourcePanels || [];
+    if (!targetPanels.length) {
+      setToast(direction < 0 ? "前面没有可并入的 Shot" : "后面没有可并入的 Shot");
+      return;
+    }
+    const selectedSet = new Set(selectedStructurePanelIds);
+    const selectedPositions = originPanels.map((panelId, index) => selectedSet.has(panelId) ? index : -1).filter((index) => index >= 0);
+    const touchesBoundary = direction < 0
+      ? selectedPositions[0] === 0
+      : selectedPositions[selectedPositions.length - 1] === originPanels.length - 1;
+    if (!touchesBoundary) {
+      setToast(direction < 0 ? "要并入前一组，请选择当前 Shot 最前面的连续画格" : "要并入后一组，请选择当前 Shot 最后面的连续画格");
+      return;
+    }
+    applyPanelGrouping("combine", direction < 0 ? [...targetPanels, ...selectedStructurePanelIds] : [...selectedStructurePanelIds, ...targetPanels]);
+  }
+
+  function mergeCurrentWithNext() {
+    if (structureConfirmed) {
+      setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
+      return;
+    }
+    const nextReview = state.reviews[state.currentShot + 1];
+    if (!nextReview) {
+      setToast("已经是最后一个 Shot，不能再向后合并");
+      return;
+    }
+    const currentShot = normalizeShot(state.reviews[state.currentShot].shot);
+    const nextShot = normalizeShot(nextReview.shot);
+    const combinedDuration = Math.round(currentShot.duration + nextShot.duration);
+    const range = durationRangeFor(generationModel);
+    if (combinedDuration > range.max) {
+      setToast(`合并后约 ${combinedDuration} 秒，超过 ${range.max} 秒；请保留为两个 Shot`);
+      return;
+    }
+    const unique = (values: string[]) => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+    const omniReferences = unique([...(currentShot.omniReferences || []), ...(nextShot.omniReferences || [])]);
+    if (omniReferences.length > referenceLimitFor(generationModel)) {
+      setToast("合并后的全能参考超过当前模型上限，不能直接合并");
+      return;
+    }
+    const makeSegment = (source: StoryboardShot, label: string): StoryboardSegment => ({
+      label,
+      beat: source.story,
+      framing: source.composition,
+      mustShow: unique([...source.characters, ...source.props]),
+    });
+    const sourceSegments = currentShot.segments.length ? currentShot.segments : [makeSegment(currentShot, "A")];
+    const followingSegments = nextShot.segments.length ? nextShot.segments : [makeSegment(nextShot, "B")];
+    const segments = [...sourceSegments, ...followingSegments].map((segment, index) => ({
+      ...segment,
+      label: String.fromCharCode(65 + index),
+    }));
+    const mergedShot: StoryboardShot = {
+      ...currentShot,
+      title: `${currentShot.title}／${nextShot.title}`,
+      duration: Math.max(6, combinedDuration),
+      sourceText: unique([...(currentShot.sourceText || []), ...(nextShot.sourceText || [])]),
+      sourcePanels: unique([...(currentShot.sourcePanels || []), ...(nextShot.sourcePanels || [])]),
+      story: `${currentShot.story} 随后，${nextShot.story}`,
+      scene: currentShot.scene === nextShot.scene ? currentShot.scene : `${currentShot.scene}；随后进入${nextShot.scene}`,
+      characters: unique([...currentShot.characters, ...nextShot.characters]),
+      props: unique([...currentShot.props, ...nextShot.props]),
+      omniReferences,
+      composition: `${currentShot.composition}；随后${nextShot.composition}`,
+      camera: `${currentShot.camera}；随后${nextShot.camera}`,
+      action: `${currentShot.action}；随后${nextShot.action}`,
+      dialogue: unique([...currentShot.dialogue, ...nextShot.dialogue]),
+      continuity: unique([...currentShot.continuity, ...nextShot.continuity]),
+      negative: unique([...currentShot.negative, ...nextShot.negative]),
+      segments,
+    };
+    const mergeAnnotations = Object.fromEntries(annotationSections.map((section) => {
+      const values = [state.reviews[state.currentShot].annotations[section.id], nextReview.annotations[section.id]].map((value) => value?.trim()).filter(Boolean);
+      return [section.id, values.join("\n")];
+    })) as Record<SectionId, string>;
+    const mergedReview = { ...resetReviewForStructure(state.reviews[state.currentShot], mergedShot), annotations: mergeAnnotations };
+    setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => {
+      const reviews = renumberStructure([
+        ...previous.reviews.slice(0, previous.currentShot),
+        mergedReview,
+        ...previous.reviews.slice(previous.currentShot + 2),
+      ]);
+      return {
+        ...previous,
+        reviews,
+        sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+        assetPrompts: [],
+        structureStatus: "draft",
+        structureConfirmedAt: undefined,
+        view: "script",
+      };
+    });
+    setToast(`已合并为一个 ${Math.max(6, combinedDuration)} 秒 Shot；后续镜头已自动重编号`);
+  }
+
+  function deleteCurrentShot() {
+    if (structureConfirmed) {
+      setToast("镜头结构已经确认；需要调整时请先重新打开结构编辑");
+      return;
+    }
+    if (state.reviews.length <= 1) {
+      setToast("项目至少需要保留一个 Shot");
+      return;
+    }
+    if (!window.confirm(`删除 Shot ${shot.id}「${shot.title}」？来源漫画不会删除，后续镜头会自动重编号。`)) return;
+    setStructureHistory((history) => [...history.slice(-19), state.reviews]);
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => {
+      const reviews = renumberStructure(previous.reviews.filter((_, index) => index !== previous.currentShot));
+      return {
+        ...previous,
+        reviews,
+        currentShot: Math.min(previous.currentShot, reviews.length - 1),
+        sourceDocument: sourceDocumentFromShots(reviews.map((item) => item.shot)),
+        assetPrompts: [],
+        structureStatus: "draft",
+        structureConfirmedAt: undefined,
+        view: "script",
+      };
+    });
+    setToast("当前 Shot 已删除；来源漫画仍保留，可返回漫画拆解结果恢复");
+  }
+
+  function confirmedAssetPrompts(reviews: ShotReview[], settings: GlobalSettings): ProjectAssetPrompt[] {
+    const prompts: ProjectAssetPrompt[] = [];
+    reviews.forEach((item) => {
+      const targetShot = normalizeShot(item.shot);
+      deriveShotAssets(targetShot).forEach((asset) => {
+        const sourcePanels = targetShot.sourcePanels || [];
+        prompts.push({
+          id: `${targetShot.id}::${asset.id}`,
+          kind: asset.kind,
+          name: asset.name,
+          sourceObservation: targetShot.sourcePanels?.length
+            ? `Shot ${targetShot.id} 批准后独立建立；来源画格：${targetShot.sourcePanels.join("、")}。外观细节以本镜原作裁图为准。`
+            : `Shot ${targetShot.id} 批准后独立建立；外观细节待补充参考。`,
+          prompt: defaultShotAssetPrompt(asset, targetShot, settings),
+          negative: [...targetShot.negative],
+          sourcePanels,
+          shotIds: [targetShot.id],
+        });
+      });
+    });
+    return prompts;
+  }
+
+  function reopenShotStructure() {
+    if (!window.confirm("重新编辑镜头结构会清空现有资产提示词、出图和审批状态；来源漫画与脚本内容会保留。继续吗？")) return;
+    setArtworkRecord({ shotId: "", dataUrls: [] });
+    setState((previous) => ({
+      ...previous,
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
+      assetPrompts: [],
+      view: "script",
+      reviews: renumberStructure(previous.reviews),
+    }));
+    setToast("已重新打开镜头结构编辑");
   }
 
   function selectDirectorView(key: string) {
@@ -1825,7 +3946,7 @@ export default function Home() {
 
   async function lockWhiteboxReference(dataUrl: string) {
     const key = selectedDirectorView.key;
-    await putArtworks(whiteboxReferenceStorageKey(projectStorageTitle, shot.id, key), [dataUrl]);
+    await putArtworks(artworkStorageScope, whiteboxReferenceStorageKey(projectStorageTitle, shot.id, key), [dataUrl]);
     updateReview((current) => ({
       ...current,
       whiteboxReferences: {
@@ -1846,7 +3967,7 @@ export default function Home() {
 
   async function unlockWhiteboxReference() {
     const key = selectedDirectorView.key;
-    await deleteArtworks(whiteboxReferenceStorageKey(projectStorageTitle, shot.id, key));
+    await deleteArtworks(artworkStorageScope, whiteboxReferenceStorageKey(projectStorageTitle, shot.id, key));
     updateReview((current) => {
       const whiteboxReferences = { ...(current.whiteboxReferences || {}) };
       delete whiteboxReferences[key];
@@ -1922,11 +4043,13 @@ export default function Home() {
 
   function applyLoadedScript(projectTitle: string, shots: StoryboardShot[], sourceDocument = "", sourceName = "") {
     const normalizedShots = shots.map((item) => normalizeShot(item));
+    const projectUid = ensureProjectUid("", `${projectTitle.trim() || "未命名脚本"}::${sourceName || "载入脚本"}::${Date.now()}`);
     setArtworkRecord({ shotId: "", dataUrls: [] });
     setLastSubmission(undefined);
     setLastBatchSubmissions({});
     setState({
       stateSchemaVersion,
+      projectUid,
       projectTitle: projectTitle.trim() || "未命名脚本",
       sourceDocument: sourceDocument.trim() || sourceDocumentFromShots(normalizedShots),
       sourceName: sourceName.trim() || "载入脚本（原文依据由镜头恢复，需复核）",
@@ -1936,22 +4059,24 @@ export default function Home() {
       globalSettings: cloneGlobalSettings(),
       globalAnnotation: "",
       globalStatus: "applied",
+      structureStatus: "confirmed",
+      structureConfirmedAt: new Date().toISOString(),
       currentShot: 0,
       view: "script",
-      reviews: createReviews(normalizedShots, projectTitle.trim() === defaultProjectTitle),
+      reviews: createReviews(normalizedShots, projectTitle.trim() === defaultProjectTitle, projectUid),
     });
     setNaturalScript("");
     setShowLoader(false);
     setToast(`已载入《${projectTitle.trim() || "未命名脚本"}》，共 ${shots.length} 个 Shot`);
   }
 
-  async function loadScriptThroughGpt(content: string, fileName: string, sourceType: "file" | "natural-language") {
+  async function loadScriptThroughWritingModel(content: string, fileName: string, sourceType: "file" | "natural-language") {
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("GPT直连未启动，暂时不能解析自然语言脚本");
+      setToast("Pi Agent Harness 未启动，暂时不能解析自然语言脚本");
       return;
     }
     if (bridge.busy) {
-      setToast("GPT正在处理当前任务，完成后才能载入新脚本");
+      setToast("写作模型正在处理当前任务，完成后才能载入新脚本");
       return;
     }
     if (!content.trim()) {
@@ -1961,11 +4086,11 @@ export default function Home() {
     setLoadingScript(true);
     setBridge((current) => ({ ...current, busy: true }));
     try {
-      const response = await fetch(`${bridgeBase}/load-script`, {
+      const response = await bridgeFetch(`${bridgeBase}/load-script`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-ShotDirector-Token": bridge.pairingToken,
+          "X-Manjing-Token": bridge.pairingToken,
         },
         body: JSON.stringify({
           fileName,
@@ -1977,9 +4102,9 @@ export default function Home() {
         }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "GPT解析脚本失败");
+      if (!response.ok) throw new Error(result.error || "写作模型解析脚本失败");
       if (!result.projectTitle || !Array.isArray(result.shots) || !result.shots.length || !result.shots.every(isStoryboardShot)) {
-        throw new Error("GPT返回的脚本格式不完整");
+        throw new Error("写作模型返回的脚本格式不完整");
       }
       applyLoadedScript(result.projectTitle, result.shots, content, fileName);
     } catch (error) {
@@ -2019,14 +4144,14 @@ export default function Home() {
         applyLoadedScript(title, shots, originalDocument, originalName);
         return;
       }
-      await loadScriptThroughGpt(content, file.name, "file");
+      await loadScriptThroughWritingModel(content, file.name, "file");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "读取脚本文件失败");
     }
   }
 
   function loadNaturalScript() {
-    void loadScriptThroughGpt(naturalScript, "GPT自然语言输入", "natural-language");
+    void loadScriptThroughWritingModel(naturalScript, "写作模型自然语言输入", "natural-language");
   }
 
   function openGlobalSettings() {
@@ -2048,8 +4173,13 @@ export default function Home() {
   }
 
   function openAssetLedger() {
+    const firstApproved = state.reviews.find((item) => item.approved);
+    if (!firstApproved) {
+      setToast("先批准至少一个 Shot，再准备该 Shot 的资产");
+      return;
+    }
     setShowLoader(false);
-    setAssetSelectedShotId(shot.id);
+    setAssetSelectedShotId(review.approved ? shot.id : firstApproved.shot.id);
     setState((previous) => ({ ...previous, workspaceMode: "assets" }));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -2103,12 +4233,8 @@ export default function Home() {
   }
 
   async function copyVideoPrompt(targetPackage: VideoGenerationPackage) {
-    try {
-      await navigator.clipboard.writeText(targetPackage.prompt);
-      setToast(`Shot ${targetPackage.shotId} 视频提示词已复制`);
-    } catch {
-      setToast("无法写入剪贴板，请手动复制提示词");
-    }
+    const copied = await copyTextToClipboard(targetPackage.prompt);
+    setToast(copied ? `Shot ${targetPackage.shotId} 视频提示词已复制` : "无法写入剪贴板，请手动复制提示词");
   }
 
   function downloadVideoPackage(targetPackage: VideoGenerationPackage) {
@@ -2125,6 +4251,45 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  function downloadProjectManifest() {
+    const packagesByShot = new Map(videoPackages.map((item) => [item.shotId, item]));
+    const payload = {
+      ...buildProjectManifest({
+        projectUid: state.projectUid,
+        projectTitle: state.projectTitle,
+        sourceName: state.sourceName,
+        sourceMangaRequestId: state.sourceMangaRequestId,
+        generationModel,
+        pipeline: productionPipeline,
+        shots: state.reviews.map((item) => {
+          const videoPackage = packagesByShot.get(item.shot.id);
+          return {
+            shotUid: item.shot.shotUid,
+            displayNumber: item.shot.id,
+            title: item.shot.title,
+            sourcePanels: item.shot.sourcePanels || [],
+            scriptStatus: item.scriptStatus,
+            completePromptStatus: item.completePromptStatus || "empty",
+            promptReviewStatus: item.promptReviewStatus || "empty",
+            promptReviewVerdict: item.promptReviewReport?.verdict,
+            approved: item.approved,
+            approvedAt: item.approvedAt,
+            videoPackageStatus: videoPackage?.status || "blocked",
+            sourceRevision: videoPackage?.sourceRevision,
+          };
+        }),
+      }),
+      exportedAt: new Date().toISOString(),
+    };
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${state.projectTitle}-manifest.json`.replace(/[\\/:*?"<>|]/g, "-");
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setToast("项目清单已导出；它将作为后续项目包与 LibTV 生视频的身份依据");
+  }
+
   function returnToShots() {
     setState((previous) => ({ ...previous, workspaceMode: "shots" }));
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2132,7 +4297,7 @@ export default function Home() {
 
   function createMaterialDraft(result: MediaAnalysisResult, targetShotId?: string) {
     if (!result.projectTitle?.trim() || !Array.isArray(result.shots) || !result.shots.length || !result.shots.every(isStoryboardShot)) {
-      setToast("素材分析结果还不能创建镜导草稿");
+      setToast("素材分析结果还不能创建漫镜草稿");
       return;
     }
     const materialShotIds = result.shots.map((shot) => shot.id);
@@ -2141,11 +4306,12 @@ export default function Home() {
       && new Set(materialShotIds).size === materialShotIds.length
       && materialShotIds.every((shotId, index) => index === 0 || shotIdCollator.compare(materialShotIds[index - 1], shotId) < 0);
     if (!validShotIds) {
-      setToast("素材分析结果的 Shot 编号格式、顺序或唯一性无效，暂不能创建镜导草稿");
+      setToast("素材分析结果的 Shot 编号格式、顺序或唯一性无效，暂不能创建漫镜草稿");
       return;
     }
     const unique = (values: string[]) => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
     const analysisAssetPrompts = normalizeProjectAssetPrompts((result as MediaAnalysisResult & { assetPrompts?: unknown }).assetPrompts);
+    const analysisMangaPanels = mangaPanelUnderstandingsFrom(result);
     const artStyles = unique(result.shots.map((shot) => shot.artStyle));
     const draftGlobalSettings: GlobalSettings = {
       storyBackground: result.projectBackground?.trim() || state.globalSettings.storyBackground || sourceGlobalSettings.storyBackground,
@@ -2158,7 +4324,7 @@ export default function Home() {
       storyboardImageStyle: sourceGlobalSettings.storyboardImageStyle,
       modelRules: generationModel === "seedance-2.5"
         ? ["Seedance 2.5：每镜 4–30 秒，最多 50 个全能参考。"]
-        : ["Seedance 2.0：每镜 4–15 秒，最多 9 个全能参考。"],
+        : ["Seedance 2.0：每镜 6–15 秒，最多 9 个全能参考。"],
       negative: unique(result.shots.flatMap((shot) => shot.negative)),
     };
     const targetShotIndex = Math.max(0, targetShotId ? result.shots.findIndex((shot) => shot.id === targetShotId) : 0);
@@ -2166,6 +4332,7 @@ export default function Home() {
     const draftStorageKey = `${materialDraftStoragePrefix}${draftId}`;
     let draftState: ReviewState = {
       stateSchemaVersion,
+      projectUid: ensureProjectUid("", `manga-draft::${draftId}`),
       projectTitle: result.projectTitle.trim(),
       sourceDocument: sourceDocumentFromShots(result.shots),
       sourceName: "素材拉片／漫画拆解结果（依据待复核）",
@@ -2173,16 +4340,21 @@ export default function Home() {
       generationModel,
       workspaceMode: "shots",
       globalSettings: draftGlobalSettings,
-      assetPrompts: analysisAssetPrompts,
+      assetPrompts: [],
       globalAnnotation: "",
       globalStatus: "applied",
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
       sourceMangaRequestId: result.kind === "manga" && /^[a-f0-9-]{36}$/i.test(result.requestId || "") ? result.requestId : undefined,
+      sourceMangaPanels: analysisMangaPanels,
+      sourceMangaPanelUnderstandingVersion: mangaPanelUnderstandingVersion,
+      sourceMangaPanelAnnotations: {},
       currentShot: targetShotIndex,
       view: "script",
-      reviews: createReviews(result.shots, false),
+      reviews: createReviews(result.shots, false, ensureProjectUid("", `manga-draft::${draftId}`)),
     };
     try {
-      const existing = localStorage.getItem(draftStorageKey);
+      const existing = scopedBrowserStorage.getItem(draftStorageKey);
       if (existing) {
         const parsed = repairKnownMangaDraftState(JSON.parse(existing) as ReviewState, draftId);
         const sameShotStructure = parsed.reviews?.length === result.shots.length
@@ -2190,26 +4362,40 @@ export default function Home() {
             parsed.reviews[index]?.shot.id === sourceShot.id
           ));
         if (parsed.projectTitle === result.projectTitle.trim() && sameShotStructure) {
+          const parsedProjectUid = ensureProjectUid(parsed.projectUid, `manga-draft::${draftId}`);
           draftState = repairKnownMangaDraftState({
             ...parsed,
+            projectUid: parsedProjectUid,
             sourceMangaRequestId: result.kind === "manga" ? result.requestId || parsed.sourceMangaRequestId : undefined,
+            sourceMangaPanels: result.kind === "manga" ? analysisMangaPanels : parsed.sourceMangaPanels,
+            sourceMangaPanelUnderstandingVersion: result.kind === "manga"
+              ? mangaPanelUnderstandingVersion
+              : parsed.sourceMangaPanelUnderstandingVersion,
             workspaceMode: "shots",
             currentShot: targetShotIndex,
             view: "script",
-            assetPrompts: mergeProjectAssetPrompts(parsed.assetPrompts, analysisAssetPrompts),
-            reviews: parsed.reviews.map((review, index) => ({
-              ...review,
-              shot: {
-                ...review.shot,
-                sourcePanels: result.shots[index].sourcePanels,
-                sourceText: [...new Set([...(review.shot.sourceText || []), ...(result.shots[index].sourceText || [])])],
-              },
-            })),
+            assetPrompts: parsed.structureStatus === "confirmed"
+              ? mergeProjectAssetPrompts(parsed.assetPrompts, analysisAssetPrompts)
+              : [],
+            reviews: parsed.reviews.map((review, index) => parsed.structureStatus === "draft"
+              ? {
+                  ...createReview(result.shots[index], false, parsedProjectUid, `${index}::${result.shots[index].id}`),
+                  annotations: { ...emptyAnnotations(), ...(review.annotations || {}) },
+                }
+              : {
+                  ...review,
+                  shot: {
+                    ...review.shot,
+                    sourcePanels: result.shots[index].sourcePanels,
+                    sourceText: [...new Set([...(review.shot.sourceText || []), ...(result.shots[index].sourceText || [])])],
+                  },
+                }),
           }, draftId);
         }
       }
       draftState = repairKnownMangaDraftState(draftState, draftId);
-      localStorage.setItem(draftStorageKey, JSON.stringify(draftState));
+      scopedBrowserStorage.setItem(draftStorageKey, JSON.stringify(draftState));
+      scopedBrowserStorage.setItem(recentMaterialDraftKey, draftId);
     } catch {
       setToast("无法保存漫画分镜草稿，请检查浏览器本地存储空间");
       return;
@@ -2223,6 +4409,9 @@ export default function Home() {
       ...previous,
       globalStatus: "draft",
       globalSettings: { ...previous.globalSettings, [field]: splitLines(value) },
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
     }));
   }
 
@@ -2231,6 +4420,9 @@ export default function Home() {
       ...previous,
       globalStatus: "draft",
       globalSettings: { ...previous.globalSettings, [field]: value },
+      reviews: previous.reviews.map(invalidateCompletePrompt),
+      structureStatus: "draft",
+      structureConfirmedAt: undefined,
     }));
   }
 
@@ -2244,15 +4436,15 @@ export default function Home() {
       return;
     }
     if (bridge.busy) {
-      setToast("GPT正在处理当前任务，完成后再保存全局设定");
+      setToast("写作模型正在处理当前任务，完成后再保存全局设定");
       return;
     }
     setSavingGlobalSettings(true);
     const normalizedSettings = cloneGlobalSettings(state.globalSettings);
     try {
-      const response = await fetch(`${bridgeBase}/source-global-settings`, {
+      const response = await bridgeFetch(`${bridgeBase}/source-global-settings`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
         body: JSON.stringify({ projectTitle: state.projectTitle, workspaceScope, settings: normalizedSettings }),
       });
       const result = await response.json();
@@ -2281,11 +4473,11 @@ export default function Home() {
       return;
     }
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("GPT直连未启动，请保持本地桥接服务运行");
+      setToast("Pi Agent Harness 未启动，请保持本地桥接服务运行");
       return;
     }
     if (bridge.busy) {
-      setToast(bridge.activeJob?.type === "global-annotation" ? "全局批注已经上传，GPT正在处理" : "GPT正在处理另一个任务，完成后再发送全局批注");
+      setToast(bridge.activeJob?.type === "global-annotation" ? "全局批注已经上传，写作模型正在处理" : "写作模型正在处理另一个任务，完成后再发送全局批注");
       return;
     }
     const submittedAt = new Date().toISOString();
@@ -2294,9 +4486,9 @@ export default function Home() {
     setState((previous) => ({ ...previous, globalStatus: "sending", globalSummary: "全局批注已发送，正在整理项目设定" }));
     setBridge((current) => ({ ...current, busy: true }));
     try {
-      const response = await fetch(`${bridgeBase}/global-annotations`, {
+      const response = await bridgeFetch(`${bridgeBase}/global-annotations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
         body: JSON.stringify({
           projectTitle: state.projectTitle,
           workspaceScope,
@@ -2307,14 +4499,17 @@ export default function Home() {
       });
       const result = await response.json() as { settings?: GlobalSettings; summary?: string; submittedAt?: string; error?: string };
       if (!response.ok) throw new Error(result.error || "全局批注处理失败");
-      if (!isGlobalSettings(result.settings) || result.submittedAt !== submittedAt) throw new Error("GPT返回的全局设定与本次提交不匹配");
+      if (!isGlobalSettings(result.settings) || result.submittedAt !== submittedAt) throw new Error("写作模型返回的全局设定与本次提交不匹配");
       setState((previous) => ({
         ...previous,
         globalSettings: cloneGlobalSettings(result.settings),
         globalAnnotation: "",
         globalStatus: "applied",
-        globalSummary: result.summary || (materialDraftMode ? "GPT已应用全局批注；主项目源文件未修改" : "GPT已应用全局批注并反推源文件"),
+        globalSummary: result.summary || (materialDraftMode ? "写作模型已应用全局批注；主项目源文件未修改" : "写作模型已应用全局批注并反推源文件"),
         globalUpdatedAt: new Date().toISOString(),
+        reviews: previous.reviews.map(invalidateCompletePrompt),
+        structureStatus: "draft",
+        structureConfirmedAt: undefined,
       }));
       setToast(materialDraftMode ? "全局批注已应用到独立素材草稿；主项目未修改" : "全局批注已应用并反推独立源文件；单镜 Shot 未被混入本次任务");
     } catch (error) {
@@ -2337,11 +4532,11 @@ export default function Home() {
       return;
     }
     if (bridge.busy) {
-      setToast(bridge.activeJob?.type === "annotation-batch" ? "全片批注已经上传，GPT 正在处理" : "GPT正在处理另一个任务，完成后再上传全片批注");
+      setToast(bridge.activeJob?.type === "annotation-batch" ? "全片批注已经上传，写作模型正在处理" : "写作模型正在处理另一个任务，完成后再上传全片批注");
       return;
     }
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("GPT直连未启动，请保持本地桥接服务运行");
+      setToast("Pi Agent Harness 未启动，请保持本地桥接服务运行");
       return;
     }
     const invalidReferences = targets.filter((item) => item.shot.omniReferences.length > referenceLimit).map((item) => item.shot.id);
@@ -2381,9 +4576,9 @@ export default function Home() {
     setBridge((current) => ({ ...current, busy: true }));
     let responseReceived = false;
     try {
-      const response = await fetch(`${bridgeBase}/annotations-batch`, {
+      const response = await bridgeFetch(`${bridgeBase}/annotations-batch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
         body: JSON.stringify({
           projectTitle: state.projectTitle,
           workspaceScope,
@@ -2401,12 +4596,12 @@ export default function Home() {
       responseReceived = true;
       const result = await response.json() as AnnotationBatchResult & { error?: string };
       if (!response.ok) throw new Error(result.error || "全片批改失败");
-      if (!Array.isArray(result.shots) || result.shots.length !== targets.length || !result.shots.every(isStoryboardShot)) throw new Error("GPT返回的全片批改结果不完整");
-      if (result.submittedAt !== submittedAt) throw new Error("GPT返回结果与本次全片批注不匹配");
+      if (!Array.isArray(result.shots) || result.shots.length !== targets.length || !result.shots.every(isStoryboardShot)) throw new Error("写作模型返回的全片批改结果不完整");
+      if (result.submittedAt !== submittedAt) throw new Error("写作模型返回结果与本次全片批注不匹配");
       setState((previous) => applyBatchAnnotationResultToState(previous, result, submittedAt));
       setToast(materialDraftMode
-        ? `GPT已应用 ${result.shots.length} 个 Shot 的批注到独立素材草稿；主项目未修改，现在请逐镜签字盖章`
-        : `GPT已应用 ${result.shots.length} 个 Shot 的批注并反推源文件；现在请逐镜签字盖章`);
+        ? `写作模型已应用 ${result.shots.length} 个 Shot 的批注到独立素材草稿；主项目未修改，现在请逐镜签字盖章`
+        : `写作模型已应用 ${result.shots.length} 个 Shot 的批注并反推源文件；现在请逐镜签字盖章`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "全片批改失败";
       if (!responseReceived) {
@@ -2416,10 +4611,10 @@ export default function Home() {
             ? { ...item, summary: "连接中断，正在自动查询本次批改结果" }
             : item),
         }));
-        setToast("连接中断，但本次批改可能仍在后台完成；镜导会按本次提交编号自动取回，勿重复上传");
+        setToast("连接中断，但本次批改可能仍在后台完成；漫镜会按本次提交编号自动取回，勿重复上传");
         return;
       }
-      const busyConflict = message.includes("GPT正在处理另一个任务");
+      const busyConflict = message.includes("写作模型正在处理另一个任务");
       setState((previous) => {
         const reviews = previous.reviews.map((item) => item.pendingSubmission?.submittedAt === submittedAt && item.scriptStatus === "sending" ? {
           ...item,
@@ -2442,11 +4637,15 @@ export default function Home() {
       return;
     }
     if (review.scriptStatus === "sending" || annotationBusy) {
-      setToast("GPT 还在批改当前 Shot，完成后才能盖章");
+      setToast("写作模型还在批改当前 Shot，完成后才能盖章");
       return;
     }
     if (noteCount > 0) {
       setToast("当前 Shot 仍有未上传批注；请先点“批改一键上传”");
+      return;
+    }
+    if (!promptReviewIsCurrent) {
+      setToast("当前完整提示词还没有通过独立 Reviewer 审查，或审查报告已过期");
       return;
     }
     if (referencesOverLimit || durationOutOfRange) {
@@ -2465,12 +4664,12 @@ export default function Home() {
           return;
         }
         if (bridge.busy) {
-          setToast("GPT正在处理全片批改，完成后再给当前 Shot 盖章");
+          setToast("写作模型正在处理全片批改，完成后再给当前 Shot 盖章");
           return;
         }
-        const response = await fetch(`${bridgeBase}/source-shot`, {
+        const response = await bridgeFetch(`${bridgeBase}/source-shot`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
+          headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
           body: JSON.stringify({ projectTitle: state.projectTitle, workspaceScope, generationModel, shot: targetShot }),
         });
         const result = await response.json();
@@ -2511,10 +4710,10 @@ export default function Home() {
       ? result.artworkUrls
       : result.artworkUrl ? [result.artworkUrl] : [];
     if (!artworkUrls.length) throw new Error("LibTV 没有返回可读取的图片地址");
-    const imageResponses = await Promise.all(artworkUrls.map((url) => fetch(url, { cache: "no-store" })));
-    if (imageResponses.some((response) => !response.ok)) throw new Error("LibTV 已生成图片，但镜导读取失败");
+    const imageResponses = await Promise.all(artworkUrls.map((url) => bridgeFetch(url, { cache: "no-store" })));
+    if (imageResponses.some((response) => !response.ok)) throw new Error("LibTV 已生成图片，但漫镜读取失败");
     const dataUrls = await Promise.all(imageResponses.map(async (response) => blobToDataUrl(await response.blob())));
-    await putArtworks(artworkStorageKey(targetProjectTitle, targetShotId), dataUrls);
+    await putArtworks(artworkStorageScope, artworkStorageKey(targetProjectTitle, targetShotId), dataUrls);
     const artworkNames = Array.isArray(result.artworkFiles) && result.artworkFiles.length
       ? result.artworkFiles
       : [result.artworkFile || `shot-${targetShotId}.png`];
@@ -2547,20 +4746,42 @@ export default function Home() {
 
   async function loginLibtv() {
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("镜导本地桥接尚未启动，暂时不能登录 LibTV");
+      setToast("漫镜本地桥接尚未启动，暂时不能登录 LibTV");
       return;
     }
     if (loggingIntoLibtv || bridge.libtv?.loginBusy) return;
     setLoggingIntoLibtv(true);
-    setToast("已打开 LibTV 登录页，请在浏览器完成登录");
+    setToast(bridge.serverMode ? "正在连接 LibTV 手机号登录" : "已打开 LibTV 登录页，请在浏览器完成登录");
     try {
-      const response = await fetch(`${bridgeBase}/libtv/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
-        body: "{}",
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "LibTV 登录失败");
+      const requestLogin = async (payload: Record<string, unknown>) => {
+        const response = await bridgeFetch(`${bridgeBase}/libtv/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken as string },
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok && response.status !== 202) throw new Error(result.error || "LibTV 登录失败");
+        return result;
+      };
+      let result;
+      if (bridge.serverMode) {
+        const phone = window.prompt("输入用于 LibTV 的 11 位手机号（仅发送给你的服务器和 LibTV）")?.trim();
+        if (!phone) throw new Error("已取消 LibTV 登录");
+        try {
+          result = await requestLogin({ phone });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (!/captcha|人机|验证/iu.test(message)) throw error;
+          const captcha = window.prompt("LibTV 要求人机验证。请在 LibTV 验证页完成后，粘贴返回的 captcha JSON 参数")?.trim();
+          if (!captcha) throw new Error("未填写 captcha，已停止登录");
+          result = await requestLogin({ phone, captcha });
+        }
+        const code = window.prompt("短信验证码已发送，请输入 6 位验证码")?.trim();
+        if (!code) throw new Error("验证码未填写，可稍后重新登录");
+        result = await requestLogin({ phone, code });
+      } else {
+        result = await requestLogin({});
+      }
       setBridge((current) => ({ ...current, libtv: result.libtv }));
       setToast("LibTV 登录完成，现在可以用 Lib Image 出图");
     } catch (error) {
@@ -2571,9 +4792,9 @@ export default function Home() {
   }
 
   async function generateShotAsset(asset: ShotAssetEntry, provider: "libtv" | "gpt") {
-    const assetKey = shotAssetStorageKey(projectStorageTitle, asset);
-    const attemptKey = shotAssetAttemptStorageKey(projectStorageTitle, asset);
-    const targetAttempt = Math.max(1, Number(window.localStorage.getItem(attemptKey) || 0) + 1);
+    const assetKey = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
+    const attemptKey = shotAssetAttemptStorageKey(projectStorageTitle, shot.id, asset);
+    const targetAttempt = Math.max(1, Number(scopedBrowserStorage.getItem(attemptKey) || 0) + 1);
     const prompt = resolvedShotAssetPrompt(asset).trim();
     const settings = shotAssetImageSettings[assetKey] || defaultShotAssetImageSettings(asset);
     if (!prompt) {
@@ -2581,7 +4802,7 @@ export default function Home() {
       return;
     }
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("镜导本地桥接未启动，暂时不能生成资产图");
+      setToast("漫镜本地桥接未启动，暂时不能生成资产图");
       return;
     }
     if (provider === "libtv" && !libtvReady) {
@@ -2599,9 +4820,9 @@ export default function Home() {
     setToast(`正在用 ${providerLabel} 生成“${asset.name}”资产参考图`);
     try {
       const endpoint = provider === "libtv" ? "generate-asset" : "generate-asset-gpt";
-      const response = await fetch(`${bridgeBase}/${endpoint}`, {
+      const response = await bridgeFetch(`${bridgeBase}/${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": bridge.pairingToken },
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
         body: JSON.stringify({
           projectTitle: projectStorageTitle,
           projectScopeId,
@@ -2624,11 +4845,11 @@ export default function Home() {
           ? result.artworkUrls
           : result.assetUrl ? [result.assetUrl] : result.artworkUrl ? [result.artworkUrl] : [];
       if (!urls.length) throw new Error(`${providerLabel} 没有返回可读取的资产图片`);
-      const imageResponses = await Promise.all(urls.map((url) => fetch(url, { cache: "no-store" })));
-      if (imageResponses.some((item) => !item.ok)) throw new Error(`${providerLabel} 已生成资产图，但镜导读取失败`);
+      const imageResponses = await Promise.all(urls.map((url) => bridgeFetch(url, { cache: "no-store" })));
+      if (imageResponses.some((item) => !item.ok)) throw new Error(`${providerLabel} 已生成资产图，但漫镜读取失败`);
       const dataUrls = await Promise.all(imageResponses.map(async (item) => blobToDataUrl(await item.blob())));
-      await putArtworks(assetKey, dataUrls);
-      window.localStorage.setItem(attemptKey, String(targetAttempt));
+      await putArtworks(artworkStorageScope, assetKey, dataUrls);
+      scopedBrowserStorage.setItem(attemptKey, String(targetAttempt));
       setShotAssetImages((current) => ({ ...current, [assetKey]: dataUrls }));
       setToast(`“${asset.name}”已生成 ${dataUrls.length} 张资产图；全能参考勾选状态保持不变`);
     } catch (error) {
@@ -2647,11 +4868,11 @@ export default function Home() {
       setToast("请选择 PNG、JPG 或 WebP 图片");
       return;
     }
-    const assetKey = shotAssetStorageKey(projectStorageTitle, asset);
+    const assetKey = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
     const dataUrl = await blobToDataUrl(file);
-    await putArtworks(assetKey, [dataUrl]);
+    await putArtworks(artworkStorageScope, assetKey, [dataUrl]);
     setShotAssetImages((current) => ({ ...current, [assetKey]: [dataUrl] }));
-    setToast(`已上传“${asset.name}”参考图；同名资产会在其他 Shot 自动复用`);
+    setToast(`已上传“${asset.name}”参考图；只用于 Shot ${shot.id}`);
   }
 
   function onShotAssetFile(asset: ShotAssetEntry, event: ChangeEvent<HTMLInputElement>) {
@@ -2686,7 +4907,7 @@ export default function Home() {
       return;
     }
     if (!bridge.connected || !bridge.pairingToken) {
-      setToast("镜导本地桥接未启动，暂时不能出图");
+      setToast("漫镜本地桥接未启动，暂时不能出图");
       return;
     }
     if (!libtvReady) {
@@ -2711,7 +4932,7 @@ export default function Home() {
     let targetWhiteboxReferences: Array<{ planKey: string; label: string; dataUrl: string }> = [];
     try {
       targetWhiteboxReferences = (await Promise.all(Object.keys(review.whiteboxReferences || {}).map(async (planKey) => {
-        const [dataUrl] = await getArtworks(whiteboxReferenceStorageKey(projectStorageTitle, shot.id, planKey));
+        const [dataUrl] = await getArtworks(artworkStorageScope, whiteboxReferenceStorageKey(projectStorageTitle, shot.id, planKey));
         if (!dataUrl) throw new Error(`${planKey} 的白模结构参考已丢失，请回到 DIRECTOR VIEW 重新锁定`);
         const view = directorViews.find((item) => item.key === planKey);
         return { planKey, label: view?.label || planKey, dataUrl };
@@ -2751,9 +4972,9 @@ export default function Home() {
       ? `Shot ${targetShotId} 已盖章；Lib Image 正在后台生成 2 张图${targetWhiteboxReferences.length ? `（含 ${targetWhiteboxReferences.length} 张白模结构参考）` : ""}，继续审核 Shot ${nextShot.id}`
       : `Shot ${targetShotId} 已盖章；Lib Image 正在后台生成 2 张图${targetWhiteboxReferences.length ? `（含 ${targetWhiteboxReferences.length} 张白模结构参考）` : ""}`);
     try {
-      const response = await fetch(`${bridgeBase}/generate`, {
+      const response = await bridgeFetch(`${bridgeBase}/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-ShotDirector-Token": targetPairingToken },
+        headers: { "Content-Type": "application/json", "X-Manjing-Token": targetPairingToken },
         body: JSON.stringify({
           projectTitle: targetProjectTitle,
           projectScopeId,
@@ -2789,7 +5010,7 @@ export default function Home() {
       return;
     }
     const dataUrl = await blobToDataUrl(file);
-    await putArtworks(artworkStorageKey(projectStorageTitle, shot.id), [dataUrl]);
+    await putArtworks(artworkStorageScope, artworkStorageKey(projectStorageTitle, shot.id), [dataUrl]);
     setArtworkRecord({ shotId: shot.id, dataUrls: [dataUrl] });
     updateReview((current) => ({
       ...current,
@@ -2866,6 +5087,14 @@ export default function Home() {
     setToast(state.currentShot < state.reviews.length - 1 ? `Shot ${shot.id} 当前图片已保留，返回下一 Shot` : "当前图片已保留");
   }
 
+  function switchDeskMode(nextMode: DeskMode) {
+    setDeskMode(nextMode);
+    const url = new URL(window.location.href);
+    if (nextMode === "strict-review") url.searchParams.set("mode", "review");
+    else url.searchParams.delete("mode");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
   function renderTaskProgress() {
     const submission = lastBatchSubmissions[shot.id]
       || (lastSubmission?.shotId === shot.id
@@ -2894,21 +5123,21 @@ export default function Home() {
       : succeeded
         ? "修改已应用"
         : awaitingWriteback || recoveringResult
-          ? "GPT 已完成，正在取回修改"
+          ? "写作模型已完成，正在取回修改"
           : reconciling
             ? "正在核对任务状态"
-            : "GPT 正在处理";
+            : "写作模型正在处理";
     const startedAt = job?.startedAt || submission?.submittedAt;
     const finishedAt = job?.finishedAt;
     const elapsed = startedAt && finishedAt
       ? Math.max(0, Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000))
       : 0;
     const events = job?.events?.length ? job.events : [
-      { at: submission?.submittedAt || "", stage: "received", message: "页面已收到批注，并发送给本地 GPT 助手。" },
+      { at: submission?.submittedAt || "", stage: "received", message: "页面已收到批注，并发送给写作模型。" },
       ...(review.scriptStatus === "sending" ? [{
         at: "",
         stage: reconciling ? "reconciling" : "waiting",
-        message: reconciling ? "实时服务未发现运行中的任务，正在恢复页面状态。" : "等待 GPT 返回结构化修改结果。",
+        message: reconciling ? "实时服务未发现运行中的任务，正在恢复页面状态。" : "等待写作模型返回结构化修改结果。",
       }] : []),
     ];
     const submittedNotes = submission
@@ -2918,7 +5147,7 @@ export default function Home() {
     return (
       <section className={`task-monitor ${failed ? "failed" : succeeded ? "succeeded" : "running"}`} aria-live="polite">
         <header>
-          <div><span>{job?.type === "annotation-batch" ? `GPT TASK · 全片批改 · 当前 SHOT ${shot.id}` : `GPT TASK · SHOT ${shot.id}`}</span><h2>{statusLabel}</h2></div>
+          <div><span>{job?.type === "annotation-batch" ? `AI TASK · 全片批改 · 当前 SHOT ${shot.id}` : `AI TASK · SHOT ${shot.id}`}</span><h2>{statusLabel}</h2></div>
           <div className="task-runtime"><i />{finishedAt ? `${elapsed} 秒` : "实时同步"}</div>
         </header>
         <div className="task-monitor-body">
@@ -2934,10 +5163,10 @@ export default function Home() {
             <span>本次收到的批注</span>
             {submittedNotes.length ? submittedNotes.map((section) => (
               <div key={section.id}><b>{section.title}</b><p>{submission?.annotations[section.id]}</p></div>
-            )) : job ? <p>该任务由另一个“镜导”标签页发起；这里会同步显示处理进度。请勿重复发送。</p> : <p>本次没有文字批注，直接确认脚本。</p>}
+            )) : job ? <p>该任务由另一个“漫镜”标签页发起；这里会同步显示处理进度。请勿重复发送。</p> : <p>本次没有文字批注，直接确认脚本。</p>}
           </div>
         </div>
-        {failed ? <div className="task-error"><b>错误</b><p>{job?.error || review.summary || "GPT处理失败，请重试。"}</p></div> : null}
+        {failed ? <div className="task-error"><b>错误</b><p>{job?.error || review.summary || "写作模型处理失败，请重试。"}</p></div> : null}
       </section>
     );
   }
@@ -2952,12 +5181,12 @@ export default function Home() {
     const events = job?.events?.length ? job.events : [{
       at: lastGlobalSubmission?.submittedAt || "",
       stage: "received",
-      message: "页面已收到全局批注，并发送给本地 GPT 助手。",
+      message: "页面已收到全局批注，并发送给写作模型。",
     }];
     return (
       <section className={`task-monitor global-task-monitor ${failed ? "failed" : succeeded ? "succeeded" : "running"}`} aria-live="polite">
         <header>
-          <div><span>GPT TASK · 全局设定</span><h2>{failed ? "处理失败" : succeeded ? "全局修改已应用" : "GPT 正在处理全局批注"}</h2></div>
+          <div><span>AI TASK · 全局设定</span><h2>{failed ? "处理失败" : succeeded ? "全局修改已应用" : "写作模型正在处理全局批注"}</h2></div>
           <div className="task-runtime"><i />不属于任何 Shot</div>
         </header>
         <div className="task-monitor-body">
@@ -2966,7 +5195,7 @@ export default function Home() {
               <li key={`${event.at}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><b>{event.message}</b><small>{event.at ? new Date(event.at).toLocaleTimeString("zh-CN", { hour12: false }) : "刚刚"}</small></div></li>
             ))}
           </ol>
-          <div className="submitted-batch"><span>本次全局批注</span><p>{lastGlobalSubmission?.annotation || "该任务由另一个镜导标签页发起。"}</p></div>
+          <div className="submitted-batch"><span>本次全局批注</span><p>{lastGlobalSubmission?.annotation || "该任务由另一个漫镜标签页发起。"}</p></div>
         </div>
         {failed ? <div className="task-error"><b>错误</b><p>{job?.error || state.globalSummary || "全局批注处理失败，请重试。"}</p></div> : null}
       </section>
@@ -3009,7 +5238,7 @@ export default function Home() {
           <div className="coverage-section-heading">
             <span>DIRECTOR RECIPES</span>
             <h2>导演配方</h2>
-            <p>配方会随批注一起交给 GPT，只影响拆解与优化方法，不会自动审批或改变最终美术风格。</p>
+            <p>配方会随批注一起交给当前写作模型，只影响拆解与优化方法，不会自动审批或改变最终美术风格。</p>
           </div>
           <div className="director-recipe-grid">
             {directorRecipes.map((recipe) => (
@@ -3170,6 +5399,7 @@ export default function Home() {
                   <div><dt>TOP VIEW</dt><dd>{targetPackage.assets.layoutViews.join("、") || "未配置"}</dd></div>
                   <div><dt>3D白模</dt><dd>{targetPackage.assets.whiteboxReferences.map((item) => item.key).join("、") || "未锁定"}</dd></div>
                   <div><dt>全能参考</dt><dd>{targetPackage.assets.omniReferences.length}/{referenceLimitFor(generationModel)}</dd></div>
+                  <div><dt>传图顺序</dt><dd>{targetPackage.assets.referenceBindings.map((item) => `${item.token}=${item.label}`).join("；") || "无参考图"}</dd></div>
                   <div><dt>同步时间</dt><dd>{synced}</dd></div>
                 </dl>
                 <button type="button" className="text-button" onClick={() => openShotFromAssets(targetPackage.shotId, "script")}>打开脚本与DIRECTOR VIEW</button>
@@ -3259,7 +5489,7 @@ export default function Home() {
             <button className="button secondary" type="button" disabled={locked || bridge.busy || !bridge.connected} onClick={() => void saveGlobalSettings()}>{savingGlobalSettings ? "正在回写源文件…" : "保存全局设定"}</button>
             <button className="button primary" type="button" disabled={locked || bridge.busy || !bridge.connected || !state.globalAnnotation.trim()} onClick={() => void sendGlobalAnnotation()}>{globalBusy ? "全局批注处理中…" : "发送全局批注"}</button>
           </div>
-          <div className={`global-setting-status ${state.globalStatus}`}><i /><b>{state.globalStatus === "sending" ? "GPT正在处理全局批注" : state.globalStatus === "error" ? "全局设定处理失败" : state.globalStatus === "draft" ? "全局设定有未保存修改" : "全局设定已写入源文件"}</b><small>{state.globalSummary || "所有Shot将读取已生效的全局规则。"}</small></div>
+          <div className={`global-setting-status ${state.globalStatus}`}><i /><b>{state.globalStatus === "sending" ? "写作模型正在处理全局批注" : state.globalStatus === "error" ? "全局设定处理失败" : state.globalStatus === "draft" ? "全局设定有未保存修改" : "全局设定已写入源文件"}</b><small>{state.globalSummary || "所有Shot将读取已生效的全局规则。"}</small></div>
         </section>
       </section>
     );
@@ -3276,14 +5506,23 @@ export default function Home() {
       <section className="script-sheet">
         <div className="sheet-heading">
           <div><span>STEP 01 · SCRIPT</span><h1>脚本</h1><p>人物、物品和场景、剧情、动作、连续、美术风格写在同一页；批注最后统一发送。</p></div>
-          <div className={`bridge-status ${bridge.connected ? "online" : ""}`}><i />{bridge.connected ? "GPT直连已连接" : "GPT直连未启动"}</div>
+          <div className={`bridge-status ${bridge.connected ? "online" : ""}`}><i />{bridge.connected ? `Pi Agent Harness 已连接 · ${bridge.modelProvider?.label || bridge.modelProvider?.model || "写作模型"}${bridge.harness?.runs?.length ? ` · ${bridge.harness.runs.length} Runs` : ""}` : "Pi Agent Harness 未启动"}</div>
         </div>
 
         <MangaPanelStrip requestId={mangaSourceRequestId} panelIds={shot.sourcePanels || []} pairingToken={bridge.pairingToken} />
 
+        {!review.approved ? (
+          <section className="shot-structure-pending" aria-label="下游生成尚未开始">
+            <span>WAITING FOR THIS SHOT</span>
+            <h2>批准当前 Shot 后，单独解锁本镜资产</h2>
+            <p>每个 Shot 独立运行。批准本镜后，只解锁本镜的人物／场景／道具上传和生成；其他 Shot 不会被连带解锁或修改。</p>
+          </section>
+        ) : null}
+
+        {review.approved ? (
         <section className="shot-asset-board" aria-label={`Shot ${shot.id} 人物、场景与关键道具资产`}>
           <header className="shot-asset-heading">
-            <div><span>SHOT ASSETS · SHOT {shot.id}</span><h2>本镜资产</h2><p>按镜头自动整理人物、场景和关键道具。每项可用 LibTV CLI、GPT Image 生图，或上传已有参考图；同名资产会跨 Shot 复用。</p></div>
+            <div><span>SHOT ASSETS · SHOT {shot.id}</span><h2>本镜资产</h2><p>按当前 Shot 独立整理人物、场景和关键道具。每项可用 LibTV CLI、GPT Image 生图，或上传已有参考图；上传和生成结果只属于本镜。</p></div>
             <small>默认全部纳入全能参考 · 你可逐项取消 · 取消后刷新也不会自动加回</small>
           </header>
           <div className="shot-asset-groups">
@@ -3294,7 +5533,7 @@ export default function Home() {
                 <section className={`shot-asset-group kind-${kind}`} key={kind}>
                   <div className="shot-asset-group-title"><span>{labels.eyebrow}</span><b>{labels.title}</b><em>{groupAssets.length}</em></div>
                   {groupAssets.length ? <div className="shot-asset-cards">{groupAssets.map((asset) => {
-                    const assetKey = shotAssetStorageKey(projectStorageTitle, asset);
+                    const assetKey = shotAssetStorageKey(projectStorageTitle, shot.id, asset);
                     const images = shotAssetImages[assetKey] || [];
                     const settings = shotAssetImageSettings[assetKey] || defaultShotAssetImageSettings(asset);
                     const availableRatios = assetImageRatiosFor(settings.model);
@@ -3304,7 +5543,7 @@ export default function Home() {
                       && (!job.projectTitle || job.projectTitle === projectStorageTitle));
                     const generating = Boolean(generatingShotAssetKeys[assetKey] || remoteAssetJob);
                     const referenced = shot.omniReferences.some((reference) => isShotAssetReference(reference, asset));
-                    const analyzedAssetPrompt = projectAssetPromptFor(state.assetPrompts, asset);
+                    const analyzedAssetPrompt = projectAssetPromptFor(state.assetPrompts, asset, shot.id);
                     const promptValue = resolvedShotAssetPrompt(asset);
                     return (
                       <article className={`shot-asset-card ${images.length ? "is-ready" : "is-empty"}`} key={asset.id}>
@@ -3373,6 +5612,7 @@ export default function Home() {
             })}
           </div>
         </section>
+        ) : null}
 
         <fieldset className="script-fields" disabled={scriptLocked} aria-busy={scriptLocked}>
         <ScriptBlock section={sections[0]} annotation={review.annotations.characters} onAnnotation={(value) => updateAnnotation("characters", value)}>
@@ -3454,17 +5694,17 @@ export default function Home() {
 
         <ScriptBlock section={sections[5]} annotation={review.annotations.style} onAnnotation={(value) => updateAnnotation("style", value)}>
           <TextField label="最终视频美术风格（默认从脚本源文件提取）" value={shot.artStyle} rows={6} onChange={(value) => updateField("artStyle", value)} />
-          <p className="field-help">这里严格记录脚本中的最终视频风格；Lib Image 的赛璐璐分镜只是人物参考未上传时的临时工作图，两者互不覆盖。</p>
+          <p className="field-help">这里严格记录脚本中的最终视频风格；Lib Image 只生成临时导演预演工作图，两者互不覆盖。</p>
         </ScriptBlock>
         </fieldset>
 
         <div className="send-panel">
-          <div><span>全片统一提交 · {selectedRecipe.name}</span><h2>{batchShotCount ? `${batchShotCount} 个 Shot · 共 ${batchNoteCount} 类批注等待上传` : "全片没有待上传批注"}</h2><p>一次上传全片所有已写批注；GPT按当前导演配方统一修改并反推源文件，但不会自动审批任何 Shot。</p></div>
+          <div><span>全片统一提交 · {selectedRecipe.name}</span><h2>{batchShotCount ? `${batchShotCount} 个 Shot · 共 ${batchNoteCount} 类批注等待上传` : "全片没有待上传批注"}</h2><p>一次上传全片所有已写批注；当前写作模型按导演配方统一修改并反推源文件，但不会自动审批任何 Shot。</p></div>
           <div className="send-panel-actions">
             <button className="button primary" disabled={!batchShotCount || bridge.busy || Boolean(stampingShotId) || !bridge.connected} onClick={() => void sendAllAnnotations()}>
-              {annotationBusy ? "全片批注处理中…" : bridge.busy ? "等待当前 GPT 任务…" : batchShotCount ? `批改一键上传（${batchShotCount} Shot）` : "没有待上传批注"}
+              {annotationBusy ? "全片批注处理中…" : bridge.busy ? "等待当前写作模型任务…" : batchShotCount ? `批改一键上传（${batchShotCount} Shot）` : "没有待上传批注"}
             </button>
-            <button className={`button approval-stamp ${review.approved ? "stamped" : ""}`} disabled={review.approved || scriptLocked || Boolean(stampingShotId) || noteCount > 0 || bridge.busy} onClick={() => void stampCurrentShot()}>
+            <button className={`button approval-stamp ${review.approved ? "stamped" : ""}`} disabled={review.approved || scriptLocked || Boolean(stampingShotId) || noteCount > 0 || bridge.busy || !promptReviewIsCurrent} onClick={() => void stampCurrentShot()}>
               {review.approved
                 ? "✓ 已签字盖章 · 审批通过"
                 : stampingShotId === shot.id
@@ -3473,9 +5713,12 @@ export default function Home() {
                     ? `先上传本镜 ${noteCount} 类批注`
                     : review.scriptStatus === "sending"
                       ? "批注处理中，完成后可盖章"
-                      : "签字盖章 · 审批通过"}
+                      : !promptReviewIsCurrent
+                        ? "先完成独立 Reviewer 审查"
+                        : "签字盖章 · 审批通过"}
             </button>
             {noteCount > 0 ? <small className="approval-lock-reason">当前 Shot 仍有 {noteCount} 类未上传批注；点击上方“批改一键上传”，应用完成后才能盖章。</small> : null}
+            {!noteCount && !promptReviewIsCurrent ? <small className="approval-lock-reason">完整提示词须由独立 Reviewer 审查；报告绑定当前文本，改稿后必须重审。</small> : null}
           </div>
         </div>
         {review.versions.length || review.approvedAt ? (
@@ -3634,23 +5877,200 @@ export default function Home() {
     );
   }
 
+  if (deskMode === "strict-review") {
+    const evidenceModeLabel = selectedPromptReviewer?.evidenceMode === "direct-images"
+      ? "直接核对原图"
+      : "核对已固化画格证据";
+    return (
+      <main className="app-shell strict-review-shell">
+        <header className="topbar strict-review-topbar">
+          <div className="brand-block"><span className="brand-mark">漫镜</span><div><b>漫镜 · 严格审核台</b><small>STRICT REVIEW · 只审不改</small></div></div>
+          <div className="desk-mode-switch" role="tablist" aria-label="漫镜工作版本">
+            <button type="button" role="tab" aria-selected="false" onClick={() => switchDeskMode("creator")}><b>创作台</b><small>拆图 · 分析 · 重组 · 提示词</small></button>
+            <button type="button" role="tab" aria-selected="true" className="active"><b>严格审核台</b><small>挑问题 · 给建议 · 不修改</small></button>
+          </div>
+        </header>
+
+        <section className="strict-review-hero">
+          <div><span>READ-ONLY REVIEW WORKSPACE</span><h1>{state.projectTitle}</h1><p>这里只展示原图证据、Creator 提示词和 Reviewer 报告。没有编辑、重新生成、应用建议或批准入口。</p></div>
+          <div className={`strict-review-guard ${bridge.connected ? "ready" : "offline"}`}><i />{bridge.connected ? "只读审核边界已启用" : "正在连接审核服务"}</div>
+        </section>
+
+        <nav className="strict-review-shot-nav" aria-label="选择待审核 Shot">
+          {state.reviews.map((item, index) => {
+            const active = index === state.currentShot;
+            const reportReady = item.promptReviewStatus === "ready";
+            return <button type="button" key={item.shot.shotUid || item.shot.id} className={`${active ? "active" : ""} ${reportReady ? "reviewed" : ""}`} onClick={() => selectShot(index)}><b>SHOT {item.shot.id}</b><small>{reportReady ? "已有审核" : item.completePrompt?.trim() ? "待审核" : "等待 Creator 提示词"}</small></button>;
+          })}
+        </nav>
+
+        <section className="strict-review-grid">
+          <div className="strict-review-evidence-column">
+            <section className="strict-review-shot-heading"><span>CURRENT SNAPSHOT</span><h2>SHOT {shot.id} · {shot.title}</h2><p>{shot.duration} 秒 · 稳定 ID：{shot.shotUid || "缺失"} · 来源画格 {(shot.sourcePanels || []).join("、") || "无"}</p></section>
+            <MangaPanelStrip requestId={mangaSourceRequestId} panelIds={shot.sourcePanels || []} pairingToken={bridge.pairingToken} />
+            <section className="strict-review-prompt-card" aria-label={`Shot ${shot.id} 待审提示词只读快照`}>
+              <header><div><span>CREATOR PROMPT · READ ONLY</span><h2>待审完整提示词</h2></div><small>{review.completePromptGeneratorId ? `Creator：${review.completePromptGeneratorId}` : "尚无 Creator 模型记录"}</small></header>
+              {review.completePrompt?.trim()
+                ? <pre>{review.completePrompt}</pre>
+                : <div className="strict-review-empty"><b>当前 Shot 还没有提示词讨论稿</b><p>请返回创作台完成拆图、画格分析、重新组合与提示词生成；审核台不会代为生成或修改。</p><button type="button" className="button secondary" onClick={() => switchDeskMode("creator")}>返回创作台</button></div>}
+            </section>
+          </div>
+
+          <aside className="strict-review-report-column">
+            <section className="strict-review-control-card">
+              <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>每次都是隔离的新 Agent Session，只输出问题、证据与建议。</p></div>
+              <label><span>Reviewer 模型</span><select value={selectedPromptReviewerId} disabled={review.promptReviewStatus === "reviewing" || bridge.busy} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 未配置"}</option>)}</select></label>
+              <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
+              {!selectedPromptReviewer?.available ? <p className="prompt-review-config">{selectedPromptReviewer?.reason || "当前 Reviewer 的 env 尚未配置完整"}</p> : null}
+              <button type="button" className="button primary" disabled={bridge.busy || review.promptReviewStatus === "reviewing" || !selectedPromptReviewer?.available || review.completePromptStatus !== "ready" || !review.completePrompt?.trim()} onClick={() => void reviewCompletePrompt()}>{review.promptReviewStatus === "reviewing" ? "严格审核中…" : promptReviewArtifactIsCurrent ? "重新审核当前只读快照" : "提交严格审核"}</button>
+              <small>本按钮只创建审核报告，不会改写提示词、Shot、源文件或批准状态。</small>
+            </section>
+
+            {review.promptReviewStatus === "error" ? <p className="prompt-review-error">{review.promptReviewError || "严格审核失败，请重试。"}</p> : null}
+            {review.promptReviewStatus === "stale" ? <p className="prompt-review-stale">Creator 内容已改变；旧报告只读保留，必须针对当前快照重新审核。</p> : null}
+            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">Reviewer 正在核对当前只读快照，不会修改任何内容…</div> : null}
+            {review.promptReviewReport ? (
+              <section className={`strict-review-report ${review.promptReviewReport.verdict}`}>
+                <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · 无修改权 · 无批准权</small></header>
+                <div className="prompt-review-checks">{Object.entries(review.promptReviewReport.checks).map(([key, passed]) => <span key={key} className={passed ? "pass" : "fail"}>{passed ? "✓" : "!"} {{ sourceBoundary: "剧情边界", characterContinuity: "人物连续性", timingFeasible: "时长可执行", dialogueFeasible: "对白可执行", cameraAndActionCoherent: "镜头动作", soundAndNegativeComplete: "声音禁止项" }[key as keyof PromptReviewReport["checks"]]}</span>)}</div>
+                {review.promptReviewReport.findings.length ? <ol className="prompt-review-findings">{review.promptReviewReport.findings.map((finding) => <li key={finding.id} className={finding.severity}><div><span>{finding.severity === "blocking" ? "阻断" : finding.severity === "warning" ? "警告" : "建议"}</span><b>{finding.title}</b><small>{finding.category}{finding.panelIds.length ? ` · ${finding.panelIds.join("、")}` : ""}</small></div><p>{finding.detail}</p><strong>建议方向：{finding.suggestion}</strong></li>)}</ol> : <p className="prompt-review-clean">未发现需要列出的具体问题。</p>}
+                {review.promptReviewReport.strengths.length ? <p className="prompt-review-strengths">已确认：{review.promptReviewReport.strengths.join("；")}</p> : null}
+                <footer><p>报告不会自动应用。若需处理建议，请返回创作台由用户决定是否修改。</p><button type="button" className="button secondary" onClick={() => switchDeskMode("creator")}>返回创作台查看</button></footer>
+              </section>
+            ) : null}
+          </aside>
+        </section>
+        {toast ? <div className="toast" role="status">{toast}</div> : null}
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand-block"><span className="brand-mark">镜导</span><div><b>镜导</b><small>SHOTDIRECTOR · 分镜导演工具</small></div></div>
-        <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : hydrated ? "本机自动保存" : "读取工作稿"}</div>
+        <div className="brand-block"><span className="brand-mark">漫镜</span><div><b>漫镜</b><small>MANJING · 漫画导演工作台</small></div></div>
+        <div className="topbar-actions">
+          <div className="desk-mode-switch compact" role="tablist" aria-label="漫镜工作版本">
+            <button type="button" role="tab" aria-selected="true" className="active"><b>创作台</b><small>拆图 · 分析 · 重组 · 提示词</small></button>
+            <button type="button" role="tab" aria-selected="false" onClick={() => switchDeskMode("strict-review")}><b>严格审核台</b><small>只审不改</small></button>
+          </div>
+          <details ref={writingModelMenuRef} className="writing-model-picker">
+            <summary aria-label={`当前写作模型：${writingModelSummary}`}>
+              <span>写作模型</span><strong>{writingModelSummary}</strong><i aria-hidden="true">⌄</i>
+            </summary>
+            <div className="writing-model-menu" role="listbox" aria-label="选择并拖动排列写作模型">
+              <header><strong>Chat / Work 模型</strong><small>按住可用模型拖动排序</small></header>
+              {orderedWritingModels.map((model) => (
+                <button
+                  key={model.id}
+                  data-writing-model-id={model.id}
+                  type="button"
+                  role="option"
+                  aria-selected={model.id === activeWritingModel?.id}
+                  className={`${model.id === activeWritingModel?.id ? "active" : ""} ${dragOverWritingModelId === model.id ? "drag-over" : ""}`.trim()}
+                  disabled={!model.available || !bridge.connected || bridge.busy || Boolean(switchingWritingModelId)}
+                  draggable={model.available && bridge.connected && !bridge.busy && !switchingWritingModelId}
+                  title={model.available ? `使用 ${model.label}` : model.reason || "待接入"}
+                  onDragStart={(event) => {
+                    draggedWritingModelIdRef.current = model.id;
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", model.id);
+                  }}
+                  onDragOver={(event) => {
+                    if (!draggedWritingModelIdRef.current) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    setDragOverWritingModelId(model.id);
+                  }}
+                  onDragLeave={() => setDragOverWritingModelId((current) => current === model.id ? "" : current)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const source = draggedWritingModelIdRef.current || event.dataTransfer.getData("text/plain") as WritingModelId;
+                    if (source) moveWritingModelBefore(source, model.id);
+                    draggedWritingModelIdRef.current = "";
+                    setDragOverWritingModelId("");
+                  }}
+                  onDragEnd={() => {
+                    draggedWritingModelIdRef.current = "";
+                    setDragOverWritingModelId("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (!event.altKey || !model.available) return;
+                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                      event.preventDefault();
+                      moveWritingModelByOffset(model.id, event.key === "ArrowUp" ? -1 : 1);
+                    }
+                  }}
+                  onClick={() => {
+                    if (suppressWritingModelClickRef.current) {
+                      suppressWritingModelClickRef.current = false;
+                      return;
+                    }
+                    void selectWritingModelOption(model);
+                  }}
+                >
+                  <span
+                    className="writing-model-grip"
+                    aria-hidden="true"
+                    onPointerDown={(event) => beginTouchWritingModelDrag(event, model)}
+                    onPointerMove={moveTouchWritingModelDrag}
+                    onPointerUp={(event) => finishTouchWritingModelDrag(event)}
+                    onPointerCancel={(event) => finishTouchWritingModelDrag(event, true)}
+                  >⣿</span>
+                  <span><strong>{model.label}</strong><small>{model.available ? model.hint : model.reason || "待接入"}</small></span>
+                  <em>{model.id === activeWritingModel?.id ? "✓" : model.available ? "" : model.id === "gpt-5.6-luna" ? "停用" : "待接入"}</em>
+                </button>
+              ))}
+            </div>
+          </details>
+          <label className="reasoning-effort-picker" title="一般创作可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
+            <span>推理深度</span>
+            <select
+              aria-label="一般创作推理深度"
+              value={selectedReasoningEffort}
+              disabled={!bridge.connected || bridge.busy || switchingReasoningEffort}
+              onChange={(event) => void selectReasoningEffort(event.target.value as ReasoningEffort)}
+            >
+              <option value="low">LOW · 快速</option>
+              <option value="high">HIGH · 深度</option>
+              <option value="max">MAX · 最大</option>
+            </select>
+            <small>拆图 LOW · 单镜提示词/审核 MAX</small>
+          </label>
+          <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : hydrated ? "本机自动保存" : "读取工作稿"}</div>
+        </div>
       </header>
 
       <section className="loaded-script">
         <div className="loaded-script-copy">
           <span>已载入脚本</span>
-          <h1>{state.projectTitle}</h1>
-          <small>{state.reviews.length} SHOTS</small>
+          <div className="project-title-row">
+            {editingProjectTitle ? (
+              <form className="project-title-form" onSubmit={(event) => { event.preventDefault(); renameProject(); }}>
+                <input
+                  autoFocus
+                  aria-label="项目名称"
+                  value={projectTitleDraft}
+                  onChange={(event) => setProjectTitleDraft(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Escape") cancelRenameProject(); }}
+                />
+                <button className="project-title-edit" type="submit">保存</button>
+                <button className="project-title-edit" type="button" onClick={cancelRenameProject}>取消</button>
+              </form>
+            ) : (
+              <>
+                <h1>{state.projectTitle}</h1>
+                <button className="project-title-edit" type="button" onClick={beginRenameProject} aria-label="修改项目名称">修改名称</button>
+              </>
+            )}
+          </div>
+          <small>{state.reviews.length} SHOTS · {state.projectUid}</small>
+          <button className="project-manifest-button" type="button" onClick={downloadProjectManifest}>导出清单</button>
         </div>
         <div className="loaded-script-actions">
           {materialDraftMode ? (
-            <button className="button secondary material-original-project" type="button" onClick={() => { window.location.href = "/"; }}>
-              <b>返回原项目</b><small>当前草稿不会覆盖原审批</small>
+            <button className="button secondary material-original-project" type="button" onClick={() => { window.location.href = "/?main=1"; }}>
+              <b>打开主工作区</b><small>当前草稿不会覆盖原审批</small>
             </button>
           ) : null}
           <button className={`button global-settings-entry ${state.workspaceMode === "global" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "global" ? returnToShots : openGlobalSettings}>
@@ -3658,16 +6078,16 @@ export default function Home() {
             <small>{state.globalStatus === "draft" ? "有未保存修改" : "独立批注 · 不计入Shot"}</small>
           </button>
           <button className={`button material-lab-entry ${state.workspaceMode === "materials" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "materials" ? returnToShots : openMaterialLab}>
-            <b>{state.workspaceMode === "materials" ? "返回镜头审核" : "漫画转分镜"}</b>
-            <small>上传漫画 · 自动拆成可审 Shot</small>
+            <b>{state.workspaceMode === "materials" ? "返回镜头审核" : materialDraftMode ? "续传漫画" : "漫画转分镜"}</b>
+            <small>{materialDraftMode ? "追加后续漫画页 · 保留当前草稿" : "上传漫画 · 自动拆成可审 Shot"}</small>
           </button>
           <button className={`button coverage-entry ${state.workspaceMode === "coverage" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "coverage" ? returnToShots : openCoverageReview}>
             <b>{state.workspaceMode === "coverage" ? "返回镜头审核" : "脚本体检"}</b>
             <small>{coverageReport.coveragePercent}% 覆盖 · {coverageReport.missingUnits} 条未覆盖</small>
           </button>
-          <button className={`button asset-ledger-entry ${state.workspaceMode === "assets" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "assets" ? returnToShots : openAssetLedger}>
+          <button className={`button asset-ledger-entry ${state.workspaceMode === "assets" ? "active" : ""}`} type="button" disabled={approvedCount === 0 && state.workspaceMode !== "assets"} onClick={state.workspaceMode === "assets" ? returnToShots : openAssetLedger}>
             <b>{state.workspaceMode === "assets" ? "返回镜头审核" : "资产同步"}</b>
-            <small>{assetReadyCount} 包就绪 · {assetAttentionCount} 个待处理{assetRunningCount ? ` · ${assetRunningCount} 生成中` : ""}</small>
+            <small>{approvedCount ? `${approvedCount} 镜已解锁 · ${assetReadyCount} 包就绪${assetRunningCount ? ` · ${assetRunningCount} 生成中` : ""}` : "批准单镜后解锁"}</small>
           </button>
           <div className="model-switch" role="group" aria-label="Seedance生成模型">
             {generationModels.map((model) => (
@@ -3682,25 +6102,37 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="production-pipeline" aria-label="漫画到视频生产阶段">
+        <div className="production-pipeline-heading"><span>PRODUCTION</span><b>漫画 → 拆分 → 分镜 → 提示词 → 审核 → 确认 → 视频</b></div>
+        <ol>
+          {productionPipeline.map((stage, index) => (
+            <li className={`production-stage ${stage.status}`} key={stage.id} title={stage.detail}>
+              <i>{String(index + 1).padStart(2, "0")}</i>
+              <span><b>{stage.label}</b><small>{stage.detail}</small></span>
+            </li>
+          ))}
+        </ol>
+      </section>
+
       {showLoader ? (
         <section className="script-loader" aria-label="载入脚本">
           <div className="loader-heading">
             <span>LOAD SCRIPT</span>
             <h2>载入新的脚本</h2>
-            <p>可以选择已有文件，也可以直接用自然语言告诉 GPT 要载入什么。</p>
+            <p>可以选择已有文件，也可以直接用自然语言告诉当前写作模型要载入什么。</p>
           </div>
           <div className="loader-options">
             <div className="loader-option">
               <span>方式 01</span>
               <h3>选择脚本文件</h3>
-              <p>JSON 会直接载入；Markdown 或 TXT 会交给 GPT 自动整理成逐镜 Shot。</p>
+              <p>JSON 会直接载入；Markdown 或 TXT 会交给当前写作模型自动整理成逐镜 Shot。</p>
               <button className="button secondary" disabled={bridge.busy || loadingScript} onClick={() => scriptInput.current?.click()}>
-                {loadingScript ? "GPT正在整理…" : "选择文件"}
+                {loadingScript ? "写作模型正在整理…" : "选择文件"}
               </button>
               <input ref={scriptInput} hidden type="file" accept="application/json,.json,.md,.markdown,.txt,text/plain,text/markdown" onChange={onScriptFile} />
             </div>
             <div className="loader-option natural-loader">
-              <span>方式 02 · GPT</span>
+              <span>方式 02 · 写作模型</span>
               <h3>用自然语言载入</h3>
               <textarea
                 rows={6}
@@ -3709,9 +6141,9 @@ export default function Home() {
                 onChange={(event) => setNaturalScript(event.target.value)}
               />
               <button className="button primary" disabled={bridge.busy || loadingScript || !naturalScript.trim() || !bridge.connected} onClick={loadNaturalScript}>
-                {loadingScript ? "GPT正在整理并载入…" : "让 GPT 整理并载入"}
+                {loadingScript ? "写作模型正在整理并载入…" : "让写作模型整理并载入"}
               </button>
-              {!bridge.connected ? <small>本地 GPT 直连启动后即可使用</small> : null}
+              {!bridge.connected ? <small>本地 Pi Agent Harness 启动后即可使用</small> : null}
             </div>
           </div>
         </section>
@@ -3720,8 +6152,10 @@ export default function Home() {
       {state.workspaceMode === "global" ? renderGlobalSettingsPage() : state.workspaceMode === "coverage" ? renderCoveragePage() : state.workspaceMode === "assets" ? renderAssetLedgerPage() : state.workspaceMode === "materials" ? (
         <MediaLab
           bridgeBase={bridgeBase}
+          sessionScope={tenantScope}
           pairingToken={bridge.pairingToken}
           connected={bridge.connected}
+          supportsWebSearch={bridge.modelProvider?.supportsWebSearch === true}
           generationModel={generationModel}
           defaultStoryBackground={state.globalSettings.storyBackground}
           defaultArtStyle={state.globalSettings.finalVideoStyle?.trim() || defaultArtStyle}
@@ -3749,12 +6183,268 @@ export default function Home() {
             );
           })}
         </div>
-        <div className="single-rule"><span>规则</span><b>出图后台运行，可继续审下一 Shot</b></div>
+        <div className="single-rule"><span>规则</span><b>每个 Shot 独立批准、独立解锁，不互相阻塞</b></div>
       </section>
+
+      {shot.sourcePanels?.length ? (
+        <section className={`top-shot-prompt-bar ${review.completePromptStatus || "empty"}`} aria-label={`当前 Shot ${shot.id} 完整提示词操作`}>
+          <div>
+            <span>CURRENT SHOT</span>
+            <b>SHOT {shot.id}</b>
+            <p>{review.completePromptStatus === "ready"
+              ? promptReviewIsCurrent ? "完整提示词已审查，等待你明确批准" : "完整提示词讨论稿已生成，等待独立 Reviewer"
+              : review.completePromptStatus === "generating"
+                ? "Agent 正在逐图检查并生成提示词"
+                : "这一镜尚未生成完整提示词讨论稿"}</p>
+          </div>
+          <button
+            type="button"
+            disabled={review.completePromptStatus === "generating"}
+            onClick={() => review.completePromptStatus === "ready" && review.completePrompt?.trim()
+              ? openCompleteShotPrompt(state.currentShot)
+              : void generateCompleteShotPrompt(state.currentShot)}
+          >{review.completePromptStatus === "generating"
+            ? "正在生成…"
+            : review.completePromptStatus === "ready"
+              ? promptReviewIsCurrent ? "✓ 已审查 · 查看讨论稿" : "已生成 · 查看／提交审查"
+              : `生成 SHOT ${shot.id} 完整提示词讨论稿`}</button>
+        </section>
+      ) : null}
+
+      <section className={`shot-structure-review ${structureConfirmed ? "is-confirmed" : "is-draft"}`} aria-label="镜头结构审核">
+        <div className="shot-structure-copy">
+          <span>STEP 00 · SHOT STRUCTURE</span>
+          <h2>{structureConfirmed ? "镜头结构已确认" : "先按画格图片检查默认分组"}</h2>
+          <p>{structureConfirmed
+            ? `当前 ${state.reviews.length} 个 Shot 已锁定；资产、分镜图和视频提示词已经解锁。`
+            : `已把 ${structurePanelEntries.length} 张有效画格按阅读顺序分进 ${state.reviews.length} 个建议 Shot。先看每张图归在哪一组；只有明显错误时才需要调整。`}</p>
+        </div>
+        {!structureConfirmed && structurePanelEntries.length ? (
+          <section className="panel-assembly-board" aria-label="漫画画格编组台">
+            <header className="panel-assembly-heading">
+              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p></div>
+              <strong>{structurePanelEntries.length} 张图 · {state.reviews.length} 个 Shot</strong>
+            </header>
+            <div
+              className="panel-shot-groups-top"
+              role="region"
+              aria-label="画格编组台顶部横向滚动条"
+            >
+              <b>横向浏览</b>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, panelAssemblyScrollMetrics.scrollWidth - panelAssemblyScrollMetrics.clientWidth)}
+                step={1}
+                value={Math.min(
+                  panelAssemblyScrollMetrics.scrollLeft,
+                  Math.max(0, panelAssemblyScrollMetrics.scrollWidth - panelAssemblyScrollMetrics.clientWidth),
+                )}
+                disabled={panelAssemblyScrollMetrics.scrollWidth <= panelAssemblyScrollMetrics.clientWidth}
+                onInput={syncPanelAssemblyFromTop}
+                aria-label="拖动画格编组台"
+                style={{
+                  "--panel-scroll-thumb-width": `${Math.max(
+                    8,
+                    Math.min(
+                      100,
+                      panelAssemblyScrollMetrics.scrollWidth
+                        ? (panelAssemblyScrollMetrics.clientWidth / panelAssemblyScrollMetrics.scrollWidth) * 100
+                        : 100,
+                    ),
+                  )}%`,
+                } as CSSProperties}
+              />
+              <output>
+                {panelAssemblyScrollMetrics.scrollWidth > panelAssemblyScrollMetrics.clientWidth
+                  ? `${Math.round(panelAssemblyScrollMetrics.scrollLeft)} / ${Math.round(panelAssemblyScrollMetrics.scrollWidth - panelAssemblyScrollMetrics.clientWidth)}`
+                  : "全部可见"}
+              </output>
+            </div>
+            <div className="panel-shot-groups" ref={panelAssemblyBottomScroller} onScroll={syncPanelAssemblyFromBottom}>
+              {state.reviews.map((item, reviewIndex) => {
+                const panelIds = item.shot.sourcePanels || [];
+                const itemTiming = estimateShotTiming({
+                  dialogue: item.shot.dialogue,
+                  completePrompt: item.completePrompt,
+                  panelCount: panelIds.length || 1,
+                  assignedDuration: item.shot.duration,
+                  model: generationModel,
+                });
+                return (
+                  <article className={`panel-shot-group ${reviewIndex === state.currentShot ? "is-current" : ""} ${item.completePromptConfirmedAt ? "is-confirmed" : ""} ${item.approved ? "is-approved" : ""}`} key={`${item.shot.id}-${panelIds.join("-")}`}>
+                    <div className="panel-shot-group-title">
+                      <div className="panel-shot-main" title={timingEstimateLabel(itemTiming, item.shot.duration)}>
+                        <button type="button" onClick={() => selectShot(reviewIndex)}>
+                          <b>SHOT {item.shot.id}{item.approved ? <i className="panel-shot-approved">✓ 已批准</i> : null}</b>
+                        </button>
+                        <span className="panel-shot-duration-line">
+                          {panelIds.length} 张图 ·
+                          <label className="panel-shot-duration-input" title={`直接修改 Shot ${item.shot.id} 的目标时长`}>
+                            <input
+                              key={`${item.shot.id}-${item.shot.duration}`}
+                              type="number"
+                              min={durationRange.min}
+                              max={durationRange.max}
+                              defaultValue={item.shot.duration}
+                              aria-label={`Shot ${item.shot.id} 目标时长，秒`}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === "Enter") event.currentTarget.blur();
+                              }}
+                              onBlur={(event) => updateShotDuration(reviewIndex, Number(event.currentTarget.value))}
+                            />
+                            <i>s</i>
+                          </label>
+                          {item.completePromptConfirmedAt ? " · 讨论稿已生成" : ""}
+                          <em className={`panel-shot-timing ${itemTiming.status}`}>估 {itemTiming.requiredSeconds}s</em>
+                        </span>
+                      </div>
+                      <button type="button" className="panel-group-select" onClick={() => toggleStructurePanelGroup(panelIds)}>{panelIds.every((panelId) => selectedStructurePanelIds.includes(panelId)) ? "取消整组" : "选择整组"}</button>
+                    </div>
+                    <button
+                      type="button"
+                      className={`complete-shot-prompt-button ${item.completePromptStatus || "empty"}`}
+                      disabled={item.completePromptStatus === "generating"}
+                      onClick={() => item.completePromptStatus === "ready" && item.completePrompt?.trim()
+                        ? openCompleteShotPrompt(reviewIndex)
+                        : void generateCompleteShotPrompt(reviewIndex)}
+                    >
+                      {item.completePromptStatus === "generating"
+                        ? "Agent 正在逐图生成…"
+                        : item.completePromptStatus === "ready"
+                          ? item.promptReviewStatus === "ready" ? "✓ 已审查 · 查看讨论稿" : "已生成 · 查看／提交审查"
+                          : item.completePromptStatus === "stale"
+                            ? "内容已变更 · 重新生成讨论稿"
+                            : item.completePromptStatus === "error"
+                              ? "重试生成完整提示词讨论稿"
+                              : "生成完整提示词讨论稿"}
+                    </button>
+                    <div className="panel-shot-images">
+                      {panelIds.map((panelId) => {
+                        const selected = selectedStructurePanelIds.includes(panelId);
+                        const url = mangaSourceRequestId ? mangaPanelCropUrl(mangaSourceRequestId, panelId, bridge.pairingToken) : "";
+                        return (
+                          <div className="panel-assembly-card-shell" key={panelId}>
+                            <button
+                              type="button"
+                              className={`panel-assembly-card ${selected ? "is-selected" : ""}`}
+                              aria-pressed={selected}
+                              aria-label={`${selected ? "取消选择" : "选择"}画格 ${panelId}`}
+                              onClick={(event) => toggleStructurePanel(panelId, event.shiftKey)}
+                            >
+                              {url && bridge.pairingToken ? <img src={url} alt={`漫画画格 ${panelId}`} /> : <i>等待裁图</i>}
+                              <span>{panelId}</span>
+                            </button>
+                            <button type="button" className="panel-card-zoom" aria-label={`放大画格 ${panelId}`} title="放大查看图和文字" onClick={() => openStructurePanelZoom(panelId)}>⛶</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="panel-assembly-actions">
+              <span>已选 {selectedStructurePanelIds.length} 张 · Shift 可连续选择</span>
+              <button type="button" className="button secondary" disabled={selectedStructurePanelIds.length < 2} onClick={() => applyPanelGrouping("combine")}>组合选中画格为一个 Shot</button>
+              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(-1)}>并入前一组</button>
+              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => moveSelectedPanelsToAdjacent(1)}>并入后一组</button>
+              <button type="button" className="button secondary" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("split")}>选中画格拆成单格</button>
+              <button type="button" className="button danger" disabled={!selectedStructurePanelIds.length} onClick={() => applyPanelGrouping("exclude")}>删除选中画格</button>
+              <button type="button" className="button secondary" disabled title="未来支持上传画师补画或新建空白分镜">＋ 新增手绘分镜（未来）</button>
+              <button type="button" className="text-button" disabled={!selectedStructurePanelIds.length} onClick={() => { setSelectedStructurePanelIds([]); setPanelSelectionAnchor(""); }}>取消选择</button>
+              <button type="button" className="text-button" disabled={!structureHistory.length} onClick={undoStructureChange}>撤销上一步</button>
+            </div>
+          </section>
+        ) : null}
+        <div className="shot-structure-actions">
+          {!structureConfirmed ? <>
+            <div className="shot-duration-control" aria-label={`Shot ${shot.id} 时长设置`}>
+              <span>当前镜头</span>
+              {(durationRange.max > 15 ? [6, 8, 10, 12, 15, 20, 25, 30] : [6, 8, 10, 12, 15]).map((seconds) => (
+                <button type="button" key={seconds} className={shot.duration === seconds ? "active" : ""} onClick={() => updateCurrentShotDuration(seconds)}>{seconds}s</button>
+              ))}
+            </div>
+            <div
+              className={`shot-timing-estimate ${shotTimingEstimate.status}`}
+              title={`公式：对白与动作并行，取较长者。对白 ${shotTimingEstimate.dialogueSeconds.toFixed(1)}s；构图 ${shotTimingEstimate.visualSeconds.toFixed(1)}s；动作反应 ${shotTimingEstimate.actionReactionSeconds.toFixed(1)}s。${shotTimingEstimate.dialogueSource === "generated-japanese" ? "已按完整提示词中的日语对白重算。" : "当前按漫画对白预估；生成日语对白后会自动重算。"}`}
+            >
+              <b>{timingEstimateLabel(shotTimingEstimate, shot.duration)}</b>
+              <span>{shotTimingEstimate.dialogueSource === "generated-japanese" ? "按日语成片对白" : "按漫画对白预估"}</span>
+            </div>
+            <button type="button" className="button secondary" disabled={state.currentShot >= state.reviews.length - 1} onClick={mergeCurrentWithNext}>当前整组与下一组组合</button>
+            <button type="button" className="button danger" disabled={state.reviews.length <= 1} onClick={deleteCurrentShot}>删除当前整组</button>
+            <span className="shot-confirmation-progress">已生成讨论稿 {state.reviews.filter((item) => item.completePromptStatus === "ready").length} / {state.reviews.length} 镜 · 已独立审查 {state.reviews.filter((item) => item.promptReviewStatus === "ready").length} 镜 · 已批准 {approvedCount} 镜</span>
+          </> : (
+            <button type="button" className="button secondary" onClick={reopenShotStructure}>重新编辑镜头结构</button>
+          )}
+        </div>
+      </section>
+
+      {shot.sourcePanels?.length ? (
+        <section id="complete-shot-prompt-panel" className={`complete-shot-prompt-panel ${review.completePromptStatus || "empty"}`} aria-label={`Shot ${shot.id} 完整提示词`}>
+          <header>
+            <div>
+              <span>SHOT PROMPT DRAFT</span>
+              <h2>Shot {shot.id} 完整提示词讨论稿</h2>
+              <p>{review.completePromptStatus === "generating"
+                ? "Agent 正在逐图查看、整理对白与批注，并补充可靠的联网背景。"
+                : review.completePromptStatus === "stale"
+                  ? "这个 Shot 的图片、时长或批注已经改变，请重新确认生成。"
+                  : review.completePromptStatus === "error"
+                    ? review.completePromptSummary || "生成失败，请重新尝试。"
+                    : review.completePromptSummary || "当前 Shot 还没有生成完整提示词讨论稿。"}</p>
+            </div>
+            <div className="complete-shot-prompt-actions">
+              <button type="button" className="button secondary" disabled={!review.completePrompt?.trim()} onClick={copyCompleteShotPrompt}>复制</button>
+              <button type="button" className="button primary" disabled={review.completePromptStatus === "generating"} onClick={() => generateCompleteShotPrompt(state.currentShot)}>{review.completePrompt ? "重新生成讨论稿" : "生成完整提示词讨论稿"}</button>
+            </div>
+          </header>
+          {review.completePrompt ? (
+            <p className="complete-shot-lineage">
+              Creator 模型：<strong>{review.completePromptGeneratorId || legacyUnknownModelId}</strong>
+              {review.completePromptRequestedGeneratorId && review.completePromptRequestedGeneratorId !== review.completePromptGeneratorId
+                ? ` · 请求模型：${review.completePromptRequestedGeneratorId}`
+                : ""}
+              {review.completePromptGeneratorProvider ? ` · ${review.completePromptGeneratorProvider}` : ""}
+            </p>
+          ) : null}
+          {review.completePrompt ? (
+            <div className="complete-shot-prompt-content">
+              <button type="button" className="complete-shot-copy-mini" onClick={copyCompleteShotPrompt} aria-label="复制完整提示词内容" title="复制内容">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                复制内容
+              </button>
+              <textarea aria-label={`Shot ${shot.id} 完整提示词内容`} value={review.completePrompt} onChange={(event) => updateCompleteShotPrompt(event.target.value)} />
+            </div>
+          ) : (
+            <div className="complete-shot-prompt-waiting">{review.completePromptStatus === "generating"
+              ? "正在生成完整提示词…"
+              : review.completePromptStatus === "error"
+                ? review.completePromptSummary || "生成失败，请重试。"
+                : `Shot ${shot.id} 尚未生成完整提示词`}</div>
+          )}
+          {review.completePromptResearch?.sources?.length ? (
+            <div className="complete-shot-research">
+              <b>联网资料</b>
+              {review.completePromptResearch.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}<small>{source.usedFor}</small></a>)}
+            </div>
+          ) : null}
+          {review.completePromptWarnings?.length ? <p className="complete-shot-warnings">注意：{review.completePromptWarnings.join("；")}</p> : null}
+          {review.completePrompt?.trim() ? (
+            <section className="creator-review-handoff" aria-label={`Shot ${shot.id} 严格审核入口`}>
+              <div><span>STRICT REVIEW ISOLATED</span><h3>提示词已准备好，可送往严格审核台</h3><p>审核台是独立只读版本：只挑问题、列证据、给建议，不提供编辑、应用或批准控件。</p></div>
+              <button type="button" className="button primary" onClick={() => switchDeskMode("strict-review")}>{promptReviewArtifactIsCurrent ? "查看当前严格审核报告" : "进入严格审核台"}</button>
+            </section>
+          ) : null}
+        </section>
+      ) : null}
 
       <nav className="three-step-nav" aria-label="当前 Shot 工作流程">
         {navItems.map((item) => {
-          const disabled = (item.id !== "script" && (referencesOverLimit || durationOutOfRange)) || (item.id === "artwork" && (review.scriptStatus !== "applied" || !review.approved)) || (item.id === "confirm" && !artwork);
+          const disabled = (!review.approved && item.id !== "script") || (item.id !== "script" && (referencesOverLimit || durationOutOfRange)) || (item.id === "artwork" && (review.scriptStatus !== "applied" || !review.approved)) || (item.id === "confirm" && !artwork);
           const done = item.id === "script" ? review.approved : item.id === "artwork" ? Boolean(artwork) : Boolean(artwork);
           return (
             <button key={item.id} className={`${state.view === item.id ? "active" : ""} ${done ? "done" : ""}`} disabled={disabled} onClick={() => setView(item.id)}>
@@ -3789,6 +6479,20 @@ export default function Home() {
               {isOpeningSubshot ? <small>分镜 {openingSubshotNumber(shot.id)}</small> : null}
             </div>
             <div className="shot-title"><span>{shot.timecode} · {shot.duration} SEC</span><h1>{shot.title}</h1></div>
+            {shot.sourcePanels?.length ? (
+              <button
+                type="button"
+                className={`shot-title-prompt-button ${review.completePromptStatus || "empty"}`}
+                disabled={review.completePromptStatus === "generating"}
+                onClick={() => review.completePromptStatus === "ready" && review.completePrompt?.trim()
+                  ? openCompleteShotPrompt(state.currentShot)
+                  : void generateCompleteShotPrompt(state.currentShot)}
+              >{review.completePromptStatus === "generating"
+                ? "生成中…"
+                : review.completePromptStatus === "ready"
+                  ? review.promptReviewStatus === "ready" ? "✓ 已审查 · 查看提示词" : "已生成 · 查看／提交审查"
+                  : "生成提示词讨论稿"}</button>
+            ) : null}
             <div className={`shot-state ${review.approved ? "locked" : ""}`}>{review.approved ? "已批准" : `版本 ${review.versions.length + 1}`}</div>
           </div>
           {renderTaskProgress()}
@@ -3859,7 +6563,7 @@ export default function Home() {
             </div>
           </div>
 
-          {currentVideoPackage ? (
+          {review.approved && currentVideoPackage ? (
             <div className="director-prompt-card">
               <div className="visual-heading">
                 <span>VIDEO PROMPT</span>
@@ -3922,7 +6626,76 @@ export default function Home() {
         </div>
       </footer>
       </>}
+      {zoomedStructurePanelId && zoomedStructurePanelUrl && bridge.pairingToken ? (
+        <div
+          className="panel-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`放大查看画格 ${zoomedStructurePanelId}`}
+          tabIndex={-1}
+          autoFocus
+          onClick={closeStructurePanelZoom}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") closeStructurePanelZoom();
+            if (event.key === "ArrowLeft") moveStructurePanelZoom(-1);
+            if (event.key === "ArrowRight") moveStructurePanelZoom(1);
+          }}
+        >
+          <section className="panel-lightbox-window" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div><span>漫画原裁图</span><b>{zoomedStructurePanelId}</b></div>
+              <div className="panel-lightbox-controls">
+                <button type="button" className="panel-lightbox-close" onClick={closeStructurePanelZoom}>关闭 Esc</button>
+              </div>
+            </header>
+            <div className="panel-lightbox-body">
+              <div className="panel-lightbox-stage">
+                <img
+                  src={zoomedStructurePanelUrl}
+                  alt={`放大的漫画画格 ${zoomedStructurePanelId}`}
+                  title="单击缩回小图"
+                  onClick={closeStructurePanelZoom}
+                />
+              </div>
+              <aside className="panel-lightbox-understanding">
+                <section><span>画面理解</span><p>{state.sourceMangaPanels?.[zoomedStructurePanelId]?.sourceObservation || "正在读取本格画面理解…"}</p></section>
+                <section>
+                  <span>对白原文</span>
+                  {state.sourceMangaPanels?.[zoomedStructurePanelId]?.dialogue?.length ? state.sourceMangaPanels[zoomedStructurePanelId].dialogue.map((line, index) => (
+                    <div className="panel-lightbox-dialogue" key={`${line.speaker}-${index}`}><b>{line.speaker}</b><p>{line.text}</p>{line.confidence !== "high" ? <i>{line.confidence === "medium" ? "待复核" : "低置信"}</i> : null}</div>
+                  )) : <em>本格未识别到对白或文字</em>}
+                </section>
+                <section><span>出场人物</span><p>{state.sourceMangaPanels?.[zoomedStructurePanelId]?.characters?.length ? state.sourceMangaPanels[zoomedStructurePanelId].characters.join("、") : "本格人物待复核"}</p></section>
+                <section><span>人物关系与剧情</span><p>{state.sourceMangaPanels?.[zoomedStructurePanelId]?.relationAndPlot || state.sourceMangaPanels?.[zoomedStructurePanelId]?.textSummary || "正在整理本格剧情作用…"}</p></section>
+                <section className="panel-lightbox-annotation">
+                  <span>对这张图的批注</span>
+                  <textarea
+                    rows={6}
+                    value={state.sourceMangaPanelAnnotations?.[zoomedStructurePanelId] || ""}
+                    placeholder="在这里纠正裁切、对白、人物关系或剧情理解……"
+                    onChange={(event) => updateMangaPanelAnnotation(zoomedStructurePanelId, event.target.value)}
+                  />
+                  <small>自动保存到当前漫画草稿</small>
+                </section>
+              </aside>
+            </div>
+            <footer>
+              <button type="button" onClick={() => moveStructurePanelZoom(-1)}>← 上一张</button>
+              <span>{zoomedStructurePanelIndex + 1} / {structurePanelEntries.length} · 方向键切换</span>
+              <button type="button" onClick={() => moveStructurePanelZoom(1)}>下一张 →</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <ManjingAuthGate apiBase={bridgeBase} serverConfigured={Boolean(configuredApiBase)}>
+      <DirectorDesk />
+    </ManjingAuthGate>
   );
 }

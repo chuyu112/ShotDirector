@@ -1,0 +1,25 @@
+{
+  "updatedAt": "2026-08-14",
+  "series": "CITY HUNTER",
+  "expectedChapters": 336,
+  "catalog": {
+    "status": "source-confirmed-sync-pending",
+    "sourceUrl": "https://ebookjapan.yahoo.co.jp/stories/all/118125/",
+    "note": "已确认授权目录共336话；目标站当前对脚本连接不稳定，未宣称已经下载完整目录。"
+  },
+  "episodePlots": {
+    "downloaded": 1,
+    "files": [
+      "episodes/004.md",
+      "episodes/004.json"
+    ],
+    "note": "第4话详细剧情由用户上传的11张扫描图提炼，优先级高于网页短评。"
+  },
+  "publicSummaryArchive": {
+    "status": "indexed-but-bulk-download-blocked",
+    "sourceUrl": "https://twiman.net/search?m=tweet&o=2&q=%E6%AF%8E%E6%97%A5CH%E6%89%89%E7%B5%B5",
+    "account": "@cityhunter100t",
+    "hashtag": "#毎日CH扉絵",
+    "note": "归档页目前对自动读取返回403或空结果；保留来源，不把未下载内容标成完成。"
+  }
+}

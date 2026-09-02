@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "shotId", "summary", "prompt", "research", "evidence", "warnings"],
+  "properties": {
+    "status": { "type": "string", "const": "completed" },
+    "shotId": { "type": "string" },
+    "summary": { "type": "string" },
+    "prompt": { "type": "string", "minLength": 100 },
+    "research": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["used", "queries", "sources", "notes"],
+      "properties": {
+        "used": { "type": "boolean" },
+        "queries": { "type": "array", "maxItems": 3, "items": { "type": "string" } },
+        "sources": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "url", "usedFor"],
+            "properties": {
+              "title": { "type": "string" },
+              "url": { "type": "string" },
+              "usedFor": { "type": "string" }
+            }
+          }
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourcePanels", "imagesInspected", "dialogueCount", "panelAnnotationCount", "backgroundUsed", "artStyleUsed"],
+      "properties": {
+        "sourcePanels": { "type": "array", "items": { "type": "string" } },
+        "imagesInspected": { "type": "array", "items": { "type": "string" } },
+        "dialogueCount": { "type": "integer", "minimum": 0 },
+        "panelAnnotationCount": { "type": "integer", "minimum": 0 },
+        "backgroundUsed": { "type": "boolean" },
+        "artStyleUsed": { "type": "boolean" }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "shotId", "reviewerId", "report", "evidence"],
+  "properties": {
+    "status": { "type": "string", "const": "completed" },
+    "shotId": { "type": "string" },
+    "reviewerId": { "type": "string" },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "summary", "strengths", "checks", "findings"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["discussion-ready", "needs-revision"] },
+        "summary": { "type": "string" },
+        "strengths": { "type": "array", "items": { "type": "string" }, "maxItems": 6 },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sourceBoundary", "characterContinuity", "timingFeasible", "dialogueFeasible", "cameraAndActionCoherent", "soundAndNegativeComplete"],
+          "properties": {
+            "sourceBoundary": { "type": "boolean" },
+            "characterContinuity": { "type": "boolean" },
+            "timingFeasible": { "type": "boolean" },
+            "dialogueFeasible": { "type": "boolean" },
+            "cameraAndActionCoherent": { "type": "boolean" },
+            "soundAndNegativeComplete": { "type": "boolean" }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "severity", "category", "title", "detail", "suggestion", "panelIds"],
+            "properties": {
+              "id": { "type": "string" },
+              "severity": { "type": "string", "enum": ["blocking", "warning", "suggestion"] },
+              "category": { "type": "string" },
+              "title": { "type": "string" },
+              "detail": { "type": "string" },
+              "suggestion": { "type": "string" },
+              "panelIds": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "sourcePanels", "imagesInspected", "promptHashMatched", "independentRun"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["direct-images", "structured-panel-evidence"] },
+        "sourcePanels": { "type": "array", "items": { "type": "string" } },
+        "imagesInspected": { "type": "array", "items": { "type": "string" } },
+        "promptHashMatched": { "type": "boolean" },
+        "independentRun": { "type": "boolean", "const": true }
+      }
+    }
+  }
+}

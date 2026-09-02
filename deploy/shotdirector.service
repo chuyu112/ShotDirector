@@ -1,0 +1,17 @@
+[Unit]
+Description=ShotDirector web application
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/shotdirector
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/local/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

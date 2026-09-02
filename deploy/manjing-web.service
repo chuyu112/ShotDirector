@@ -1,0 +1,26 @@
+[Unit]
+Description=Manjing responsive web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=manjing
+Group=manjing
+WorkingDirectory=/opt/manjing
+Environment=NODE_ENV=production
+Environment=MANJING_APP_ROOT=/opt/manjing
+Environment=MANJING_WEB_HOST=127.0.0.1
+Environment=MANJING_WEB_PORT=3300
+ExecStart=/usr/local/bin/node /opt/manjing/server/start-web-production.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/manjing
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

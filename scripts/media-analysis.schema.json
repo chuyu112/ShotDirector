@@ -23,6 +23,7 @@
     },
     "mangaPages": {
       "type": "array",
+      "maxItems": 4,
       "items": { "$ref": "#/definitions/mangaPage" }
     },
     "assetPrompts": {
@@ -108,7 +109,7 @@
         "readingOrder": { "type": "array", "items": { "type": "string" } },
         "includeInShots": { "type": "boolean" },
         "notes": { "type": "string" },
-        "panels": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/mangaPanel" } }
+        "panels": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/definitions/mangaPanel" } }
       }
     },
     "segment": {
