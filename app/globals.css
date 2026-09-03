@@ -5270,3 +5270,10 @@ input:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+.whitebox-empty-state {
+  padding: 20px;
+  color: #f9eed0;
+  background: #292723;
+  border-left: 4px solid #f4c84a;
+}
+.whitebox-empty-state p { margin: 8px 0 0; line-height: 1.6; }

@@ -15,6 +15,7 @@ import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysis
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
 import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
 import { persistProjectSnapshot } from "./project-save.mjs";
+import { LineListField, LineListTextarea } from "./line-list-field";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
   browserAgentRevision,
@@ -1014,10 +1015,6 @@ function createInitialState(): ReviewState {
   };
 }
 
-function lines(value: string[]) {
-  return value.join("\n");
-}
-
 function splitLines(value: string) {
   return value.split("\n").map((item) => item.trim()).filter(Boolean);
 }
@@ -1849,7 +1846,7 @@ function StageSketch({
   const plan = useDefaultProjectPlan ? blockingPlans[planKey] || blockingPlans[shot.id] : undefined;
   const svgId = useId().replace(/:/g, "");
   if (!plan) {
-    return <div className="stage-sketch"><div className="sketch-scene">{shot.scene}</div><p>{shot.composition}</p></div>;
+    return <div className="stage-sketch"><div role="status"><b>尚未生成当前 Shot 的站位图</b><p>当前提示词尚未转换为人物坐标、朝向与机位数据。下方文字是构图说明，不是已经生成的站位图。</p></div><div className="sketch-scene">{shot.scene}</div><p>{shot.composition}</p></div>;
   }
 
   const arrowIds = {
@@ -2067,6 +2064,7 @@ function DirectorDesk() {
 
   const review = state.reviews[state.currentShot];
   const shot = normalizeShot(review.shot, state.projectTitle === defaultProjectTitle);
+  const shotListScope = `${activeStorageKey}:${shot.shotUid || shot.id}`;
   const structureConfirmed = state.structureStatus !== "draft";
   const structurePanelEntries = state.reviews.flatMap((item, reviewIndex) => (item.shot.sourcePanels || []).map((panelId) => ({
     panelId,
@@ -4694,11 +4692,11 @@ function DirectorDesk() {
     window.location.assign(draftUrl);
   }
 
-  function updateGlobalArray(field: (typeof globalArrayFields)[number], value: string) {
+  function updateGlobalArray(field: (typeof globalArrayFields)[number], value: string[]) {
     setState((previous) => ({
       ...previous,
       globalStatus: "draft",
-      globalSettings: { ...previous.globalSettings, [field]: splitLines(value) },
+      globalSettings: { ...previous.globalSettings, [field]: value },
       reviews: previous.reviews.map(invalidateCompletePrompt),
       structureStatus: "draft",
       structureConfirmedAt: undefined,
@@ -5950,23 +5948,23 @@ function DirectorDesk() {
               ))}
               {!normalizeCharacterProfiles(state.globalSettings.characterProfiles).length ? <div className="character-profile-empty">尚未建立人物档案。点击“新增人物”开始录入。</div> : null}
             </div>
-            <TextField label="人物补充规则（每行一条，兼容旧项目）" value={lines(state.globalSettings.characters)} rows={5} onChange={(value) => updateGlobalArray("characters", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="人物补充规则（每行一条，兼容旧项目）" value={state.globalSettings.characters} rows={5} onChange={(value) => updateGlobalArray("characters", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>02 · PROPS</span><h2>关键物品</h2><p>维护跨镜道具的唯一性、外观、比例和状态时间线。</p></div>
-            <TextField label="关键物品规则（每行一条）" value={lines(state.globalSettings.props)} rows={9} onChange={(value) => updateGlobalArray("props", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="关键物品规则（每行一条）" value={state.globalSettings.props} rows={9} onChange={(value) => updateGlobalArray("props", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>03 · LOCATIONS</span><h2>地点与时代</h2><p>防止新宿站、ALTA、歌舞伎町牌楼和餐厅空间混在一起。</p></div>
-            <TextField label="地点与时代规则（每行一条）" value={lines(state.globalSettings.locations)} rows={8} onChange={(value) => updateGlobalArray("locations", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="地点与时代规则（每行一条）" value={state.globalSettings.locations} rows={8} onChange={(value) => updateGlobalArray("locations", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>04 · TIMELINE</span><h2>剧情日期与时间线</h2><p>失踪当晚、次日新闻和姐姐委托分开记录。</p></div>
-            <TextField label="全片时间线（每行一条）" value={lines(state.globalSettings.timeline)} rows={8} onChange={(value) => updateGlobalArray("timeline", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="全片时间线（每行一条）" value={state.globalSettings.timeline} rows={8} onChange={(value) => updateGlobalArray("timeline", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>05 · CONTINUITY</span><h2>连续性硬锁</h2><p>所有相关镜头都必须服从的空间、身份与状态规则。</p></div>
-            <TextField label="连续性规则（每行一条）" value={lines(state.globalSettings.continuity)} rows={9} onChange={(value) => updateGlobalArray("continuity", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="连续性规则（每行一条）" value={state.globalSettings.continuity} rows={9} onChange={(value) => updateGlobalArray("continuity", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>06 · STYLE</span><h2>美术风格分层</h2><p>最终视频与临时分镜图严格分开，互不反推。</p></div>
@@ -5975,11 +5973,11 @@ function DirectorDesk() {
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>07 · MODEL</span><h2>生成模型规范</h2><p>时长、全能参考上限与动作最小时长。</p></div>
-            <TextField label="模型规范（每行一条）" value={lines(state.globalSettings.modelRules)} rows={8} onChange={(value) => updateGlobalArray("modelRules", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="模型规范（每行一条）" value={state.globalSettings.modelRules} rows={8} onChange={(value) => updateGlobalArray("modelRules", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>08 · NEGATIVE</span><h2>全局禁止项</h2><p>任何镜头都不能违反的禁令。</p></div>
-            <TextField label="全局禁止项（每行一条）" value={lines(state.globalSettings.negative)} rows={8} onChange={(value) => updateGlobalArray("negative", value)} />
+            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="全局禁止项（每行一条）" value={state.globalSettings.negative} rows={8} onChange={(value) => updateGlobalArray("negative", value)} />
           </section>
         </fieldset>
 
@@ -6124,12 +6122,12 @@ function DirectorDesk() {
 
         <fieldset className="script-fields" disabled={scriptLocked} aria-busy={scriptLocked}>
         <ScriptBlock section={sections[0]} annotation={review.annotations.characters} onAnnotation={(value) => updateAnnotation("characters", value)}>
-          <TextField label="出镜人物（每行一人）" value={lines(shot.characters)} rows={5} onChange={(value) => updateField("characters", splitLines(value))} />
+          <LineListField scopeKey={shotListScope} label="出镜人物（每行一人）" value={shot.characters} rows={5} onChange={(value) => updateField("characters", value)} />
         </ScriptBlock>
 
         <ScriptBlock section={sections[1]} annotation={review.annotations.scene} onAnnotation={(value) => updateAnnotation("scene", value)}>
           <div className="sheet-grid">
-            <TextField label="关键物品（车辆也算物品，每行一件）" value={lines(shot.props)} rows={5} onChange={(value) => updateField("props", splitLines(value))} />
+            <LineListField scopeKey={shotListScope} label="关键物品（车辆也算物品，每行一件）" value={shot.props} rows={5} onChange={(value) => updateField("props", value)} />
             <TextField label="场景" value={shot.scene} rows={4} onChange={(value) => updateField("scene", value)} />
             <TextField label="人物站位、朝向与构图" value={shot.composition} rows={6} onChange={(value) => updateField("composition", value)} />
           </div>
@@ -6139,11 +6137,12 @@ function DirectorDesk() {
               <strong>{referenceCount} / {referenceLimit}</strong>
             </div>
             <div className="reference-meter" aria-label={`已使用 ${referenceCount} 个，共 ${referenceLimit} 个参考位`}><i style={{ width: `${Math.min(100, (referenceCount / referenceLimit) * 100)}%` }} /></div>
-            <textarea
+            <LineListTextarea scopeKey={shotListScope}
               rows={Math.min(10, Math.max(5, referenceCount + 1))}
-              value={lines(shot.omniReferences)}
+              value={shot.omniReferences}
+              aria-label="全能参考清单"
               placeholder="每行一个全能参考，例如：主角角色参考、关键车辆、核心地点"
-              onChange={(event) => updateOmniReferences(event.target.value)}
+              onChange={(items) => updateOmniReferences(items.join("\n"))}
             />
             <small>当前模型：{generationModels.find((item) => item.id === generationModel)?.label} · 硬上限 {referenceLimit} 个</small>
           </div>
@@ -6151,7 +6150,7 @@ function DirectorDesk() {
 
         <ScriptBlock section={sections[2]} annotation={review.annotations.story} onAnnotation={(value) => updateAnnotation("story", value)}>
           <TextField label={`Shot ${shot.id} 剧情`} value={shot.story} rows={6} onChange={(value) => updateField("story", value)} />
-          <TextField label="对白 / 声音（每行一条）" value={lines(shot.dialogue)} rows={4} onChange={(value) => updateField("dialogue", splitLines(value))} />
+          <LineListField scopeKey={shotListScope} label="对白 / 声音（每行一条）" value={shot.dialogue} rows={4} onChange={(value) => updateField("dialogue", value)} />
           {shot.sourcePanels?.length ? (
             <div className="source-panel-trace">
               <span>MANGA SOURCE PANELS</span>
@@ -6164,11 +6163,12 @@ function DirectorDesk() {
               <div><span>SOURCE TRACE</span><b>原文依据</b><small>这里只放脚本原句；导演改写仍写在上面的剧情和动作里。</small></div>
               <button type="button" onClick={openCoverageReview}>查看全片覆盖率 {coverageReport.coveragePercent}%</button>
             </div>
-            <textarea
+            <LineListTextarea scopeKey={shotListScope}
               rows={Math.min(8, Math.max(4, sourceTextForShot(shot).length + 1))}
-              value={lines(sourceTextForShot(shot))}
+              value={sourceTextForShot(shot)}
+              aria-label="原文依据"
               placeholder="每行一条对应原文。没有原文依据时留空，并到“脚本体检”查看未覆盖内容。"
-              onChange={(event) => updateField("sourceText", splitLines(event.target.value))}
+              onChange={(items) => updateField("sourceText", items)}
             />
             <small>当前 Shot 对应 {coverageReport.units.filter((unit) => unit.shotIds.includes(shot.id)).length} 条原文；依据来源：{state.sourceName}</small>
           </div>
@@ -6186,7 +6186,7 @@ function DirectorDesk() {
                   <b>{segment.label}</b>
                   <textarea rows={3} value={segment.beat} onChange={(event) => updateSegment(index, { beat: event.target.value })} />
                   <textarea rows={3} value={segment.framing} onChange={(event) => updateSegment(index, { framing: event.target.value })} />
-                  <textarea rows={3} value={lines(segment.mustShow)} onChange={(event) => updateSegment(index, { mustShow: splitLines(event.target.value) })} />
+                  <LineListTextarea scopeKey={`${shotListScope}:${segment.label}`} aria-label={`${segment.label} 必须呈现`} rows={3} value={segment.mustShow} onChange={(items) => updateSegment(index, { mustShow: items })} />
                 </div>
               ))}
             </div>
@@ -6195,8 +6195,8 @@ function DirectorDesk() {
 
         <ScriptBlock section={sections[4]} annotation={review.annotations.continuity} onAnnotation={(value) => updateAnnotation("continuity", value)}>
           <div className="sheet-grid">
-            <TextField label="连续性硬锁（每行一条）" value={lines(shot.continuity)} rows={7} onChange={(value) => updateField("continuity", splitLines(value))} />
-            <TextField label="禁止项（每行一条）" value={lines(shot.negative)} rows={7} onChange={(value) => updateField("negative", splitLines(value))} />
+            <LineListField scopeKey={shotListScope} label="连续性硬锁（每行一条）" value={shot.continuity} rows={7} onChange={(value) => updateField("continuity", value)} />
+            <LineListField scopeKey={shotListScope} label="禁止项（每行一条）" value={shot.negative} rows={7} onChange={(value) => updateField("negative", value)} />
           </div>
         </ScriptBlock>
 

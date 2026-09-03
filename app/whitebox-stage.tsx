@@ -919,6 +919,7 @@ export function WhiteboxEditor({
     return camera ? { type: "camera", value: camera } : undefined;
   }, [scene, activeSelectedId]);
   const framingActor = selected?.type === "actor" ? selected.value : scene.actors[0];
+  const hasSceneContent = scene.actors.length > 0 || scene.objects.length > 0;
   const filteredPoseLibrary = useMemo(() => {
     const query = poseQuery.trim().toLowerCase();
     return poseLibrary.filter((entry) => (
@@ -1055,6 +1056,7 @@ export function WhiteboxEditor({
   }
 
   function downloadCleanFrame() {
+    if (!hasSceneContent) return;
     const dataUrl = stageRef.current?.captureCleanPng();
     if (!dataUrl) return;
     const link = document.createElement("a");
@@ -1064,6 +1066,7 @@ export function WhiteboxEditor({
   }
 
   async function lockCleanReference() {
+    if (!hasSceneContent) return;
     const dataUrl = stageRef.current?.captureCleanPng();
     if (!dataUrl) return;
     await onLockReference(dataUrl);
@@ -1077,10 +1080,11 @@ export function WhiteboxEditor({
           <button type="button" className={viewMode === "orbit" ? "active" : ""} onClick={() => setViewMode("orbit")}>可编辑预演</button>
         </div>
         <div className="whitebox-output-actions">
-          <button type="button" className={referenceLocked ? "whitebox-lock locked" : "whitebox-lock"} onClick={() => void (referenceLocked ? onUnlockReference() : lockCleanReference())}>{referenceLocked ? "✓ 已锁定 · 点此取消" : "锁定为生图结构参考"}</button>
-          <button type="button" className="whitebox-download" onClick={downloadCleanFrame}>导出纯净16:9 PNG</button>
+          <button type="button" disabled={!hasSceneContent && !referenceLocked} className={referenceLocked ? "whitebox-lock locked" : "whitebox-lock"} onClick={() => void (referenceLocked ? onUnlockReference() : lockCleanReference())}>{referenceLocked ? "✓ 已锁定 · 点此取消" : "锁定为生图结构参考"}</button>
+          <button type="button" disabled={!hasSceneContent} className="whitebox-download" onClick={downloadCleanFrame}>导出纯净16:9 PNG</button>
         </div>
       </div>
+      {!hasSceneContent ? <div className="whitebox-empty-state" role="status"><b>当前 Shot 还没有白模人物或物体</b><p>这里是空场景，不是正在生成。提示词尚未转换为站位数据；目前可通过下方“自建小人白模”手动搭建。自动生成链路尚未接通，空场景不能锁定或导出为结构参考。</p></div> : null}
       <div className="whitebox-stage-wrap">
         <WhiteboxStage ref={stageRef} sceneData={scene} viewMode={viewMode} selectedEntityId={viewMode === "orbit" ? activeSelectedId : undefined} onSelectEntity={setSelectedId} />
         <div className="whitebox-frame-badge"><b>{viewMode === "shot" ? "CLEAN CAMERA" : "EDIT MODE"}</b><span>{viewMode === "shot" ? "无文字 · 无箭头 · 无网格" : "拖动旋转 · 滚轮缩放 · 点击模型选择"}</span></div>
