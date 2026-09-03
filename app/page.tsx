@@ -10,6 +10,8 @@ import { buildCompleteShotPromptRevision, buildPromptReviewRevision, buildShotUp
 import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
 import { MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
+import { ShotChat, type ShotChatState, type ShotChatPending, type ShotChatResult } from "./shot-chat";
+import { chatReplyCanApply, reviewSuggestionsText } from "./shot-chat-state.mjs";
 import { planPanelDrop } from "./panel-drag-grouping.mjs";
 import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysisReadingOrder, type ReadingPage } from "./manga-reading-order.mjs";
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
@@ -321,6 +323,7 @@ type ShotReview = {
   promptReviewRequestId?: string;
   promptReviewError?: string;
   selectedDirectorView?: string;
+  chat?: ShotChatState;
   whiteboxScenes: Record<string, WhiteboxScene>;
   whiteboxReferences?: Record<string, { lockedAt: string; sourceRevision?: string }>;
   seededAssetReferenceIds?: string[];
@@ -421,6 +424,7 @@ type BridgeState = {
   pairingToken?: string;
   activeJob?: BridgeJob;
   lastJob?: BridgeJob;
+  shotWork?: { limit: number; active: number; queued: number };
   promptJobs?: BridgeJob[];
   lastPromptJobs?: BridgeJob[];
   artworkJobs?: BridgeJob[];
@@ -486,7 +490,7 @@ type BridgeJobEvent = {
 };
 
 type BridgeJob = {
-  type: "annotation" | "annotation-batch" | "global-annotation" | "complete-shot-prompt" | "prompt-review" | "artwork" | "asset-artwork" | "load-script";
+  type: "annotation" | "annotation-batch" | "global-annotation" | "complete-shot-prompt" | "shot-chat" | "prompt-review" | "artwork" | "asset-artwork" | "load-script";
   shotId: string;
   projectUid?: string;
   shotUid?: string;
@@ -699,10 +703,6 @@ const directorSection: { id: SectionId; number: string; title: string; hint: str
   hint: "道路、人物与车辆站位、朝向、机位和运镜轨迹",
 };
 const annotationSections = [...sections, directorSection];
-
-function annotationCountFor(review: ShotReview) {
-  return annotationSections.filter((section) => (review.annotations?.[section.id] || "").trim()).length;
-}
 
 type DirectorViewOption = {
   key: string;
@@ -1763,33 +1763,18 @@ function MangaPanelStrip({ requestId, panelIds, pairingToken }: { requestId: str
 
 function ScriptBlock({
   section,
-  annotation,
-  onAnnotation,
   children,
 }: {
   section: (typeof sections)[number];
-  annotation: string;
-  onAnnotation: (value: string) => void;
   children: ReactNode;
 }) {
-  const note = annotation || "";
   return (
-    <article className={`script-block ${note.trim() ? "has-note" : ""}`}>
+    <article className="script-block">
       <header>
         <span>{section.number}</span>
         <div><h2>{section.title}</h2><p>{section.hint}</p></div>
-        {note.trim() ? <b>已批注</b> : <b className="quiet">待查看</b>}
       </header>
       <div className="script-content">{children}</div>
-      <label className="annotation-box">
-        <span>批注 · 只写你要改的地方</span>
-        <textarea
-          rows={3}
-          value={note}
-          placeholder={`给“${section.title}”写批注；可以先写，最后统一发送给写作模型`}
-          onChange={(event) => onAnnotation(event.target.value)}
-        />
-      </label>
     </article>
   );
 }
@@ -2014,7 +1999,6 @@ function DirectorDesk() {
   const [globalFiles, setGlobalFiles] = useState<GlobalFileSummary[]>([]);
   const [selectedGlobalFileId, setSelectedGlobalFileId] = useState("");
   const [globalFileBusy, setGlobalFileBusy] = useState(false);
-  const [lastGlobalSubmission, setLastGlobalSubmission] = useState<{ annotation: string; submittedAt: string }>();
   const [naturalScript, setNaturalScript] = useState("");
   const [lastSubmission, setLastSubmission] = useState<AnnotationSubmission>();
   const [lastBatchSubmissions, setLastBatchSubmissions] = useState<Record<string, AnnotationSubmission>>({});
@@ -2053,7 +2037,7 @@ function DirectorDesk() {
   const recoveringArtworkJob = useRef("");
   const recoveringCompletePrompt = useRef("");
   const recoveringPromptReview = useRef("");
-  const promptReviewSubmission = useRef(false);
+  const promptReviewSubmission = useRef(new Set<string>());
   const currentShotIdRef = useRef("");
   const writingModelMenuRef = useRef<HTMLDetailsElement>(null);
   const draggedWritingModelIdRef = useRef<WritingModelId | "">("");
@@ -2195,10 +2179,6 @@ function DirectorDesk() {
   const selectedWhiteboxReferenceLocked = Boolean(review.whiteboxReferences?.[selectedDirectorView.key]);
   const hasSegmentedDirectorViews = directorViews.length > 1;
   const artworkPromptEdited = review.artworkPrompt !== undefined;
-  const noteCount = annotationSections.filter((section) => (review.annotations[section.id] || "").trim()).length;
-  const annotatedReviews = state.reviews.filter((item) => annotationCountFor(item) > 0);
-  const batchShotCount = annotatedReviews.length;
-  const batchNoteCount = annotatedReviews.reduce((total, item) => total + annotationCountFor(item), 0);
   const approvedCount = state.reviews.filter((item) => item.approved).length;
   const selectedRecipe = getDirectorRecipe(state.selectedRecipeId);
   const coverageReport = useMemo(
@@ -2287,7 +2267,7 @@ function DirectorDesk() {
   );
   const globalBusy = bridge.busy && bridge.activeJob?.type === "global-annotation";
   const artworkJob = bridge.artworkJobs?.find((job) => job.shotId === shot.id && (!job.projectTitle || job.projectTitle === projectStorageTitle));
-  const scriptLocked = review.scriptStatus === "sending"
+  const scriptLocked = Boolean(review.chat?.pending) || review.scriptStatus === "sending"
     || stampingShotId === shot.id
     || review.artworkStatus === "generating"
     || Boolean(artworkJob);
@@ -2544,6 +2524,7 @@ function DirectorDesk() {
             pairingToken: value.pairingToken || (value.serverMode ? serverGatewayPairingSentinel : undefined),
             activeJob: value.activeJob,
             lastJob: value.lastJob,
+            shotWork: value.shotWork,
             promptJobs: Array.isArray(value.promptJobs) ? value.promptJobs : [],
             lastPromptJobs: Array.isArray(value.lastPromptJobs) ? value.lastPromptJobs : [],
             artworkJobs: Array.isArray(value.artworkJobs) ? value.artworkJobs : [],
@@ -2758,7 +2739,7 @@ function DirectorDesk() {
   }, [activeStorageKey, bridge.connected, bridge.pairingToken, hydrated, projectArchiveLoaded, projectScopeId, state]);
 
   useEffect(() => {
-    if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length || review.completePrompt) return;
+    if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length || (review.completePrompt && review.completePromptStatus !== "generating")) return;
     if (review.completePromptSummary === "最终美术风格已改为写实真人电影，请按新风格重新生成。") return;
     const recoveryShotIdentity = stableShotIdentity(shot);
     const matchingLiveJob = (bridge.promptJobs || []).find((job) => (
@@ -2864,11 +2845,11 @@ function DirectorDesk() {
 
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
-    if (promptReviewSubmission.current) return;
+    if (promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
     if (promptReviewIsCurrent) return;
-    const matchingLiveJob = bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.status === "running";
+    const matchingLiveJob = (bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.status === "running") || (bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.status === "running" ? bridge.activeJob : undefined);
     if (matchingLiveJob) return;
-    const matchingTerminalJob = bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.status !== "running";
+    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.status !== "running") || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.status !== "running" ? bridge.lastJob : undefined);
     if (review.promptReviewStatus !== "reviewing" && !matchingTerminalJob) return;
     const recoveryReviewerId = review.promptReviewerId || selectedPromptReviewerId;
     const sourceRevision = buildPromptReviewRevision({
@@ -2878,20 +2859,20 @@ function DirectorDesk() {
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
       reviewerId: recoveryReviewerId,
     });
-    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${bridge.lastJob?.finishedAt || "disk"}`;
+    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${matchingTerminalJob?.finishedAt || "disk"}`;
     if (recoveringPromptReview.current === recoveryKey) return;
     recoveringPromptReview.current = recoveryKey;
     let active = true;
-    bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
+    bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
       cache: "no-store",
       headers: { "X-Manjing-Token": bridge.pairingToken },
     }).then(async (response) => {
       const result = await response.json() as PromptReviewResult;
       if (!response.ok) throw new Error(result.error || "没有可恢复的独立审查报告");
       if (!active || result.shotId !== shot.id || result.reviewerId !== recoveryReviewerId || result.sourceRevision !== sourceRevision || !result.report) return;
-      setState((previous) => ({
+      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
         ...previous,
-        reviews: previous.reviews.map((item) => item.shot.id === shot.id ? {
+        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === review.promptReviewSourceRevision ? {
           ...item,
           approved: false,
           approvedAt: undefined,
@@ -2908,9 +2889,9 @@ function DirectorDesk() {
       setToast(`已恢复 ${result.reviewerLabel || result.reviewerId} 的独立审查报告`);
     }).catch(() => {
       if (!active || review.promptReviewStatus !== "reviewing") return;
-      setState((previous) => ({
+      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
         ...previous,
-        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewStatus === "reviewing" ? {
+        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision && item.promptReviewStatus === "reviewing" ? {
           ...item,
           promptReviewStatus: "error" as PromptReviewStatus,
           promptReviewError: "上次独立审查已经结束，但没有找到与当前提示词匹配的报告，请重新提交。",
@@ -2918,7 +2899,7 @@ function DirectorDesk() {
       }));
     });
     return () => { active = false; };
-  }, [activeStorageKey, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id]);
+  }, [activeStorageKey, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -3273,17 +3254,6 @@ function DirectorDesk() {
     setState((previous) => ({ ...previous, structureStatus: "draft", structureConfirmedAt: undefined }));
   }
 
-  function updateAnnotation(section: SectionId, value: string) {
-    updateReview((current) => invalidateCompletePrompt({
-      ...current,
-      scriptStatus: "draft",
-      approved: false,
-      approvedAt: undefined,
-      annotations: { ...current.annotations, [section]: value },
-    }));
-    setState((previous) => ({ ...previous, structureStatus: "draft", structureConfirmedAt: undefined }));
-  }
-
   function updateSegment(index: number, patch: Partial<StoryboardSegment>) {
     updateField("segments", shot.segments.map((segment, itemIndex) => itemIndex === index ? { ...segment, ...patch } : segment));
   }
@@ -3417,16 +3387,6 @@ function DirectorDesk() {
     window.setTimeout(() => { suppressStructurePanelClickRef.current = false; }, 0);
   }
 
-  function updateMangaPanelAnnotation(panelId: string, value: string) {
-    setState((previous) => ({
-      ...previous,
-      sourceMangaPanelAnnotations: { ...(previous.sourceMangaPanelAnnotations || {}), [panelId]: value },
-      reviews: previous.reviews.map((item) => item.shot.sourcePanels?.includes(panelId) ? invalidateCompletePrompt(item) : item),
-      structureStatus: "draft",
-      structureConfirmedAt: undefined,
-    }));
-  }
-
   function openStructurePanelZoom(panelId: string) {
     setZoomedStructurePanelId(panelId);
   }
@@ -3462,9 +3422,88 @@ function DirectorDesk() {
     setToast(`已打开 Shot ${targetShot.id} 的完整提示词讨论稿`);
   }
 
+  function chatContext(currentState: ReviewState, target: ShotReview) {
+    const panelAnnotations = Object.fromEntries((target.shot.sourcePanels || []).map(id => [id, currentState.sourceMangaPanelAnnotations?.[id] || ""]));
+    const input = { projectTitle: currentState.projectTitle, modelId: currentState.generationModel || defaultGenerationModel, globalSettings: currentState.globalSettings, shot: target.shot, shotAnnotations: target.annotations, panelAnnotations, sourceMangaRequestId: currentState.sourceMangaRequestId || "" };
+    return { ...input, generationModel: input.modelId, sourceRevision: buildCompleteShotPromptRevision(input), projectUid: currentState.projectUid, currentPrompt: target.completePrompt || "", allowRevision: !target.approved };
+  }
+
+  function updateChatDraft(value: string) {
+    updateReview(current => ({ ...current, chat: { ...current.chat, draft: value } }));
+  }
+
+  function finishShotChat(projectUid: string, shotUid: string, pending: ShotChatPending, result: ShotChatResult) {
+    if (result.projectUid !== projectUid || result.shotUid !== shotUid || result.chatTurnId !== pending.turnId || result.sourceRevision !== pending.sourceRevision) return;
+    setState(previous => {
+      if (previous.projectUid !== projectUid) return previous;
+      return { ...previous, reviews: previous.reviews.map(item => {
+        if (item.shot.shotUid !== shotUid || item.chat?.pending?.turnId !== pending.turnId) return item;
+        const apply = chatReplyCanApply({ projectUid, shotUid, currentPrompt: item.completePrompt || "", currentSourceRevision: chatContext(previous, item).sourceRevision, approved: item.approved, pending, result });
+        const notice = result.action === "revise" ? apply ? "\n\n已更新本 Shot 提示词讨论稿，旧稿已保留；请重新严格审核。" : "\n\n本镜内容或锁定状态已经改变，未覆盖正文；候选稿已保留。" : "";
+        const chat: ShotChatState = { ...item.chat, pending: undefined, error: undefined,
+          messages: [...(item.chat.messages || []), { id: `${pending.turnId}-assistant`, role: "assistant", text: result.reply + notice, at: result.generatedAt }],
+          previousPrompt: apply ? item.completePrompt : item.chat.previousPrompt,
+          candidate: result.action === "revise" && !apply ? result.prompt : item.chat.candidate };
+        if (!apply) return { ...item, chat };
+        return { ...invalidatePromptReview(item), chat, completePrompt: result.prompt, completePromptStatus: "ready" as CompleteShotPromptStatus,
+          completePromptSummary: result.reply, completePromptSourceRevision: result.sourceRevision, completePromptGeneratedAt: result.generatedAt,
+          completePromptConfirmedAt: new Date().toISOString(), completePromptGeneratorId: result.generatorId, completePromptGeneratorProvider: result.generatorProvider,
+          completePromptResearch: undefined, completePromptWarnings: [], videoPromptSourceRevision: undefined, artworkDependencyRevision: undefined };
+      }) };
+    });
+  }
+
+  async function recoverShotChat(pending: ShotChatPending) {
+    if (!bridge.pairingToken) return;
+    const projectUid = state.projectUid, shotUid = shot.shotUid!;
+    const query = new URLSearchParams({ type: "shot-chat", chatTurnId: pending.turnId, projectUid, shotUid, sourceRevision: pending.sourceRevision });
+    const response = await bridgeFetch(`${bridgeBase}/job-result?${query}`, { headers: { "X-Manjing-Token": bridge.pairingToken }, cache: "no-store" });
+    const result = await response.json() as ShotChatResult;
+    if (response.status === 202) {
+      setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid && item.chat?.pending?.turnId === pending.turnId && item.chat.pending.stage !== result.message ? { ...item, chat: { ...item.chat, pending: { ...item.chat.pending, stage: result.message } } } : item) });
+      return;
+    }
+    if (response.ok && result.status === "completed") finishShotChat(projectUid, shotUid, pending, result);
+    else if (result.status === "failed" || (response.status === 404 && Date.now() - Date.parse(pending.startedAt) > 60000)) {
+      setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid && item.chat?.pending?.turnId === pending.turnId ? { ...item, chat: { ...item.chat, pending: undefined, error: result.error || "任务中断，请确认后重新发送" } } : item) });
+    }
+  }
+
+  async function sendShotChat() {
+    const message = review.chat?.draft?.trim() || "";
+    if (!message || review.chat?.pending) return;
+    if (!bridge.connected || !bridge.pairingToken || bridge.draining) throw new Error("主力 Agent 未连接或正在维护");
+    if (review.completePromptStatus === "generating" || review.promptReviewStatus === "reviewing") throw new Error("当前 Shot 正在生成或审核，请等待完成");
+    if (!mangaSourceRequestId || !shot.sourcePanels?.length) throw new Error("当前 Shot 尚未关联原作画格");
+    const context = chatContext(state, review);
+    const projectUid = state.projectUid, shotUid = shot.shotUid!;
+    const pending: ShotChatPending = { turnId: crypto.randomUUID(), sourceRevision: context.sourceRevision, basePrompt: review.completePrompt || "", startedAt: new Date().toISOString() };
+    const history = (review.chat?.messages || []).slice(-20).map(({ role, text }) => ({ role, text: text.slice(0, 16000) }));
+    setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid ? { ...item, chat: { ...item.chat, draft: "", pending, error: undefined, messages: [...(item.chat?.messages || []), { id: pending.turnId, role: "user" as const, text: message, at: pending.startedAt }] } } : item) });
+    try {
+      const response = await bridgeFetch(`${bridgeBase}/shot-chat`, { method: "POST", headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken }, body: JSON.stringify({ ...context, message, history, chatTurnId: pending.turnId }) });
+      const result = await response.json() as ShotChatResult;
+      if (!response.ok) {
+        setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid && item.chat?.pending?.turnId === pending.turnId ? { ...item, chat: { ...item.chat, pending: undefined, error: result.error || "Chat 失败；旧稿保留" } } : item) });
+        return;
+      }
+      finishShotChat(projectUid, shotUid, pending, result);
+    } catch {
+      // Keep the turn pending. Poll its durable result instead of resubmitting.
+      setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid && item.chat?.pending?.turnId === pending.turnId ? { ...item, chat: { ...item.chat, error: "连接中断，正在查询原任务；不会重复发送" } } : item) });
+    }
+  }
+
+  async function copyReviewSuggestions() {
+    if (!review.promptReviewReport) return;
+    const copied = await copyTextToClipboard(reviewSuggestionsText(shot.id, review.promptReviewReport, review.promptReviewSourceRevision));
+    setToast(copied ? "审核建议已复制；到本 Shot Chat 粘贴发送，由主力 Agent 修改" : "复制失败，请选中审核建议手动复制");
+  }
+
   async function generateCompleteShotPrompt(reviewIndex: number) {
     const targetReview = state.reviews[reviewIndex];
     if (!targetReview) return;
+    if (targetReview.chat?.pending || targetReview.completePromptStatus === "generating" || targetReview.promptReviewStatus === "reviewing") { setToast("当前 Shot 已有任务运行或排队，请等待完成"); return; }
     const targetShotIdentity = stableShotIdentity(targetReview.shot);
     const submittedShotId = targetReview.shot.id;
     const submittedProjectUid = state.projectUid;
@@ -3534,7 +3573,8 @@ function DirectorDesk() {
         throw new Error("Agent 返回结果与本次确认的 Shot 不一致");
       }
       setState((previous) => {
-        const reviews = previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+        if (previous.projectUid !== submittedProjectUid) return previous;
+        const reviews = previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) && item.completePromptStatus === "generating" && item.completePromptSourceRevision === sourceRevision ? {
           ...invalidatePromptReview(item),
           completePromptStatus: "ready" as CompleteShotPromptStatus,
           completePrompt: result.prompt,
@@ -3553,8 +3593,8 @@ function DirectorDesk() {
         const completedReview = targetIndex >= 0 ? reviews[targetIndex] : undefined;
         return {
           ...previous,
-          currentShot: targetIndex >= 0 ? targetIndex : previous.currentShot,
-          view: "script",
+          currentShot: previous.currentShot,
+          view: previous.view,
           reviews,
           structureStatus: allReady ? "confirmed" : "draft",
           structureConfirmedAt: allReady ? new Date().toISOString() : undefined,
@@ -3569,12 +3609,13 @@ function DirectorDesk() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "完整提示词生成失败";
       setState((previous) => {
+        if (previous.projectUid !== submittedProjectUid) return previous;
         const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
         return {
           ...previous,
-          currentShot: targetIndex >= 0 ? targetIndex : previous.currentShot,
-          view: "script",
-          reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+          currentShot: previous.currentShot,
+          view: previous.view,
+          reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) && item.completePromptStatus === "generating" && item.completePromptSourceRevision === sourceRevision ? {
             ...item,
             completePromptStatus: "error",
             completePromptSummary: message,
@@ -3613,7 +3654,7 @@ function DirectorDesk() {
   }
 
   function selectPromptReviewer(reviewerId: string) {
-    if (reviewControls.selectingDisabled || promptReviewSubmission.current) return;
+    if (reviewControls.selectingDisabled || promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
     if (!reviewerOptions.some((item) => item.id === reviewerId && item.available)) return;
     updateReview((current) => ({
       ...invalidatePromptReview(current),
@@ -3622,12 +3663,13 @@ function DirectorDesk() {
   }
 
   async function reviewCompletePrompt() {
-    if (promptReviewSubmission.current) return;
+    if (promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
     if (reviewControls.submitDisabled || !selectedPromptReviewer?.available || !bridge.pairingToken || !review.completePrompt?.trim()) {
       setToast(reviewControls.reason || "所选 Reviewer 暂不可用");
       return;
     }
-    promptReviewSubmission.current = true;
+    const submissionShotKey = shot.shotUid || shot.id;
+    promptReviewSubmission.current.add(submissionShotKey);
     const panelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [panelId, state.sourceMangaPanelAnnotations?.[panelId] || ""]));
     const sourceRevision = buildPromptReviewRevision({
       shotId: shot.id,
@@ -3636,9 +3678,9 @@ function DirectorDesk() {
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
       reviewerId: selectedPromptReviewer.id,
     });
-    setState((previous) => ({
+    setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
       ...previous,
-      reviews: previous.reviews.map((item, index) => index === state.currentShot ? {
+      reviews: previous.reviews.map((item, index) => item.shot.shotUid === shot.shotUid ? {
         ...item,
         approved: false,
         approvedAt: undefined,
@@ -3679,9 +3721,9 @@ function DirectorDesk() {
       if (result.status !== "completed" || result.shotId !== shot.id || result.reviewerId !== selectedPromptReviewer.id || result.sourceRevision !== sourceRevision) {
         throw new Error("Reviewer 返回报告与当前提示词版本不一致");
       }
-      setState((previous) => ({
+      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
         ...previous,
-        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewSourceRevision === sourceRevision ? {
+        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision ? {
           ...item,
           approved: false,
           approvedAt: undefined,
@@ -3698,9 +3740,9 @@ function DirectorDesk() {
         : `${selectedPromptReviewer.label} 审查完成；报告只供讨论，仍需你亲自批准`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "独立审查失败";
-      setState((previous) => ({
+      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
         ...previous,
-        reviews: previous.reviews.map((item) => item.shot.id === shot.id && item.promptReviewSourceRevision === sourceRevision ? {
+        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision ? {
           ...item,
           promptReviewStatus: "error" as PromptReviewStatus,
           promptReviewError: message,
@@ -3708,7 +3750,7 @@ function DirectorDesk() {
       }));
       setToast(message);
     } finally {
-      promptReviewSubmission.current = false;
+      promptReviewSubmission.current.delete(submissionShotKey);
     }
   }
 
@@ -4770,10 +4812,6 @@ function DirectorDesk() {
     }));
   }
 
-  function updateGlobalAnnotation(value: string) {
-    setState((previous) => ({ ...previous, globalAnnotation: value, globalStatus: value.trim() ? "draft" : previous.globalStatus }));
-  }
-
   async function persistProjectNow(detail: ManjingSaveProjectEventDetail) {
     if (!bridge.connected || !bridge.pairingToken || !projectArchiveLoaded) {
       throw new Error("项目存档尚未加载完成，请稍后再保存");
@@ -4938,170 +4976,6 @@ function DirectorDesk() {
     void refreshGlobalFiles().catch((error) => setToast(error instanceof Error ? error.message : "全局文件列表加载失败"));
   }, [state.workspaceMode, tenantScope.mode]);
 
-  async function sendGlobalAnnotation() {
-    const annotation = state.globalAnnotation.trim();
-    if (!annotation) {
-      setToast("先填写全局批注");
-      return;
-    }
-    if (!bridge.connected || !bridge.pairingToken) {
-      setToast("Pi Agent Harness 未启动，请保持本地桥接服务运行");
-      return;
-    }
-    if (bridge.busy) {
-      setToast(bridge.activeJob?.type === "global-annotation" ? "全局批注已经上传，写作模型正在处理" : "写作模型正在处理另一个任务，完成后再发送全局批注");
-      return;
-    }
-    const submittedAt = new Date().toISOString();
-    const normalizedSettings = cloneGlobalSettings(state.globalSettings);
-    setLastGlobalSubmission({ annotation, submittedAt });
-    setState((previous) => ({ ...previous, globalStatus: "sending", globalSummary: "全局批注已发送，正在整理项目设定" }));
-    setBridge((current) => ({ ...current, busy: true }));
-    try {
-      const response = await bridgeFetch(`${bridgeBase}/global-annotations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
-        body: JSON.stringify({
-          projectTitle: state.projectTitle,
-          workspaceScope,
-          submittedAt,
-          settings: normalizedSettings,
-          annotation,
-        }),
-      });
-      const result = await response.json() as { settings?: GlobalSettings; summary?: string; submittedAt?: string; error?: string };
-      if (!response.ok) throw new Error(result.error || "全局批注处理失败");
-      if (!isGlobalSettings(result.settings) || result.submittedAt !== submittedAt) throw new Error("写作模型返回的全局设定与本次提交不匹配");
-      setState((previous) => ({
-        ...previous,
-        globalSettings: cloneGlobalSettings(result.settings),
-        globalAnnotation: "",
-        globalStatus: "applied",
-        globalSummary: result.summary || (materialDraftMode ? "写作模型已应用全局批注；主项目源文件未修改" : "写作模型已应用全局批注并反推源文件"),
-        globalUpdatedAt: new Date().toISOString(),
-        reviews: previous.reviews.map(invalidateCompletePrompt),
-        structureStatus: "draft",
-        structureConfirmedAt: undefined,
-      }));
-      setToast(materialDraftMode ? "全局批注已应用到独立素材草稿；主项目未修改" : "全局批注已应用并反推独立源文件；单镜 Shot 未被混入本次任务");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "全局批注处理失败";
-      setState((previous) => ({ ...previous, globalStatus: "error", globalSummary: message }));
-      setToast(message);
-    } finally {
-      setBridge((current) => ({ ...current, busy: false }));
-    }
-  }
-
-  async function sendAllAnnotations() {
-    if (stampingShotId) {
-      setToast(`Shot ${stampingShotId} 正在回写并盖章，完成后再上传全片批注`);
-      return;
-    }
-    const targets = state.reviews.filter((item) => annotationCountFor(item) > 0);
-    if (!targets.length) {
-      setToast("全片没有待上传批注；当前 Shot 可直接签字盖章");
-      return;
-    }
-    if (bridge.busy) {
-      setToast(bridge.activeJob?.type === "annotation-batch" ? "全片批注已经上传，写作模型正在处理" : "写作模型正在处理另一个任务，完成后再上传全片批注");
-      return;
-    }
-    if (!bridge.connected || !bridge.pairingToken) {
-      setToast("Pi Agent Harness 未启动，请保持本地桥接服务运行");
-      return;
-    }
-    const invalidReferences = targets.filter((item) => item.shot.omniReferences.length > referenceLimit).map((item) => item.shot.id);
-    if (invalidReferences.length) {
-      setToast(`Shot ${invalidReferences.join("、")} 的全能参考超过 ${referenceLimit} 个`);
-      return;
-    }
-    const invalidDurations = targets.filter((item) => item.shot.duration < durationRange.min || item.shot.duration > durationRange.max).map((item) => item.shot.id);
-    if (invalidDurations.length) {
-      setToast(`Shot ${invalidDurations.join("、")} 的时长不在 ${durationRange.min}–${durationRange.max} 秒范围内`);
-      return;
-    }
-    const generatingTargets = targets.filter((item) => item.artworkStatus === "generating").map((item) => item.shot.id);
-    if (generatingTargets.length) {
-      setToast(`Shot ${generatingTargets.join("、")} 正在出图；完成后再上传这些镜头的批注`);
-      return;
-    }
-
-    const submittedAt = new Date().toISOString();
-    const submissions = Object.fromEntries(targets.map((item) => [item.shot.id, {
-      shotId: item.shot.id,
-      submittedAt,
-      annotations: { ...emptyAnnotations(), ...item.annotations },
-    } satisfies AnnotationSubmission]));
-    setLastSubmission(undefined);
-    setLastBatchSubmissions(submissions);
-    setState((previous) => ({
-      ...previous,
-      reviews: previous.reviews.map((item) => submissions[item.shot.id] ? {
-        ...item,
-        pendingSubmission: submissions[item.shot.id],
-        scriptStatus: "sending" as ScriptStatus,
-        approved: false,
-        approvedAt: undefined,
-      } : item),
-    }));
-    setBridge((current) => ({ ...current, busy: true }));
-    let responseReceived = false;
-    try {
-      const response = await bridgeFetch(`${bridgeBase}/annotations-batch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken },
-        body: JSON.stringify({
-          projectTitle: state.projectTitle,
-          workspaceScope,
-          generationModel,
-          globalSettings: state.globalSettings,
-          sourceDocument: state.sourceDocument,
-          directorRecipe: selectedRecipe,
-          submittedAt,
-          items: targets.map((item) => ({
-            shot: item.shot,
-            annotations: { ...emptyAnnotations(), ...item.annotations },
-          })),
-        }),
-      });
-      responseReceived = true;
-      const result = await response.json() as AnnotationBatchResult & { error?: string };
-      if (!response.ok) throw new Error(result.error || "全片批改失败");
-      if (!Array.isArray(result.shots) || result.shots.length !== targets.length || !result.shots.every(isStoryboardShot)) throw new Error("写作模型返回的全片批改结果不完整");
-      if (result.submittedAt !== submittedAt) throw new Error("写作模型返回结果与本次全片批注不匹配");
-      setState((previous) => applyBatchAnnotationResultToState(previous, result, submittedAt));
-      setToast(materialDraftMode
-        ? `写作模型已应用 ${result.shots.length} 个 Shot 的批注到独立素材草稿；主项目未修改，现在请逐镜签字盖章`
-        : `写作模型已应用 ${result.shots.length} 个 Shot 的批注并反推源文件；现在请逐镜签字盖章`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "全片批改失败";
-      if (!responseReceived) {
-        setState((previous) => ({
-          ...previous,
-          reviews: previous.reviews.map((item) => item.pendingSubmission?.submittedAt === submittedAt
-            ? { ...item, summary: "连接中断，正在自动查询本次批改结果" }
-            : item),
-        }));
-        setToast("连接中断，但本次批改可能仍在后台完成；漫镜会按本次提交编号自动取回，勿重复上传");
-        return;
-      }
-      const busyConflict = message.includes("写作模型正在处理另一个任务");
-      setState((previous) => {
-        const reviews = previous.reviews.map((item) => item.pendingSubmission?.submittedAt === submittedAt && item.scriptStatus === "sending" ? {
-          ...item,
-          pendingSubmission: undefined,
-          scriptStatus: (busyConflict ? "draft" : "error") as ScriptStatus,
-          summary: busyConflict ? undefined : message,
-        } : item);
-        return { ...previous, reviews };
-      });
-      setToast(busyConflict ? "全片批改已经在处理，请勿重复上传" : message);
-    } finally {
-      setBridge((current) => ({ ...current, busy: false }));
-    }
-  }
-
   async function stampCurrentShot() {
     if (review.approved) return;
     if (stampingShotId) {
@@ -5110,10 +4984,6 @@ function DirectorDesk() {
     }
     if (review.scriptStatus === "sending" || annotationBusy) {
       setToast("写作模型还在批改当前 Shot，完成后才能盖章");
-      return;
-    }
-    if (noteCount > 0) {
-      setToast("当前 Shot 仍有未上传批注；请先点“批改一键上传”");
       return;
     }
     if (!promptReviewIsCurrent) {
@@ -5152,7 +5022,7 @@ function DirectorDesk() {
       setState((previous) => ({
         ...previous,
         reviews: previous.reviews.map((item) => {
-          if (item.shot.id !== targetShotId || JSON.stringify(item.shot) !== targetShotSnapshot || annotationCountFor(item) > 0) return item;
+          if (item.shot.id !== targetShotId || JSON.stringify(item.shot) !== targetShotSnapshot || item.promptReviewSourceRevision !== review.promptReviewSourceRevision || item.completePrompt !== review.completePrompt) return item;
           return {
             ...item,
             scriptStatus: "applied" as ScriptStatus,
@@ -5647,11 +5517,11 @@ function DirectorDesk() {
     const job = bridge.activeJob?.type === "global-annotation"
       ? bridge.activeJob
       : bridge.lastJob?.type === "global-annotation" ? bridge.lastJob : undefined;
-    if (!lastGlobalSubmission && !job) return null;
+    if (!job) return null;
     const failed = state.globalStatus === "error" || job?.status === "failed";
-    const succeeded = state.globalStatus === "applied" && Boolean(lastGlobalSubmission);
+    const succeeded = job.status === "completed";
     const events = job?.events?.length ? job.events : [{
-      at: lastGlobalSubmission?.submittedAt || "",
+      at: job.startedAt || "",
       stage: "received",
       message: "页面已收到全局批注，并发送给写作模型。",
     }];
@@ -5667,7 +5537,7 @@ function DirectorDesk() {
               <li key={`${event.at}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><b>{event.message}</b><small>{event.at ? new Date(event.at).toLocaleTimeString("zh-CN", { hour12: false }) : "刚刚"}</small></div></li>
             ))}
           </ol>
-          <div className="submitted-batch"><span>本次全局批注</span><p>{lastGlobalSubmission?.annotation || "该任务由另一个漫镜标签页发起。"}</p></div>
+          <div className="submitted-batch"><span>历史任务</span><p>保留已启动任务的处理进度。</p></div>
         </div>
         {failed ? <div className="task-error"><b>错误</b><p>{job?.error || state.globalSummary || "全局批注处理失败，请重试。"}</p></div> : null}
       </section>
@@ -5710,7 +5580,7 @@ function DirectorDesk() {
           <div className="coverage-section-heading">
             <span>DIRECTOR RECIPES</span>
             <h2>导演配方</h2>
-            <p>配方会随批注一起交给当前写作模型，只影响拆解与优化方法，不会自动审批或改变最终美术风格。</p>
+            <p>配方提供拆解与优化方法，不会自动审批或改变最终美术风格。</p>
           </div>
           <div className="director-recipe-grid">
             {directorRecipes.map((recipe) => (
@@ -5903,7 +5773,7 @@ function DirectorDesk() {
     return (
       <section className="global-settings-page">
         <div className="global-page-heading">
-          <div><span>PROJECT LEVEL · NOT A SHOT</span><h1>全局设定</h1><p>这里只维护整部脚本共用的规则。它不占 Shot 编号，不进入单镜批注计数，也不代替逐镜签字盖章。</p></div>
+          <div><span>PROJECT LEVEL · NOT A SHOT</span><h1>全局设定</h1><p>这里只维护整部脚本共用的规则。它不占 Shot 编号，也不代替逐镜签字盖章。</p></div>
           <button className="button secondary" type="button" onClick={returnToShots}>返回镜头审核</button>
         </div>
         <section className="global-file-toolbar" aria-label="跨项目全局文件">
@@ -5982,24 +5852,17 @@ function DirectorDesk() {
           </section>
         </fieldset>
 
-        <section className="global-annotation-panel">
-          <div className="global-annotation-copy"><span>独立通道 · 不与单镜批注混合</span><h2>全局批注</h2><p>人物、道具、车辆、地点、时代或美术等通用问题只写一次，并同步到引用这些资产的镜头。</p></div>
-          <textarea
-            aria-label="全局批注"
-            rows={6}
-            disabled={locked}
-            value={state.globalAnnotation}
-            placeholder="例如：主角的发型、服装和露脸限制固定；同一关键道具跨镜保持唯一外观，并严格按照时间线出现。"
-            onChange={(event) => updateGlobalAnnotation(event.target.value)}
-          />
-          <div className="global-annotation-actions">
-            <button className="button secondary" type="button" disabled={locked || bridge.busy || !bridge.connected} onClick={() => void saveGlobalSettings()}>{savingGlobalSettings ? "正在保存项目副本…" : "保存到当前项目"}</button>
-            <button className="button primary" type="button" disabled={locked || bridge.busy || !bridge.connected || !state.globalAnnotation.trim()} onClick={() => void sendGlobalAnnotation()}>{globalBusy ? "全局批注处理中…" : "发送全局批注"}</button>
-          </div>
-          <div className={`global-setting-status ${state.globalStatus}`}><i /><b>{state.globalStatus === "sending" ? "写作模型正在处理全局批注" : state.globalStatus === "error" ? "全局设定处理失败" : state.globalStatus === "draft" ? "全局设定有未保存修改" : "全局设定已写入源文件"}</b><small>{state.globalSummary || "所有Shot将读取已生效的全局规则。"}</small></div>
+        <section className="global-save-panel">
+          <button className="button secondary" type="button" disabled={locked || bridge.busy || !bridge.connected} onClick={() => void saveGlobalSettings()}>{savingGlobalSettings ? "正在保存项目副本…" : "保存到当前项目"}</button>
+          <div className={`global-setting-status ${state.globalStatus}`}><i /><b>{state.globalStatus === "draft" ? "全局设定有未保存修改" : state.globalStatus === "error" ? "全局设定保存失败" : "全局设定已保存"}</b><small>{state.globalSummary || "所有 Shot 读取已保存的全局规则。"}</small></div>
         </section>
       </section>
     );
+  }
+
+  function renderShotWorkStatus() {
+    const pool = bridge.shotWork;
+    return <div className="shot-work-status" role="status"><b>Shot 工作队列</b><span>工作中 {pool?.active ?? 0} / {pool?.limit ?? 5} · 排队 {pool?.queued ?? 0}</span><small>提示词生成、Chat、严格审核共用名额；同一 Shot 串行</small></div>;
   }
 
   function renderScript() {
@@ -6012,10 +5875,11 @@ function DirectorDesk() {
     return (
       <section className="script-sheet">
         <div className="sheet-heading">
-          <div><span>STEP 01 · SCRIPT</span><h1>脚本</h1><p>人物、物品和场景、剧情、动作、连续、美术风格写在同一页；批注最后统一发送。</p></div>
+          <div><span>STEP 01 · SCRIPT</span><h1>脚本</h1><p>人物、物品和场景、剧情、动作、连续、美术风格可直接编辑；讨论与改稿统一使用本镜 Chat。</p></div>
           <div className={`bridge-status ${bridge.connected ? "online" : ""}`}><i />{bridge.connected ? `Pi Agent Harness 已连接 · ${bridge.modelProvider?.label || bridge.modelProvider?.model || "写作模型"}${bridge.harness?.runs?.length ? ` · ${bridge.harness.runs.length} Runs` : ""}` : "Pi Agent Harness 未启动"}</div>
         </div>
 
+        {renderShotWorkStatus()}
         <MangaPanelStrip requestId={mangaSourceRequestId} panelIds={shot.sourcePanels || []} pairingToken={bridge.pairingToken} />
 
         {!review.approved ? (
@@ -6122,11 +5986,11 @@ function DirectorDesk() {
         ) : null}
 
         <fieldset className="script-fields" disabled={scriptLocked} aria-busy={scriptLocked}>
-        <ScriptBlock section={sections[0]} annotation={review.annotations.characters} onAnnotation={(value) => updateAnnotation("characters", value)}>
+        <ScriptBlock section={sections[0]}>
           <LineListField scopeKey={shotListScope} label="出镜人物（每行一人）" value={shot.characters} rows={5} onChange={(value) => updateField("characters", value)} />
         </ScriptBlock>
 
-        <ScriptBlock section={sections[1]} annotation={review.annotations.scene} onAnnotation={(value) => updateAnnotation("scene", value)}>
+        <ScriptBlock section={sections[1]}>
           <div className="sheet-grid">
             <LineListField scopeKey={shotListScope} label="关键物品（车辆也算物品，每行一件）" value={shot.props} rows={5} onChange={(value) => updateField("props", value)} />
             <TextField label="场景" value={shot.scene} rows={4} onChange={(value) => updateField("scene", value)} />
@@ -6149,14 +6013,14 @@ function DirectorDesk() {
           </div>
         </ScriptBlock>
 
-        <ScriptBlock section={sections[2]} annotation={review.annotations.story} onAnnotation={(value) => updateAnnotation("story", value)}>
+        <ScriptBlock section={sections[2]}>
           <TextField label={`Shot ${shot.id} 剧情`} value={shot.story} rows={6} onChange={(value) => updateField("story", value)} />
           <LineListField scopeKey={shotListScope} label="对白 / 声音（每行一条）" value={shot.dialogue} rows={4} onChange={(value) => updateField("dialogue", value)} />
           {shot.sourcePanels?.length ? (
             <div className="source-panel-trace">
               <span>MANGA SOURCE PANELS</span>
               <div>{shot.sourcePanels.map((panelId) => <b key={panelId}>{panelId}</b>)}</div>
-              <small>来源格会随本镜批注和全片批改保留；只有重新执行漫画分格映射时才改变。</small>
+              <small>来源格随本镜保留；Chat 改稿和严格审核不会改变画格归属或阅读顺序。</small>
             </div>
           ) : null}
           <div className="source-evidence-field">
@@ -6175,7 +6039,7 @@ function DirectorDesk() {
           </div>
         </ScriptBlock>
 
-        <ScriptBlock section={sections[3]} annotation={review.annotations.action} onAnnotation={(value) => updateAnnotation("action", value)}>
+        <ScriptBlock section={sections[3]}>
           <div className="sheet-grid">
             <TextField label="机位 / 景别 / 运动" value={shot.camera} rows={5} onChange={(value) => updateField("camera", value)} />
             <TextField label="完整动作链" value={shot.action} rows={6} onChange={(value) => updateField("action", value)} />
@@ -6194,40 +6058,26 @@ function DirectorDesk() {
           ) : null}
         </ScriptBlock>
 
-        <ScriptBlock section={sections[4]} annotation={review.annotations.continuity} onAnnotation={(value) => updateAnnotation("continuity", value)}>
+        <ScriptBlock section={sections[4]}>
           <div className="sheet-grid">
             <LineListField scopeKey={shotListScope} label="连续性硬锁（每行一条）" value={shot.continuity} rows={7} onChange={(value) => updateField("continuity", value)} />
             <LineListField scopeKey={shotListScope} label="禁止项（每行一条）" value={shot.negative} rows={7} onChange={(value) => updateField("negative", value)} />
           </div>
         </ScriptBlock>
 
-        <ScriptBlock section={sections[5]} annotation={review.annotations.style} onAnnotation={(value) => updateAnnotation("style", value)}>
+        <ScriptBlock section={sections[5]}>
           <TextField label="最终视频美术风格（默认从脚本源文件提取）" value={shot.artStyle} rows={6} onChange={(value) => updateField("artStyle", value)} />
           <p className="field-help">这里严格记录脚本中的最终视频风格；Lib Image 只生成临时导演预演工作图，两者互不覆盖。</p>
         </ScriptBlock>
         </fieldset>
 
+        <ShotChat key={shotListScope} shotId={shot.id} model={writingModelSummary} chat={review.chat || {}} approved={review.approved} disabledReason={!bridge.connected ? "主力 Agent 未连接" : bridge.draining ? "服务维护中" : review.completePromptStatus === "generating" || review.promptReviewStatus === "reviewing" ? "当前 Shot 正在生成或审核" : !mangaSourceRequestId || !shot.sourcePanels?.length ? "当前 Shot 尚未关联原作画格" : undefined} onDraft={updateChatDraft} onSend={sendShotChat} onRecover={recoverShotChat} onCopy={(text) => { void copyTextToClipboard(text).then(ok => setToast(ok ? "已复制" : "复制失败，请手动选择文本")); }} />
+
         <div className="send-panel">
-          <div><span>全片统一提交 · {selectedRecipe.name}</span><h2>{batchShotCount ? `${batchShotCount} 个 Shot · 共 ${batchNoteCount} 类批注等待上传` : "全片没有待上传批注"}</h2><p>一次上传全片所有已写批注；当前写作模型按导演配方统一修改并反推源文件，但不会自动审批任何 Shot。</p></div>
+          <div><span>当前 SHOT · 人工确认</span><h2>独立审核后签字盖章</h2><p>需要改稿时，在本镜 Chat 向主力 Agent 提出；修改后必须重新审核。</p></div>
           <div className="send-panel-actions">
-            <button className="button primary" disabled={!batchShotCount || bridge.busy || Boolean(stampingShotId) || !bridge.connected} onClick={() => void sendAllAnnotations()}>
-              {annotationBusy ? "全片批注处理中…" : bridge.busy ? "等待当前写作模型任务…" : batchShotCount ? `批改一键上传（${batchShotCount} Shot）` : "没有待上传批注"}
-            </button>
-            <button className={`button approval-stamp ${review.approved ? "stamped" : ""}`} disabled={review.approved || scriptLocked || Boolean(stampingShotId) || noteCount > 0 || bridge.busy || !promptReviewIsCurrent} onClick={() => void stampCurrentShot()}>
-              {review.approved
-                ? "✓ 已签字盖章 · 审批通过"
-                : stampingShotId === shot.id
-                  ? "正在回写并盖章…"
-                  : noteCount > 0
-                    ? `先上传本镜 ${noteCount} 类批注`
-                    : review.scriptStatus === "sending"
-                      ? "批注处理中，完成后可盖章"
-                      : !promptReviewIsCurrent
-                        ? "先完成独立 Reviewer 审查"
-                        : "签字盖章 · 审批通过"}
-            </button>
-            {noteCount > 0 ? <small className="approval-lock-reason">当前 Shot 仍有 {noteCount} 类未上传批注；点击上方“批改一键上传”，应用完成后才能盖章。</small> : null}
-            {!noteCount && !promptReviewIsCurrent ? <small className="approval-lock-reason">完整提示词须由独立 Reviewer 审查；报告绑定当前文本，改稿后必须重审。</small> : null}
+            <button className={`button approval-stamp ${review.approved ? "stamped" : ""}`} disabled={review.approved || scriptLocked || Boolean(stampingShotId) || bridge.busy || !promptReviewIsCurrent} onClick={() => void stampCurrentShot()}>{review.approved ? "✓ 已签字盖章 · 审批通过" : stampingShotId === shot.id ? "正在回写并盖章…" : !promptReviewIsCurrent ? "先完成独立 Reviewer 审查" : "签字盖章 · 审批通过"}</button>
+            {!promptReviewIsCurrent ? <small className="approval-lock-reason">完整提示词须由独立 Reviewer 审查；报告绑定当前文本，改稿后必须重审。</small> : null}
           </div>
         </div>
         {review.versions.length || review.approvedAt ? (
@@ -6337,7 +6187,7 @@ function DirectorDesk() {
               ) : null}
             </div>
             <button className="button primary" disabled={review.scriptStatus !== "applied" || !review.approved || !artworkPrompt.trim() || referencesOverLimit || durationOutOfRange || !bridge.connected || !libtvReady || review.artworkStatus === "generating" || Boolean(artworkJob)} onClick={() => void generateArtwork()}>
-              {review.scriptStatus !== "applied" ? "先上传新批注" : !review.approved ? "先签字盖章" : !artworkPrompt.trim() ? "先填写提示词" : review.artworkStatus === "generating" || artworkJob ? "Lib Image 后台生成 2 张图…" : artwork ? "重新生成 2 张" : "用 Lib Image 生成 2 张"}
+              {review.scriptStatus !== "applied" ? "先保存并确认脚本" : !review.approved ? "先签字盖章" : !artworkPrompt.trim() ? "先填写提示词" : review.artworkStatus === "generating" || artworkJob ? "Lib Image 后台生成 2 张图…" : artwork ? "重新生成 2 张" : "用 Lib Image 生成 2 张"}
             </button>
             {state.currentShot < state.reviews.length - 1 ? (
               <button className="button secondary" onClick={continueToNextShot}>暂不出图，进入下一 Shot</button>
@@ -6379,7 +6229,7 @@ function DirectorDesk() {
             </dl>
             <button className="button primary approve" disabled={!artwork} onClick={keepArtworkAndNext}>保留当前图，返回下一 Shot</button>
             <button className="button secondary" onClick={() => setView("artwork")}>再生成一次</button>
-            <button className="text-button" onClick={() => setView("script")}>镜头方案有问题，回脚本写批注</button>
+            <button className="text-button" onClick={() => setView("script")}>返回脚本与 Chat</button>
           </div>
         </div>
       </section>
@@ -6405,6 +6255,7 @@ function DirectorDesk() {
           <div className={`strict-review-guard ${bridge.connected ? "ready" : "offline"}`}><i />{bridge.connected ? "只读审核边界已启用" : "正在连接审核服务"}</div>
         </section>
 
+        {renderShotWorkStatus()}
         <nav className="strict-review-shot-nav" aria-label="选择待审核 Shot">
           {state.reviews.map((item, index) => {
             const active = index === state.currentShot;
@@ -6438,14 +6289,14 @@ function DirectorDesk() {
 
             {review.promptReviewStatus === "error" ? <p className="prompt-review-error">{review.promptReviewError || "严格审核失败，请重试。"}</p> : null}
             {review.promptReviewStatus === "stale" ? <p className="prompt-review-stale">Creator 内容已改变；旧报告只读保留，必须针对当前快照重新审核。</p> : null}
-            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">Reviewer 正在核对当前只读快照，不会修改任何内容…</div> : null}
+            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</div> : null}
             {review.promptReviewReport ? (
               <section className={`strict-review-report ${review.promptReviewReport.verdict}`}>
                 <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · 无修改权 · 无批准权</small></header>
                 <div className="prompt-review-checks">{Object.entries(review.promptReviewReport.checks).map(([key, passed]) => <span key={key} className={passed ? "pass" : "fail"}>{passed ? "✓" : "!"} {{ sourceBoundary: "剧情边界", characterContinuity: "人物连续性", timingFeasible: "时长可执行", dialogueFeasible: "对白可执行", cameraAndActionCoherent: "镜头动作", soundAndNegativeComplete: "声音禁止项" }[key as keyof PromptReviewReport["checks"]]}</span>)}</div>
                 {review.promptReviewReport.findings.length ? <ol className="prompt-review-findings">{review.promptReviewReport.findings.map((finding) => <li key={finding.id} className={finding.severity}><div><span>{finding.severity === "blocking" ? "阻断" : finding.severity === "warning" ? "警告" : "建议"}</span><b>{finding.title}</b><small>{finding.category}{finding.panelIds.length ? ` · ${finding.panelIds.join("、")}` : ""}</small></div><p>{finding.detail}</p><strong>建议方向：{finding.suggestion}</strong></li>)}</ol> : <p className="prompt-review-clean">未发现需要列出的具体问题。</p>}
                 {review.promptReviewReport.strengths.length ? <p className="prompt-review-strengths">已确认：{review.promptReviewReport.strengths.join("；")}</p> : null}
-                <footer><p>报告不会自动应用。若需处理建议，请返回创作台由用户决定是否修改。</p><button type="button" className="button secondary" onClick={() => switchDeskMode("creator")}>返回创作台查看</button></footer>
+                <footer><p>审核只给建议，不改稿。复制后到本 Shot Chat 粘贴发送，由主力 Agent 处理。</p><button type="button" className="button primary" onClick={() => void copyReviewSuggestions()}>复制审核建议</button><button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); setView("script"); window.setTimeout(() => document.getElementById("shot-chat")?.scrollIntoView({ behavior: "smooth" }), 100); }}>返回创作台 Chat</button></footer>
               </section>
             ) : null}
           </aside>
@@ -7091,20 +6942,6 @@ function DirectorDesk() {
               onUnlockReference={unlockWhiteboxReference}
               referenceLocked={selectedWhiteboxReferenceLocked}
             />}
-            <div className="director-annotation">
-              <span><b>DIRECTOR VIEW 批注</b><small>单独修改站位、车头方向、机位朝向和运镜轨迹</small></span>
-              <textarea
-                aria-label="DIRECTOR VIEW 批注"
-                rows={4}
-                disabled={scriptLocked}
-                value={review.annotations.director || ""}
-                placeholder="例如：标明车辆朝向、机位A与机位B的位置、摄影机朝向和横移轨迹。"
-                onChange={(event) => updateAnnotation("director", event.target.value)}
-              />
-              {(review.annotations.director || "").trim() && state.view !== "script" ? (
-                <button className="text-button" type="button" onClick={() => setView("script")}>回到脚本页统一发送这条批注</button>
-              ) : null}
-            </div>
           </div>
 
           {review.approved && currentVideoPackage ? (
@@ -7136,13 +6973,6 @@ function DirectorDesk() {
             </div>
           ) : null}
 
-          <div className="annotation-summary">
-            <div className="visual-heading"><span>ANNOTATIONS</span><b>本 Shot 批注汇总</b></div>
-            {noteCount ? annotationSections.map((section) => (review.annotations[section.id] || "").trim() ? (
-              <div className="summary-note" key={section.id}><span>{section.title}</span><p>{review.annotations[section.id]}</p></div>
-            ) : null) : <p className="empty-summary">还没有批注。可以直接改正文，也可以在六个脚本分区下面分别写批注。</p>}
-          </div>
-
           <div className="hard-lock-card">
             <div className="visual-heading"><span>HARD LOCKS</span><b>后续不能丢</b></div>
             <ol>{shot.continuity.slice(0, 5).map((item, index) => <li key={item}><span>{String(index + 1).padStart(2, "0")}</span><p>{item}</p></li>)}</ol>
@@ -7151,7 +6981,7 @@ function DirectorDesk() {
       </section>
 
       <footer className="action-dock">
-        <div><span>当前</span><b>Shot {shot.id} · {navItems.find((item) => item.id === state.view)?.label}</b><small>{state.view === "script" ? `${noteCount} 类本镜批注；全片 ${batchShotCount} 个 Shot 待上传` : state.view === "artwork" ? "已独立盖章；出图可后台继续" : "可查看结果或再次生成"}</small></div>
+        <div><span>当前</span><b>Shot {shot.id} · {navItems.find((item) => item.id === state.view)?.label}</b><small>{state.view === "script" ? "可编辑正文，或通过本镜 Chat 讨论改稿" : state.view === "artwork" ? "已独立盖章；出图可后台继续" : "可查看结果或再次生成"}</small></div>
         <div className={`dock-status ${annotationBusy || artworkJob || review.artworkStatus === "generating" ? "busy" : review.approved ? "done" : ""}`} aria-label="当前处理状态">
           <span>状态</span>
           <b>{referencesOverLimit
@@ -7161,7 +6991,7 @@ function DirectorDesk() {
             : annotationBusy
             ? "批注处理中"
             : state.view === "script"
-              ? review.approved ? "已签字盖章 · 审批通过" : review.scriptStatus === "applied" ? "批改已应用 · 等待盖章" : noteCount ? "等待一键上传批注" : "等待签字盖章"
+              ? review.approved ? "已签字盖章 · 审批通过" : review.scriptStatus === "applied" ? "正文已保存 · 等待盖章" : "等待签字盖章"
               : state.view === "artwork"
                 ? artworkJob || review.artworkStatus === "generating"
                   ? artworkJob?.message || "Lib Image 后台生成中（2 张）"
@@ -7211,16 +7041,6 @@ function DirectorDesk() {
                 </section>
                 <section><span>出场人物</span><p>{state.sourceMangaPanels?.[zoomedStructurePanelId]?.characters?.length ? state.sourceMangaPanels[zoomedStructurePanelId].characters.join("、") : "本格人物待复核"}</p></section>
                 <section><span>人物关系与剧情</span><p>{state.sourceMangaPanels?.[zoomedStructurePanelId]?.relationAndPlot || state.sourceMangaPanels?.[zoomedStructurePanelId]?.textSummary || "正在整理本格剧情作用…"}</p></section>
-                <section className="panel-lightbox-annotation">
-                  <span>对这张图的批注</span>
-                  <textarea
-                    rows={6}
-                    value={state.sourceMangaPanelAnnotations?.[zoomedStructurePanelId] || ""}
-                    placeholder="在这里纠正裁切、对白、人物关系或剧情理解……"
-                    onChange={(event) => updateMangaPanelAnnotation(zoomedStructurePanelId, event.target.value)}
-                  />
-                  <small>自动保存到当前漫画草稿</small>
-                </section>
               </aside>
             </div>
             <footer>

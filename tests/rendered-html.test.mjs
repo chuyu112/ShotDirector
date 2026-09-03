@@ -54,7 +54,8 @@ test("keeps the three-step review and explicit approval workflow", async () => {
   assert.match(page, /label: "出图"/);
   assert.match(page, /label: "确认"/);
   assert.match(page, /签字盖章/);
-  assert.match(page, /全局批注/);
+  assert.match(page, /<ShotChat /);
+  assert.doesNotMatch(page, /aria-label="全局批注"/);
   assert.match(page, /全能参考/);
   assert.match(page, /DIRECTOR VIEW/);
 });
@@ -145,8 +146,7 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(page, /出场人物/);
   assert.match(page, /人物关系与剧情/);
   assert.match(page, /panel-lightbox-understanding/);
-  assert.match(page, /对这张图的批注/);
-  assert.match(page, /自动保存到当前漫画草稿/);
+  assert.doesNotMatch(page, /对这张图的批注/);
   assert.match(page, /sourceMangaPanelAnnotations/);
   assert.match(page, /mangaPanelUnderstandingsFrom/);
   assert.match(page, /panel-shot-approved/);

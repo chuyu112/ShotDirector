@@ -1,0 +1,2 @@
+export function chatReplyCanApply(input: { projectUid: string; shotUid: string; currentPrompt: string; currentSourceRevision: string; approved: boolean; pending?: { turnId: string; sourceRevision: string; basePrompt: string }; result: { action: string; projectUid: string; shotUid: string; chatTurnId: string; sourceRevision: string } }): boolean;
+export function reviewSuggestionsText(shotId: string, report: { summary?: string; findings?: Array<{ severity: string; title: string; detail: string; suggestion: string; panelIds?: string[] }> }, sourceRevision?: string): string;

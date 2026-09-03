@@ -103,12 +103,14 @@ test("stable recovery identity rejects ambiguous requests", () => {
   }
 });
 
-test("bridge keeps complete prompt generation parallel while reviewer remains on the serial queue", async () => {
+test("bridge shares the five-Shot queue across Creator and isolated Reviewer", async () => {
   const source = await readFile(bridgePath, "utf8");
 
   assert.match(source, /return withCompletePromptJob\(identity,/);
   assert.doesNotMatch(source, /withJob\("complete-shot-prompt"/);
-  assert.match(source, /return withJob\("prompt-review", shot\.id,/);
+  assert.match(source, /return withCompletePromptJob\(completePromptIdentityFromPayload\(payload\)/);
+  assert.match(source, /shotWorkScheduler\.run\(job/);
+  assert.doesNotMatch(source, /return withJob\("prompt-review"/);
   assert.match(source, /promptJobs:\s*\[\.\.\.activeCompletePromptJobs\.values\(\)\]/);
   assert.match(source, /lastPromptJobs:\s*\[\.\.\.lastCompletePromptJobs\.values\(\)\]/);
   assert.match(

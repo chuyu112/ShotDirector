@@ -1170,7 +1170,25 @@ input:focus-visible {
 .panel-lightbox-dialogue b { color: var(--accent); font-size: 11px; white-space: nowrap; }
 .panel-lightbox-dialogue p { font-size: 12px; }
 .panel-lightbox-dialogue i { padding: 2px 5px; border-radius: 4px; background: #fff0c5; color: #8a5b00; font-size: 8px; font-style: normal; font-weight: 900; }
-.panel-lightbox-annotation { position: sticky; bottom: -18px; margin: 0 -18px -18px; padding: 16px 18px 18px !important; border-top: 2px solid var(--accent) !important; background: #fff8df; box-shadow: 0 -10px 30px rgba(21,21,21,.08); }
+.shot-chat { margin: 24px 0; padding: 22px; border: 1px solid var(--ink); background: var(--panel); }
+.shot-chat > header, .shot-chat > footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.shot-chat h2 { margin: 5px 0; font-size: 20px; }
+.shot-chat header span { color: var(--blue); font-size: 11px; font-weight: 900; }
+.shot-chat > p, .shot-chat small { font-size: 12px; line-height: 1.7; color: var(--muted); }
+.shot-chat label { display: grid; gap: 8px; margin: 16px 0 12px; font-weight: 800; font-size: 12px; }
+.shot-chat textarea { width: 100%; min-height: 120px; padding: 12px; resize: vertical; border: 1px solid var(--line); background: white; font: inherit; line-height: 1.7; }
+.shot-chat-messages { max-height: 480px; overflow-y: auto; overscroll-behavior: contain; }
+.shot-chat-messages article { margin: 12px 0; padding: 14px; background: #f0eee8; border-left: 3px solid #151515; }
+.shot-chat-messages article.user { margin-left: 22px; background: #edf2ff; border-color: var(--blue); }
+.shot-chat-messages p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 13px; }
+.shot-chat-messages time { float: right; color: var(--muted); font-size: 10px; }
+.shot-chat pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow-y: auto; }
+.shot-chat details { padding: 12px 0; font-size: 12px; }
+.shot-chat-notice { padding: 10px; background: #fff3ce; }
+.shot-work-status { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; padding: 12px 16px; margin: 16px 0; background: #edf2ff; border: 1px solid #bfcfff; font-size: 12px; }
+.shot-work-status small { color: var(--muted); }
+.global-save-panel { display: grid; gap: 16px; margin: 24px 0; }
+@media (max-width: 650px) { .shot-chat { padding: 14px; } .shot-chat > header, .shot-chat > footer { align-items: stretch; flex-direction: column; } }
 .panel-lightbox-annotation textarea { width: 100%; min-height: 120px; resize: vertical; padding: 11px 12px; border: 1px solid rgba(187,73,30,.38); border-radius: 10px; background: white; color: var(--ink); font: inherit; font-size: 12px; line-height: 1.6; }
 .panel-lightbox-annotation textarea:focus { outline: 3px solid rgba(187,73,30,.16); border-color: var(--accent); }
 .panel-lightbox-annotation small { color: var(--muted); font-size: 9px; font-weight: 800; }

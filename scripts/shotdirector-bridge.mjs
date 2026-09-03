@@ -4,6 +4,8 @@ import { closeSync, copyFileSync, createWriteStream, existsSync, mkdirSync, open
 import { basename, extname, join, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import sharp from "sharp";
+import { ShotWorkScheduler } from "../server/shot-work-scheduler.mjs";
+import { validateShotChatRequest, shotChatPrompt, validateShotChatResult } from "./shot-chat.mjs";
 import { repairKnownMangaPanelCoverage } from "../app/manga-panel-mapping.mjs";
 import { normalizeMangaAnalysisReadingOrder } from "../app/manga-reading-order.mjs";
 import { assertStrictReviewRequest } from "../app/manjing-agent-contract.mjs";
@@ -802,6 +804,7 @@ function publicJob(job) {
   if (!job) return null;
   return {
     type: job.type,
+    chatTurnId: job.chatTurnId,
     shotId: String(job.shotId || "").slice(0, 80),
     projectUid: job.projectUid ? String(job.projectUid).slice(0, 160) : undefined,
     shotUid: job.shotUid ? String(job.shotUid).slice(0, 160) : undefined,
@@ -1205,8 +1208,9 @@ async function runStructuredCodexWithRepair(prompt, {
   validate,
   agentRole = "creator",
   transport,
+  harnessScope,
 }) {
-  await runCodexThroughPiAgent(prompt, { sandbox, outputPath, schemaPath, model, webSearch, imagePaths, onProgress, timeoutMs, reasoningEffort, transport }, agentRole);
+  await runCodexThroughPiAgent(prompt, { sandbox, outputPath, schemaPath, model, webSearch, imagePaths, onProgress, timeoutMs, reasoningEffort, transport, harnessScope }, agentRole);
   let result = readResult(outputPath);
   try {
     validate(result);
@@ -1217,7 +1221,7 @@ async function runStructuredCodexWithRepair(prompt, {
     const repairPath = outputPath.replace(/\.json$/i, ".repair.json");
     onProgress("repairing", `第一次结果未通过校验，正在自动修复：${reason}`);
     const repairPrompt = `${prompt}\n\n上一次结果没有通过漫镜校验。请依据原任务重新返回完整结果，不要解释。\n校验错误：${reason}\n上一次结果：\n<invalid_result>\n${raw}\n</invalid_result>`;
-    await runCodexThroughPiAgent(repairPrompt, { sandbox, outputPath: repairPath, schemaPath, model, webSearch, imagePaths, onProgress, timeoutMs, reasoningEffort, transport }, agentRole);
+    await runCodexThroughPiAgent(repairPrompt, { sandbox, outputPath: repairPath, schemaPath, model, webSearch, imagePaths, onProgress, timeoutMs, reasoningEffort, transport, harnessScope }, agentRole);
     result = readResult(repairPath);
     validate(result);
     return attachStructuredModelLineage(result, executionLineage(repairPath, model));
@@ -4040,8 +4044,11 @@ async function withJob(type, shotId, work) {
   }
 }
 
-async function withCompletePromptJob(identity, projectTitle, work) {
-  const jobKey = completePromptJobKey(identity);
+const shotWorkScheduler = new ShotWorkScheduler();
+
+async function withCompletePromptJob(identity, projectTitle, work, type = "complete-shot-prompt", chatTurnId = "") {
+  const baseKey = completePromptJobKey(identity);
+  const jobKey = type === "complete-shot-prompt" ? baseKey : `${type}::${baseKey}::${chatTurnId}`;
   if (activeCompletePromptJobs.has(jobKey)) {
     const error = new Error(`Shot ${identity.shotId || identity.shotUid} 的当前版本已在生成，请勿重复提交`);
     error.statusCode = 409;
@@ -4051,7 +4058,8 @@ async function withCompletePromptJob(identity, projectTitle, work) {
   const requestId = randomUUID();
   const startedAt = new Date().toISOString();
   const job = {
-    type: "complete-shot-prompt",
+    type,
+    chatTurnId: chatTurnId || undefined,
     ...identity,
     projectTitle,
     requestId,
@@ -4059,17 +4067,19 @@ async function withCompletePromptJob(identity, projectTitle, work) {
     startedAt,
     updatedAt: startedAt,
     finishedAt: undefined,
-    stage: "received",
-    message: `Shot ${identity.shotId || identity.shotUid} 的结构已确认，正在生成待独立审查的提示词讨论稿`,
+    stage: "queued",
+    message: `Shot ${identity.shotId || identity.shotUid} 已加入工作队列（最多同时工作 5 个 Shot）`,
     events: [],
   };
   activeCompletePromptJobs.set(jobKey, job);
-  addJobEvent(job, "received", job.message);
+  addJobEvent(job, "queued", job.message);
   const report = (stage, message) => {
     if (activeCompletePromptJobs.get(jobKey) === job) addJobEvent(job, stage, message);
   };
   try {
-    const result = await work(requestId, report);
+    const result = await shotWorkScheduler.run(job, () => work(requestId, report), () => {
+      addJobEvent(job, "preparing", `Shot ${identity.shotId} 开始${type === "prompt-review" ? "严格审核" : type === "shot-chat" ? "Chat" : "生成提示词"}`);
+    });
     job.result = result;
     job.status = "completed";
     addJobEvent(job, "completed", "处理完成，结果已按项目、Shot 和版本保存");
@@ -4204,6 +4214,55 @@ async function generateCompleteShotPrompt(payload) {
   });
 }
 
+async function chatWithShot(payload) {
+  validateShotChatRequest(payload);
+  const identity = completePromptIdentityFromPayload(payload);
+  const turnId = payload.chatTurnId;
+  const resultPath = join(responseDir, `shot-chat-${turnId}.committed.json`);
+  const statePath = join(responseDir, `shot-chat-${turnId}.state.json`);
+  const fingerprint = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+  if (existsSync(statePath)) {
+    const prior = JSON.parse(readFileSync(statePath, "utf8"));
+    if (prior.fingerprint !== fingerprint) throw Object.assign(new Error("Chat 回合 ID 已被另一请求使用"), { statusCode: 409 });
+    if (existsSync(resultPath)) return JSON.parse(readFileSync(resultPath, "utf8"));
+    throw Object.assign(new Error("该 Chat 回合已提交，请查询原任务，不要重复发送"), { statusCode: 409 });
+  }
+  const saveState = (status, error) => atomicWriteText(statePath, JSON.stringify({ ...identity, chatTurnId: turnId, fingerprint, status, error, updatedAt: new Date().toISOString() }));
+  saveState("running");
+  try {
+    return await withCompletePromptJob(identity, payload.projectTitle, async (requestId, report) => {
+      if (!isMediaId(payload.sourceMangaRequestId) || !payload.shot.sourcePanels?.length) throw new Error("当前 Shot 缺少可读取的原作画格");
+      const analysis = recoverMediaAnalysisResult(payload.sourceMangaRequestId);
+      const panels = [];
+      for (const panelId of payload.shot.sourcePanels) {
+        const page = analysis?.mangaPages?.find(page => page.panels?.some(panel => panel.id === panelId));
+        const panel = page?.panels?.find(panel => panel.id === panelId);
+        if (!panel?.includeInShots) throw new Error(`找不到当前来源画格 ${panelId}`);
+        panels.push({ panelId, cropPath: await createMangaPanelCrop(payload.sourceMangaRequestId, panelId), sourceObservation: panel.sourceObservation || "", sourceText: (analysis.sourceText || []).filter(line => line.location === panelId), legacyAnnotation: payload.panelAnnotations?.[panelId] || "" });
+      }
+      const evidence = { panelIds: payload.shot.sourcePanels, panels };
+      report("chat", "主力 Agent 正在读取本镜画格、当前提示词和聊天上下文");
+      const result = await runStructuredCodexWithRepair(shotChatPrompt(payload, evidence), {
+        harnessScope: `shot-chat-${createHash("sha256").update(`${identity.projectUid}::${identity.shotUid}`).digest("hex")}`,
+        outputPath: join(responseDir, `shot-chat-${turnId}.json`),
+        schemaPath: join(workspace, "scripts", "shot-chat.schema.json"),
+        reasoningEffort: shotPromptReasoningEffort,
+        imagePaths: panels.map(panel => panel.cropPath),
+        onProgress: report, timeoutMs: 20 * 60 * 1000, agentRole: "creator",
+        validate(candidate) { validateShotChatResult(candidate, payload, evidence.panelIds); },
+      });
+      const lineage = structuredModelLineage(result, primaryModelId, primaryProviderId);
+      const committed = { ...result, ...identity, status: "completed", chatTurnId: turnId, requestId, generatedAt: new Date().toISOString(), generatorId: lineage.effectiveModelId, generatorProvider: lineage.provider };
+      atomicWriteText(resultPath, JSON.stringify(committed));
+      saveState("completed");
+      return committed;
+    }, "shot-chat", turnId);
+  } catch (error) {
+    saveState("failed", error instanceof Error ? error.message : "Chat 失败");
+    throw error;
+  }
+}
+
 async function reviewCompleteShotPrompt(payload) {
   assertStrictReviewRequest(payload);
   const shot = payload?.shot;
@@ -4240,7 +4299,7 @@ async function reviewCompleteShotPrompt(payload) {
   const evidence = { panelIds, panels };
   const reviewSnapshotHash = strictReviewSnapshotHash(payload, evidence, reviewer);
 
-  return withJob("prompt-review", shot.id, async (requestId, report) => {
+  return withCompletePromptJob(completePromptIdentityFromPayload(payload), payload.projectTitle, async (requestId, report) => {
     const outputPath = join(responseDir, `prompt-review-${requestId}.json`);
     const prompt = promptReviewerAgentPrompt(payload, evidence, reviewer);
     report("preparing-review", `已创建独立 Reviewer 任务 ${requestId.slice(0, 8)}，不会复用生成 Agent 会话`);
@@ -4308,7 +4367,7 @@ async function reviewCompleteShotPrompt(payload) {
     };
     writeFileSync(join(responseDir, `prompt-review-${requestId}.committed.json`), `${JSON.stringify(committed, null, 2)}\n`, "utf8");
     return committed;
-  });
+  }, "prompt-review");
 }
 
 async function reviseShots(payload) {
@@ -4909,6 +4968,7 @@ const server = createServer(async (req, res) => {
       busy: hasActiveWritingModelWork(),
       activeJob: publicJob(activeJob),
       lastJob: visibleLastJob(),
+      shotWork: shotWorkScheduler.snapshot(),
       promptJobs: [...activeCompletePromptJobs.values()].map(publicJob),
       lastPromptJobs: [...lastCompletePromptJobs.values()].map(publicJob),
       artworkJobs: [...activeArtworkJobs.values()].map(publicJob),
@@ -5184,6 +5244,21 @@ const server = createServer(async (req, res) => {
     const matches = (job) => job?.type === type && String(job.shotId) === shotId;
     const submissionMatches = (job) => !expectedSubmittedAt || job?.result?.submittedAt === expectedSubmittedAt;
 
+    if (type === "shot-chat") {
+      const turnId = url.searchParams.get("chatTurnId") || "";
+      if (!isMediaId(turnId)) { sendJson(res, 400, { error: "无效 Chat 回合" }, origin); return; }
+      const statePath = join(responseDir, `shot-chat-${turnId}.state.json`);
+      if (!existsSync(statePath)) { sendJson(res, 404, { error: "Chat 回合尚未接收" }, origin); return; }
+      const record = JSON.parse(readFileSync(statePath, "utf8"));
+      if (record.projectUid !== jobProjectUid || record.shotUid !== jobShotUid || record.sourceRevision !== expectedSourceRevision) { sendJson(res, 404, { error: "Chat 回合与当前项目或 Shot 不符" }, origin); return; }
+      const resultPath = join(responseDir, `shot-chat-${turnId}.committed.json`);
+      if (existsSync(resultPath)) { sendJson(res, 200, JSON.parse(readFileSync(resultPath, "utf8")), origin); return; }
+      const live = [...activeCompletePromptJobs.values()].find(job => job.chatTurnId === turnId);
+      if (live) { sendJson(res, 202, { status: "running", stage: live.stage, message: live.message }, origin); return; }
+      sendJson(res, 200, { status: "failed", error: record.error || "服务重启或任务中断；旧稿和聊天保留，请确认后重新发送" }, origin);
+      return;
+    }
+
     if (type === "complete-shot-prompt") {
       let identity;
       try {
@@ -5233,7 +5308,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const liveJob = type === "artwork" && shotId ? findArtworkJob(activeArtworkJobs, jobProjectTitle, shotId) : activeJob;
+    const liveJob = type === "prompt-review"
+      ? [...activeCompletePromptJobs.values()].find(job => job.type === type && job.shotId === shotId && job.sourceRevision === expectedSourceRevision && (!jobShotUid || job.shotUid === jobShotUid) && (!jobProjectUid || job.projectUid === jobProjectUid))
+      : type === "artwork" && shotId ? findArtworkJob(activeArtworkJobs, jobProjectTitle, shotId) : activeJob;
     if ((type === "annotation" || type === "annotation-batch" || type === "global-annotation" || type === "prompt-review" || type === "artwork") && shotId && matches(liveJob) && liveJob.status === "running") {
       const status = publicJob(liveJob);
       sendJson(res, 202, {
@@ -5247,7 +5324,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const completedJob = retainedLastJob();
+    const completedJob = type === "prompt-review"
+      ? [...lastCompletePromptJobs.values()].find(job => job.type === type && job.shotId === shotId && job.sourceRevision === expectedSourceRevision && (!jobShotUid || job.shotUid === jobShotUid) && (!jobProjectUid || job.projectUid === jobProjectUid)) || retainedLastJob()
+      : retainedLastJob();
     if (type === "annotation" && shotId && matches(completedJob) && submissionMatches(completedJob) && completedJob.status === "completed" && completedJob.result?.shot) {
       sendJson(res, 200, {
         status: "completed",
@@ -5389,7 +5468,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const handlers = { "/annotations": reviseShot, "/annotations-batch": reviseShots, "/complete-shot-prompt": generateCompleteShotPrompt, "/review-shot-prompt": reviewCompleteShotPrompt, "/global-annotations": reviseGlobalSettings, "/source-global-settings": saveGlobalSettings, "/recover-annotation-output": recoverAnnotationOutput, "/source-shot": saveSourceShot, "/generate": generateArtwork, "/generate-asset": generateAsset, "/generate-asset-gpt": generateAssetWithGpt, "/load-script": loadScript };
+  const handlers = { "/shot-chat": chatWithShot, "/annotations": reviseShot, "/annotations-batch": reviseShots, "/complete-shot-prompt": generateCompleteShotPrompt, "/review-shot-prompt": reviewCompleteShotPrompt, "/global-annotations": reviseGlobalSettings, "/source-global-settings": saveGlobalSettings, "/recover-annotation-output": recoverAnnotationOutput, "/source-shot": saveSourceShot, "/generate": generateArtwork, "/generate-asset": generateAsset, "/generate-asset-gpt": generateAssetWithGpt, "/load-script": loadScript };
   if (req.method === "POST" && handlers[url.pathname]) {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }

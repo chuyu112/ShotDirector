@@ -1,0 +1,10 @@
+{
+  "type": "object", "additionalProperties": false,
+  "required": ["action", "reply", "prompt", "sourcePanels"],
+  "properties": {
+    "action": {"type": "string", "enum": ["reply", "revise"]},
+    "reply": {"type": "string", "minLength": 1, "maxLength": 16000},
+    "prompt": {"type": "string", "maxLength": 100000},
+    "sourcePanels": {"type": "array", "items": {"type": "string"}}
+  }
+}

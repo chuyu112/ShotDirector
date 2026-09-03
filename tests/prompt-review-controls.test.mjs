@@ -13,11 +13,11 @@ test("other Shots generating cannot lock reviewer selection or ready Shot submis
   assert.deepEqual(promptReviewControls(ready), { selectingDisabled: false, submitDisabled: false, reason: "", action: "" });
 });
 
-test("an exclusive active job blocks submit, not local model selection", () => {
+test("another Shot review does not block submission into the shared queue", () => {
   const controls = promptReviewControls({ ...ready, bridge: { ...ready.bridge, activeJob: { type: "prompt-review", status: "running", shotId: "02" } } });
   assert.equal(controls.selectingDisabled, false);
-  assert.equal(controls.submitDisabled, true);
-  assert.match(controls.reason, /另一个审核/);
+  assert.equal(controls.submitDisabled, false);
+  assert.equal(controls.reason, "");
 });
 
 test("a running current review cannot be switched or submitted twice", () => {

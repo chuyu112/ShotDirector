@@ -23,6 +23,7 @@ const AI_MODEL_CALL_BUDGET_BY_ROUTE = new Map([
   ["/annotations", 2],
   ["/annotations-batch", 10],
   ["/complete-shot-prompt", 2],
+  ["/shot-chat", 2],
   ["/review-shot-prompt", 2],
   ["/global-annotations", 2],
   ["/load-script", 2],

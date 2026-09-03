@@ -244,6 +244,14 @@ function fakeStructuredResult(schemaName, prompt) {
   if (schemaName === "media-analysis") return mediaAnalysisFixture();
   if (schemaName === "script-load") return { projectTitle, shots: panelIds.map((_, index) => storyboardShot(index)) };
   if (schemaName === "complete-shot-prompt") return completePromptFixture(requestedShotId(prompt));
+  if (schemaName === "shot-chat") {
+    const turns = String(prompt).split("\n").filter(line => line.startsWith('{"role"')).map(line => JSON.parse(line)).filter(turn => turn.role === "user");
+    const current = turns.at(-1)?.content || String(prompt);
+    const contextLine = current.split("\n").find(line => line.startsWith('{"projectUid"'));
+    const context = JSON.parse(contextLine);
+    const replyOnly = current.includes("只讨论，不改稿");
+    return { action: replyOnly ? "reply" : "revise", reply: "已核对当前画格。", prompt: replyOnly ? "" : context.currentPrompt + "\n补充：保持两秒停顿。", sourcePanels: context.shot.sourcePanels };
+  }
   if (schemaName === "prompt-review") return promptReviewFixture(requestedShotId(prompt));
   throw new Error(`测试模型不支持 schema：${schemaName}`);
 }
@@ -383,6 +391,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
           systemText,
           maxTokens: body.max_tokens,
           maxCompletionTokens: body.max_completion_tokens,
+          reasoningEffort: body.reasoning_effort,
           prompt,
         });
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -830,6 +839,48 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.match(mediaPrompts, /research 必须返回 \{"mode":"off","used":false,"queries":\[\],"sources":\[\],"notes":\[\]\}/);
     assert.ok(modelCalls.some((call) => call.schemaName === "media-analysis" && /(?:联网背景记录与本次分析模式不一致|联网背景已关闭，但写作模型返回了网络资料)/.test(call.prompt)), "fabricated media research must trigger repair");
     assert.ok(modelCalls.some((call) => call.schemaName === "complete-shot-prompt" && /当前写作模型没有联网工具/.test(call.prompt)), "fabricated prompt research must trigger repair");
+
+    // Full Chat API path: gateway -> isolated Worker -> Creator -> committed recovery.
+    const chatPayload = {
+      projectUid, projectTitle, generationModel: "seedance-2.5", globalSettings,
+      sourceMangaRequestId: analysisJobId, sourceRevision: promptResults[0].sourceRevision,
+      shot: shots[0], currentPrompt: promptResults[0].prompt, allowRevision: true,
+      chatTurnId: "11111111-2222-4333-8444-555555555555",
+      message: "请按审核建议修改：增加两秒停顿。", history: [],
+    };
+    result = await jsonRequest(base, "/api/shot-chat", { cookie: ownerCookie, method: "POST", body: chatPayload });
+    assert.equal(result.response.status, 200, JSON.stringify(result.payload));
+    assert.equal(result.payload.action, "revise");
+    assert.equal(result.payload.shotUid, shots[0].shotUid);
+    assert.equal(result.payload.projectUid, projectUid);
+    assert.equal(result.payload.generatorId, fakeGlmModel);
+    assert.equal(result.payload.generatorProvider, "glm");
+    assert.match(result.payload.prompt, /两秒停顿/);
+    assert.equal(result.payload.approved, undefined);
+    const chatResult = result.payload;
+    const query = new URLSearchParams({ type: "shot-chat", chatTurnId: chatPayload.chatTurnId, projectUid, shotUid: shots[0].shotUid, sourceRevision: chatPayload.sourceRevision });
+    result = await jsonRequest(base, `/api/job-result?${query}`, { cookie: ownerCookie });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.payload, chatResult);
+    const callsAfterChat = modelCalls.length;
+    result = await jsonRequest(base, "/api/shot-chat", { cookie: ownerCookie, method: "POST", body: chatPayload });
+    assert.equal(result.response.status, 200);
+    assert.equal(modelCalls.length, callsAfterChat, "same turn must never submit a second model call");
+    query.set("shotUid", "shot-unrelated");
+    result = await jsonRequest(base, `/api/job-result?${query}`, { cookie: ownerCookie });
+    assert.equal(result.response.status, 404);
+    result = await jsonRequest(base, "/api/shot-chat", { cookie: ownerCookie, method: "POST", body: {
+      ...chatPayload, chatTurnId: "22222222-2222-4333-8444-555555555555", allowRevision: false,
+      currentPrompt: chatResult.prompt, message: "只讨论，不改稿", history: [{ role: "user", text: chatPayload.message }, { role: "assistant", text: chatResult.reply }],
+    } });
+    assert.equal(result.response.status, 200, JSON.stringify(result.payload));
+    assert.equal(result.payload.action, "reply");
+    assert.equal(result.payload.prompt, "");
+    const chatCalls = modelCalls.filter(call => call.schemaName === "shot-chat");
+    assert.equal(chatCalls.length, 2);
+    assert.ok(chatCalls.every(call => call.model === fakeGlmModel && call.imageCount >= 1 && call.reasoningEffort === "max"));
+    result = await jsonRequest(base, "/api/health", { cookie: ownerCookie });
+    assert.deepEqual(result.payload.shotWork, { limit: 5, active: 0, queued: 0 });
 
     const callsBeforeSwitch = modelCalls.length;
     result = await jsonRequest(base, "/api/writing-model", {
