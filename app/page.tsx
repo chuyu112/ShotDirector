@@ -18,6 +18,7 @@ import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs"
 import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
 import { persistProjectSnapshot } from "./project-save.mjs";
 import { LineListField, LineListTextarea } from "./line-list-field";
+import { TextInputDialog } from "./text-input-dialog";
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
   browserAgentRevision,
@@ -1999,6 +2000,9 @@ function DirectorDesk() {
   const [globalFiles, setGlobalFiles] = useState<GlobalFileSummary[]>([]);
   const [selectedGlobalFileId, setSelectedGlobalFileId] = useState("");
   const [globalFileBusy, setGlobalFileBusy] = useState(false);
+  const [globalFileNameDialog, setGlobalFileNameDialog] = useState<{ open: boolean; createNew: boolean }>({ open: false, createNew: false });
+  const [globalFileNameDraft, setGlobalFileNameDraft] = useState("");
+  const [globalFileNameError, setGlobalFileNameError] = useState("");
   const [naturalScript, setNaturalScript] = useState("");
   const [lastSubmission, setLastSubmission] = useState<AnnotationSubmission>();
   const [lastBatchSubmissions, setLastBatchSubmissions] = useState<Record<string, AnnotationSubmission>>({});
@@ -4890,17 +4894,25 @@ function DirectorDesk() {
     return files;
   }
 
-  async function saveGlobalFile({ createNew = false } = {}) {
+  function openGlobalFileNameDialog(createNew: boolean) {
+    setGlobalFileNameDraft(createNew ? state.globalFileName || "" : "");
+    setGlobalFileNameError("");
+    setGlobalFileNameDialog({ open: true, createNew });
+  }
+
+  async function saveGlobalFile({ createNew = false, requestedName = "" }: { createNew?: boolean; requestedName?: string } = {}) {
     if (tenantScope.mode !== "server") {
       setToast("全局文件库需要登录服务器后使用");
       return;
     }
     const current = globalFiles.find((item) => item.id === (state.globalFileId || selectedGlobalFileId));
-    const requestedName = createNew
-      ? window.prompt("请输入全局文件名称，例如：城市猎人", state.globalFileName || "")?.trim()
-      : current?.name || state.globalFileName || window.prompt("请输入全局文件名称", "")?.trim();
-    if (!requestedName) return;
+    const normalizedName = requestedName.trim() || (!createNew ? current?.name || state.globalFileName : "");
+    if (!normalizedName) {
+      openGlobalFileNameDialog(createNew);
+      return;
+    }
     setGlobalFileBusy(true);
+    setGlobalFileNameError("");
     try {
       const payload: GlobalFilePayload = {
         schemaVersion: 1,
@@ -4913,7 +4925,7 @@ function DirectorDesk() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           globalFileId: createNew ? undefined : current?.id,
-          name: requestedName,
+          name: normalizedName,
           payload,
         }),
       });
@@ -4929,8 +4941,12 @@ function DirectorDesk() {
       }));
       await refreshGlobalFiles(result.file.id);
       setToast(`全局文件「${result.file.name}」已保存`);
+      setGlobalFileNameDialog({ open: false, createNew: false });
+      setGlobalFileNameDraft("");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "全局文件保存失败");
+      const message = error instanceof Error ? error.message : "全局文件保存失败";
+      setToast(message);
+      if (globalFileNameDialog.open) setGlobalFileNameError(message);
     } finally {
       setGlobalFileBusy(false);
     }
@@ -5782,7 +5798,7 @@ function DirectorDesk() {
             <option value="">{globalFiles.length ? "选择全局文件" : "暂无全局文件"}</option>
             {globalFiles.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
           </select>
-          <button className="button secondary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => void saveGlobalFile({ createNew: true })}>新建全局文件</button>
+          <button className="button secondary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => openGlobalFileNameDialog(true)}>新建全局文件</button>
           <button className="button secondary" type="button" disabled={locked || tenantScope.mode !== "server" || !selectedGlobalFileId} onClick={() => void loadGlobalFile()}>加载全局文件</button>
           <button className="button primary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => void saveGlobalFile()}>{globalFileBusy ? "保存中…" : "保存全局文件"}</button>
         </section>
@@ -7051,6 +7067,28 @@ function DirectorDesk() {
           </section>
         </div>
       ) : null}
+      <TextInputDialog
+        open={globalFileNameDialog.open}
+        title={globalFileNameDialog.createNew ? "新建全局文件" : "保存全局文件"}
+        description="全局文件独立于项目，可在其他话数的项目中加载复用。"
+        label="全局文件名称"
+        value={globalFileNameDraft}
+        placeholder="例如：城市猎人"
+        confirmLabel={globalFileNameDialog.createNew ? "新建并保存" : "保存"}
+        busyLabel="正在保存…"
+        busy={globalFileBusy}
+        error={globalFileNameError}
+        onChange={(value) => {
+          setGlobalFileNameDraft(value);
+          if (globalFileNameError) setGlobalFileNameError("");
+        }}
+        onCancel={() => {
+          setGlobalFileNameDialog({ open: false, createNew: false });
+          setGlobalFileNameDraft("");
+          setGlobalFileNameError("");
+        }}
+        onConfirm={() => void saveGlobalFile({ createNew: globalFileNameDialog.createNew, requestedName: globalFileNameDraft })}
+      />
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </main>
   );

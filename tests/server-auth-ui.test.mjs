@@ -7,6 +7,7 @@ const authPath = new URL("../app/manjing-auth-client.tsx", import.meta.url);
 const mediaLabPath = new URL("../app/media-lab.tsx", import.meta.url);
 const cssPath = new URL("../app/globals.css", import.meta.url);
 const bridgePath = new URL("../scripts/shotdirector-bridge.mjs", import.meta.url);
+const textInputDialogPath = new URL("../app/text-input-dialog.tsx", import.meta.url);
 
 test("server API base is configurable while localhost remains compatible", async () => {
   const page = await readFile(pagePath, "utf8");
@@ -92,6 +93,24 @@ test("auth gate covers session, registration, login and logout", async () => {
   assert.match(auth, /visibilitychange/);
   assert.match(auth, /activeSessionRequest\.current !== null && !force/);
   assert.doesNotMatch(auth, /window\.sessionStorage\.clear/);
+});
+
+test("project and global-file naming use an accessible in-app dialog instead of browser prompt", async () => {
+  const [page, auth, dialog, css] = await Promise.all([
+    readFile(pagePath, "utf8"),
+    readFile(authPath, "utf8"),
+    readFile(textInputDialogPath, "utf8"),
+    readFile(cssPath, "utf8"),
+  ]);
+  assert.doesNotMatch(auth, /window\.prompt\(/);
+  assert.doesNotMatch(page.slice(page.indexOf("async function saveGlobalFile"), page.indexOf("async function loadGlobalFile")), /window\.prompt\(/);
+  assert.match(auth, /<TextInputDialog[\s\S]*?title="新建项目"[\s\S]*?onConfirm=\{\(\) => void createProject\(\)\}/);
+  assert.match(page, /<TextInputDialog[\s\S]*?title=\{globalFileNameDialog\.createNew/);
+  assert.match(dialog, /role="dialog"/);
+  assert.match(dialog, /aria-modal="true"/);
+  assert.match(dialog, /event\.key === "Escape"/);
+  assert.match(dialog, /type="submit"[\s\S]*?disabled=\{busy \|\| !value\.trim\(\)\}/);
+  assert.match(css, /\.text-input-dialog-backdrop\s*\{/);
 });
 
 test("project archive hydration precedes writes and the global file library is explicit", async () => {

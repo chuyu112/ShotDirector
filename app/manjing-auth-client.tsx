@@ -2,6 +2,7 @@
 
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { requestProjectSave, type SaveProjectDetail } from "./project-save.mjs";
+import { TextInputDialog } from "./text-input-dialog";
 
 type AuthUser = {
   id: string;
@@ -158,6 +159,9 @@ export function ManjingAuthGate({
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectSaveStage, setProjectSaveStage] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [projectNameDialogOpen, setProjectNameDialogOpen] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [projectNameError, setProjectNameError] = useState("");
   const requestSequence = useRef(0);
   const activeSessionRequest = useRef<number | null>(null);
   const authChannel = useRef<BroadcastChannel | null>(null);
@@ -401,12 +405,24 @@ export function ManjingAuthGate({
     }
   }
 
+  function openCreateProjectDialog() {
+    setSessionError("");
+    setProjectNotice("");
+    setProjectNameDraft("");
+    setProjectNameError("");
+    setProjectNameDialogOpen(true);
+  }
+
   async function createProject() {
-    const name = window.prompt("请输入新项目名称")?.trim();
-    if (!name) return;
+    const name = projectNameDraft.trim();
+    if (!name) {
+      setProjectNameError("请输入项目名称。");
+      return;
+    }
     setProjectBusy(true);
     setSessionError("");
     setProjectNotice("");
+    setProjectNameError("");
     try {
       const response = await globalThis.fetch(`${apiBase}/projects`, {
         method: "POST",
@@ -416,9 +432,13 @@ export function ManjingAuthGate({
       });
       const payload = await response.json().catch(() => undefined) as { project?: AuthProject; error?: string } | undefined;
       if (!response.ok || !payload?.project?.id) throw new Error(payload?.error || "新建项目失败，请重试。");
+      setProjectNameDialogOpen(false);
+      setProjectNameDraft("");
       await activateProject(payload.project.id);
     } catch (error) {
-      setSessionError(error instanceof Error ? error.message : "新建项目失败，请重试。");
+      const message = error instanceof Error ? error.message : "新建项目失败，请重试。";
+      setProjectNameError(message);
+      setSessionError(message);
       setProjectBusy(false);
     }
   }
@@ -473,7 +493,7 @@ export function ManjingAuthGate({
                   {gate.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select>
               </label>
-              <button type="button" disabled={projectBusy} onClick={() => void createProject()}>
+              <button type="button" disabled={projectBusy} onClick={openCreateProjectDialog}>
                 新建项目
               </button>
               <button type="button" disabled={projectBusy || !(selectedProjectId || gate.activeProject.id)} onClick={() => void activateProject(selectedProjectId || gate.activeProject.id)}>加载项目</button>
@@ -493,6 +513,28 @@ export function ManjingAuthGate({
             </button>
           </section>
           {children}
+          <TextInputDialog
+            open={projectNameDialogOpen}
+            title="新建项目"
+            description="新项目与当前项目相互独立；创建后会自动切换到新项目。"
+            label="项目名称"
+            value={projectNameDraft}
+            placeholder="例如：城市猎人 第7话"
+            confirmLabel="创建并进入"
+            busyLabel="正在创建…"
+            busy={projectBusy}
+            error={projectNameError}
+            onChange={(value) => {
+              setProjectNameDraft(value);
+              if (projectNameError) setProjectNameError("");
+            }}
+            onCancel={() => {
+              setProjectNameDialogOpen(false);
+              setProjectNameDraft("");
+              setProjectNameError("");
+            }}
+            onConfirm={() => void createProject()}
+          />
         </div>
       </ManjingWorkspaceScopeContext.Provider>
     );
