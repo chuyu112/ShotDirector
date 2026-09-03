@@ -2064,7 +2064,8 @@ function DirectorDesk() {
 
   const review = state.reviews[state.currentShot];
   const shot = normalizeShot(review.shot, state.projectTitle === defaultProjectTitle);
-  const shotListScope = `${activeStorageKey}:${shot.shotUid || shot.id}`;
+  const listProjectScope = `${state.projectUid}:${activeStorageKey}`;
+  const shotListScope = `${listProjectScope}:${shot.shotUid || shot.id}`;
   const structureConfirmed = state.structureStatus !== "draft";
   const structurePanelEntries = state.reviews.flatMap((item, reviewIndex) => (item.shot.sourcePanels || []).map((panelId) => ({
     panelId,
@@ -5948,23 +5949,23 @@ function DirectorDesk() {
               ))}
               {!normalizeCharacterProfiles(state.globalSettings.characterProfiles).length ? <div className="character-profile-empty">尚未建立人物档案。点击“新增人物”开始录入。</div> : null}
             </div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="人物补充规则（每行一条，兼容旧项目）" value={state.globalSettings.characters} rows={5} onChange={(value) => updateGlobalArray("characters", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="人物补充规则（每行一条，兼容旧项目）" value={state.globalSettings.characters} rows={5} onChange={(value) => updateGlobalArray("characters", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>02 · PROPS</span><h2>关键物品</h2><p>维护跨镜道具的唯一性、外观、比例和状态时间线。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="关键物品规则（每行一条）" value={state.globalSettings.props} rows={9} onChange={(value) => updateGlobalArray("props", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="关键物品规则（每行一条）" value={state.globalSettings.props} rows={9} onChange={(value) => updateGlobalArray("props", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>03 · LOCATIONS</span><h2>地点与时代</h2><p>防止新宿站、ALTA、歌舞伎町牌楼和餐厅空间混在一起。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="地点与时代规则（每行一条）" value={state.globalSettings.locations} rows={8} onChange={(value) => updateGlobalArray("locations", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="地点与时代规则（每行一条）" value={state.globalSettings.locations} rows={8} onChange={(value) => updateGlobalArray("locations", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>04 · TIMELINE</span><h2>剧情日期与时间线</h2><p>失踪当晚、次日新闻和姐姐委托分开记录。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="全片时间线（每行一条）" value={state.globalSettings.timeline} rows={8} onChange={(value) => updateGlobalArray("timeline", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="全片时间线（每行一条）" value={state.globalSettings.timeline} rows={8} onChange={(value) => updateGlobalArray("timeline", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>05 · CONTINUITY</span><h2>连续性硬锁</h2><p>所有相关镜头都必须服从的空间、身份与状态规则。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="连续性规则（每行一条）" value={state.globalSettings.continuity} rows={9} onChange={(value) => updateGlobalArray("continuity", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="连续性规则（每行一条）" value={state.globalSettings.continuity} rows={9} onChange={(value) => updateGlobalArray("continuity", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>06 · STYLE</span><h2>美术风格分层</h2><p>最终视频与临时分镜图严格分开，互不反推。</p></div>
@@ -5973,11 +5974,11 @@ function DirectorDesk() {
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>07 · MODEL</span><h2>生成模型规范</h2><p>时长、全能参考上限与动作最小时长。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="模型规范（每行一条）" value={state.globalSettings.modelRules} rows={8} onChange={(value) => updateGlobalArray("modelRules", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="模型规范（每行一条）" value={state.globalSettings.modelRules} rows={8} onChange={(value) => updateGlobalArray("modelRules", value)} />
           </section>
           <section className="global-setting-card">
             <div className="global-setting-heading"><span>08 · NEGATIVE</span><h2>全局禁止项</h2><p>任何镜头都不能违反的禁令。</p></div>
-            <LineListField scopeKey={`${activeStorageKey}:global:${state.globalFileId || "project"}`} label="全局禁止项（每行一条）" value={state.globalSettings.negative} rows={8} onChange={(value) => updateGlobalArray("negative", value)} />
+            <LineListField scopeKey={`${listProjectScope}:global:${state.globalFileId || "project"}`} label="全局禁止项（每行一条）" value={state.globalSettings.negative} rows={8} onChange={(value) => updateGlobalArray("negative", value)} />
           </section>
         </fieldset>
 

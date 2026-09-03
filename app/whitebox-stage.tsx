@@ -919,7 +919,7 @@ export function WhiteboxEditor({
     return camera ? { type: "camera", value: camera } : undefined;
   }, [scene, activeSelectedId]);
   const framingActor = selected?.type === "actor" ? selected.value : scene.actors[0];
-  const hasSceneContent = scene.actors.length > 0 || scene.objects.length > 0;
+  const hasSceneContent = scene.actors.length > 0 || scene.objects.length > 0 || scene.zones.length > 0;
   const filteredPoseLibrary = useMemo(() => {
     const query = poseQuery.trim().toLowerCase();
     return poseLibrary.filter((entry) => (
