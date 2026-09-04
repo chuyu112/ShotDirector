@@ -613,6 +613,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
       const sourceRevision = buildCompleteShotPromptRevision({
         projectTitle,
         modelId: "seedance-2.5",
+        writingModelId: "glm-5.3-flash",
         globalSettings,
         shot,
         shotAnnotations: {},
@@ -626,6 +627,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
           projectUid,
           projectTitle,
           generationModel: "seedance-2.5",
+          writingModelId: "glm-5.3-flash",
           globalSettings,
           sourceMangaRequestId: analysisJobId,
           sourceRevision,

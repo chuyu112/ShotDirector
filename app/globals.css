@@ -1230,6 +1230,10 @@ input:focus-visible {
 .complete-shot-prompt-panel textarea { width: 100%; min-height: 320px; resize: vertical; padding: 16px; border: 1px solid rgba(47,125,98,.35); border-radius: 12px; background: white; color: var(--ink); font: inherit; font-size: 13px; line-height: 1.72; }
 .complete-shot-prompt-panel textarea:focus { outline: 3px solid rgba(47,125,98,.12); border-color: #2f7d62; }
 .complete-shot-prompt-panel.stale, .complete-shot-prompt-panel.error { background: #fff8df; }
+.complete-shot-generation-status { display: grid; grid-template-columns: auto auto auto minmax(220px, 1fr); align-items: center; gap: 8px 16px; padding: 10px 12px; border: 1px solid #9db4ed; background: var(--blue-soft); color: #20345f; font-size: 10px; }
+.complete-shot-generation-status b { color: var(--blue); font-size: 11px; }
+.complete-shot-generation-status time { font-variant-numeric: tabular-nums; }
+.complete-shot-generation-status small { color: #586780; line-height: 1.45; }
 .complete-shot-prompt-waiting { display: grid; min-height: 120px; place-items: center; border: 1px dashed rgba(21,21,21,.25); border-radius: 12px; color: var(--muted); font-size: 12px; font-weight: 850; }
 .complete-shot-research { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
 .complete-shot-research > b { display: inline-flex; align-items: center; padding-right: 4px; font-size: 11px; }

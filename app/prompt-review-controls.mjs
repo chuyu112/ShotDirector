@@ -17,9 +17,6 @@ export function promptReviewControls({ review, reviewer, bridge, hasSource }) {
   else if (!review.completePrompt?.trim()) {
     reason = "当前 Shot 尚无完整提示词，请先到创作台生成讨论稿。";
     action = "creator";
-  } else if (review.completePromptStatus !== "ready") {
-    reason = "当前提示词尚未就绪或已过期，请到创作台处理。旧稿保留，不会自动改写。";
-    action = "creator";
   } else if (!hasSource) reason = "当前 Shot 缺少关联漫画画格，无法核对原作证据。";
   else if (!reviewer?.available) reason = reviewer?.reason || "正在加载审核模型；暂不可提交。";
   return { selectingDisabled: reviewing, submitDisabled: Boolean(reason), reason, action };

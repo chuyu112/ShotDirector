@@ -61,6 +61,13 @@ function completeRevision(shot = revisionShot, overrides = {}) {
   });
 }
 
+test("complete prompt revisions distinguish the selected Chat / Work model", () => {
+  assert.notEqual(
+    completeRevision(revisionShot, { writingModelId: "glm-5.3-flash" }),
+    completeRevision(revisionShot, { writingModelId: "jk-gpt-5.6-sol" }),
+  );
+});
+
 function videoPackage(shot = revisionShot, globalSettings = revisionGlobalSettings) {
   return buildVideoGenerationPackage({
     projectTitle: "测试项目",

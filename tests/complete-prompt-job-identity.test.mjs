@@ -120,6 +120,8 @@ test("bridge shares the five-Shot queue across Creator and isolated Reviewer", a
   assert.match(source, /busy:\s*hasActiveWritingModelWork\(\)/);
   assert.match(source, /if \(hasActiveWritingModelWork\(\)\)[\s\S]*?完成后再切换/);
   assert.match(source, /const shotWorkScheduler = new ShotWorkScheduler\(\)/);
+  assert.match(source, /writingModelId: aiProvider, writingModelLabel: primaryModelLabel/);
+  assert.match(source, /Chat \/ Work 模型已变化，请按当前模型重新提交/);
   assert.match(source, /reviewer\.runtimeProvider\.generate\(/);
   assert.doesNotMatch(source, /CODEX_HOME|codex-cli/);
 });

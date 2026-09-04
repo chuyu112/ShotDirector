@@ -94,7 +94,8 @@ test("runs prompt review as an isolated non-approving reviewer task", async () =
   assert.match(page, /promptReviewSourceRevision/);
   assert.match(page, /const promptReviewArtifactIsCurrent = review\.promptReviewStatus === "ready"/);
   assert.match(page, /const promptReviewIsCurrent = promptReviewArtifactIsCurrent[\s\S]*?verdict === "discussion-ready"/);
-  assert.match(page, /const completePromptSourceRevision = review\.completePromptSourceRevision \|\| buildCompleteShotPromptRevision/);
+  assert.match(page, /const currentCompletePromptSourceRevision = buildCompleteShotPromptRevision/);
+  assert.match(page, /review\.completePromptStatus === "ready" && review\.completePromptSourceRevision[\s\S]*?currentCompletePromptSourceRevision/);
   assert.match(page, /completePromptSourceRevision,\n\s+approved: false/);
   assert.match(page, /operationMode: "strict-review"/);
   assert.match(bridge, /reviewer\.runtimeProvider\.generate\(/);
@@ -134,6 +135,12 @@ test("keeps Creator and Reviewer model lineage explicit across legacy state and 
   assert.match(styles, /\.writing-model-picker\[open\] > summary \{ border-color: var\(--blue\)/);
   assert.match(styles, /\.writing-model-menu > button\.active \{ color: white; background: var\(--blue\); \}/);
   assert.match(styles, /\.reasoning-effort-picker:focus-within \{ border-color: var\(--blue\)/);
+  assert.match(page, /writingModelId: activeWritingModelId/);
+  assert.match(page, /正在生成新版本/);
+  assert.match(page, /开始时间：/);
+  assert.match(page, /完成时间：/);
+  assert.match(page, /当前展示上一版/);
+  assert.match(styles, /\.complete-shot-generation-status/);
 });
 
 test("requires shot-structure approval before downstream generation", async () => {

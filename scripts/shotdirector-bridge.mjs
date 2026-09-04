@@ -3965,7 +3965,7 @@ async function withJob(type, shotId, work) {
 
 const shotWorkScheduler = new ShotWorkScheduler();
 
-async function withCompletePromptJob(identity, projectTitle, work, type = "complete-shot-prompt", chatTurnId = "") {
+async function withCompletePromptJob(identity, projectTitle, work, type = "complete-shot-prompt", chatTurnId = "", jobMetadata = {}) {
   const baseKey = completePromptJobKey(identity);
   const jobKey = type === "complete-shot-prompt" ? baseKey : `${type}::${baseKey}::${chatTurnId}`;
   if (activeCompletePromptJobs.has(jobKey)) {
@@ -3980,6 +3980,7 @@ async function withCompletePromptJob(identity, projectTitle, work, type = "compl
     type,
     chatTurnId: chatTurnId || undefined,
     ...identity,
+    ...jobMetadata,
     projectTitle,
     requestId,
     status: "running",
@@ -4062,6 +4063,11 @@ async function generateCompleteShotPrompt(payload) {
   if (!hasValidDuration(shot, payload)) throw new Error("当前 Shot 时长不符合所选 Seedance 模型限制");
   if (!String(payload?.globalSettings?.storyBackground || "").trim()) throw new Error("请先填写项目故事背景");
   if (!String(payload?.globalSettings?.finalVideoStyle || "").trim()) throw new Error("请先确认最终成片美术风格");
+  if (String(payload?.writingModelId || "").trim() !== aiProvider) {
+    const error = new Error("Chat / Work 模型已变化，请按当前模型重新提交");
+    error.statusCode = 409;
+    throw error;
+  }
 
   const analysis = recoverMediaAnalysisResult(payload.sourceMangaRequestId);
   if (analysis?.kind !== "manga" || !Array.isArray(analysis.mangaPages)) throw new Error("来源漫画分析结果不可用");
@@ -4130,7 +4136,7 @@ async function generateCompleteShotPrompt(payload) {
     };
     writeFileSync(join(responseDir, `complete-shot-prompt-${requestId}.committed.json`), `${JSON.stringify(committed, null, 2)}\n`, "utf8");
     return committed;
-  });
+  }, "complete-shot-prompt", "", { writingModelId: aiProvider, writingModelLabel: primaryModelLabel });
 }
 
 async function chatWithShot(payload) {

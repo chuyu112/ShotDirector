@@ -253,6 +253,12 @@ function creatorModelLineageLabel(modelId?: string, provider?: string) {
   return `${catalogModel?.label || normalizedModelId} · API`;
 }
 
+function displayDateTime(value?: string) {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "未记录" : date.toLocaleString("zh-CN", { hour12: false });
+}
+
 type PromptReviewFinding = {
   id: string;
   severity: PromptReviewSeverity;
@@ -324,6 +330,7 @@ type ShotReview = {
   completePromptResearch?: CompleteShotPromptResearch;
   completePromptWarnings?: string[];
   completePromptGeneratedAt?: string;
+  completePromptGenerationStartedAt?: string;
   completePromptSourceRevision?: string;
   completePromptConfirmedAt?: string;
   completePromptGeneratorId?: string;
@@ -510,6 +517,8 @@ type BridgeJob = {
   projectUid?: string;
   shotUid?: string;
   sourceRevision?: string;
+  writingModelId?: string;
+  writingModelLabel?: string;
   projectTitle?: string;
   assetId?: string;
   assetKind?: ShotAssetKind;
@@ -1233,6 +1242,7 @@ function normalizeReviewForResume(review: ShotReview, projectUid = "project-lega
       : undefined,
     completePromptWarnings: Array.isArray(review.completePromptWarnings) ? review.completePromptWarnings.filter((item) => typeof item === "string") : [],
     completePromptGeneratedAt: typeof review.completePromptGeneratedAt === "string" ? review.completePromptGeneratedAt : undefined,
+    completePromptGenerationStartedAt: typeof review.completePromptGenerationStartedAt === "string" ? review.completePromptGenerationStartedAt : undefined,
     completePromptSourceRevision: typeof review.completePromptSourceRevision === "string" ? review.completePromptSourceRevision : undefined,
     completePromptConfirmedAt: typeof review.completePromptConfirmedAt === "string" ? review.completePromptConfirmedAt : undefined,
     completePromptGeneratorId: typeof review.completePromptGeneratorId === "string" && review.completePromptGeneratorId.trim()
@@ -2112,6 +2122,7 @@ function DirectorDesk() {
   const writingModelSummary = switchingWritingModelId
     ? "切换中…"
     : activeWritingModel?.label || (bridge.connected ? "暂无可用模型" : "未连接");
+  const activeWritingModelId = activeWritingModel?.id || bridge.modelProvider?.selectionId || "";
   const selectedReasoningEffort = bridge.reasoningPolicy?.selected || "high";
   const reviewerOptions = bridge.reviewers?.length ? bridge.reviewers : [{ id: defaultPromptReviewerId, label: "正在加载审核模型…", provider: "kimi", model: "k3", available: false, reason: "尚未收到审核模型目录，请等待服务连接。" }];
   const savedPromptReviewer = reviewerOptions.find((item) => item.id === review.promptReviewerId);
@@ -2785,6 +2796,7 @@ function DirectorDesk() {
     const currentSourceRevision = buildCompleteShotPromptRevision({
       projectTitle: state.projectTitle,
       modelId: generationModel,
+      writingModelId: activeWritingModelId,
       globalSettings: recoveryGlobalSettings,
       shot,
       shotAnnotations: review.annotations,
@@ -2821,6 +2833,7 @@ function DirectorDesk() {
           completePromptResearch: result.research,
           completePromptWarnings: result.warnings,
           completePromptGeneratedAt: result.generatedAt,
+          completePromptGenerationStartedAt: undefined,
           completePromptSourceRevision: result.sourceRevision,
           completePromptConfirmedAt: item.completePromptConfirmedAt || result.generatedAt || new Date().toISOString(),
           completePromptGeneratorId: result.generatorId?.trim() || legacyUnknownModelId,
@@ -2849,6 +2862,7 @@ function DirectorDesk() {
         reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity) && item.completePromptStatus === "generating" ? {
           ...item,
           completePromptStatus: "error" as CompleteShotPromptStatus,
+          completePromptGenerationStartedAt: undefined,
           completePromptSummary: "上次生成已经结束，但没有找到可恢复结果，请重新生成。",
         } : item),
       }));
@@ -2857,7 +2871,7 @@ function DirectorDesk() {
       active = false;
       if (!recovered && recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
     };
-  }, [activeStorageKey, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, generationModel, hydrated, mangaSourceRequestId, review.annotations, review.completePrompt, review.completePromptSourceRevision, review.completePromptStatus, review.completePromptSummary, shot, state.globalSettings, state.projectTitle, state.projectUid, state.reviews, state.sourceMangaPanelAnnotations]);
+  }, [activeStorageKey, activeWritingModelId, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, generationModel, hydrated, mangaSourceRequestId, review.annotations, review.completePrompt, review.completePromptSourceRevision, review.completePromptStatus, review.completePromptSummary, shot, state.globalSettings, state.projectTitle, state.projectUid, state.reviews, state.sourceMangaPanelAnnotations]);
 
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
@@ -2915,7 +2929,7 @@ function DirectorDesk() {
       }));
     });
     return () => { active = false; };
-  }, [activeStorageKey, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
+  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -3440,7 +3454,7 @@ function DirectorDesk() {
 
   function chatContext(currentState: ReviewState, target: ShotReview) {
     const panelAnnotations = Object.fromEntries((target.shot.sourcePanels || []).map(id => [id, currentState.sourceMangaPanelAnnotations?.[id] || ""]));
-    const input = { projectTitle: currentState.projectTitle, modelId: currentState.generationModel || defaultGenerationModel, globalSettings: currentState.globalSettings, shot: target.shot, shotAnnotations: target.annotations, panelAnnotations, sourceMangaRequestId: currentState.sourceMangaRequestId || "" };
+    const input = { projectTitle: currentState.projectTitle, modelId: currentState.generationModel || defaultGenerationModel, writingModelId: activeWritingModelId, globalSettings: currentState.globalSettings, shot: target.shot, shotAnnotations: target.annotations, panelAnnotations, sourceMangaRequestId: currentState.sourceMangaRequestId || "" };
     return { ...input, generationModel: input.modelId, sourceRevision: buildCompleteShotPromptRevision(input), projectUid: currentState.projectUid, currentPrompt: target.completePrompt || "", allowRevision: !target.approved };
   }
 
@@ -3521,10 +3535,32 @@ function DirectorDesk() {
     if (!targetReview) return;
     if (targetReview.chat?.pending || targetReview.completePromptStatus === "generating" || targetReview.promptReviewStatus === "reviewing") { setToast("当前 Shot 已有任务运行或排队，请等待完成"); return; }
     const targetShotIdentity = stableShotIdentity(targetReview.shot);
+    const existingServerJob = (bridge.promptJobs || []).find((job) => (
+      job.type === "complete-shot-prompt"
+      && job.status === "running"
+      && bridgeJobMatchesStableShot(job, state.projectUid, targetShotIdentity)
+    ));
+    if (existingServerJob) {
+      setState((previous) => ({
+        ...previous,
+        reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
+          ...item,
+          completePromptStatus: "generating" as CompleteShotPromptStatus,
+          completePromptGenerationStartedAt: existingServerJob.startedAt,
+          completePromptSourceRevision: existingServerJob.sourceRevision || item.completePromptSourceRevision,
+        } : item),
+      }));
+      setToast(`Shot ${targetReview.shot.id} 已在使用 ${existingServerJob.writingModelLabel || "当前模型"} 生成；已恢复任务状态，不会重复提交`);
+      return;
+    }
     const submittedShotId = targetReview.shot.id;
     const submittedProjectUid = state.projectUid;
     if (!bridge.connected || !bridge.pairingToken) {
       setToast("本地 Agent 未连接，暂时不能生成完整提示词");
+      return;
+    }
+    if (!activeWritingModelId || !activeWritingModel?.available) {
+      setToast("请先选择一个可用的 Chat / Work 模型");
       return;
     }
     if (!mangaSourceRequestId || !targetReview.shot.sourcePanels?.length) {
@@ -3540,13 +3576,14 @@ function DirectorDesk() {
     const sourceRevision = buildCompleteShotPromptRevision({
       projectTitle: state.projectTitle,
       modelId: generationModel,
+      writingModelId: activeWritingModelId,
       globalSettings: effectiveGlobalSettings,
       shot: targetReview.shot,
       shotAnnotations: targetReview.annotations,
       panelAnnotations,
       sourceMangaRequestId: mangaSourceRequestId,
     });
-    const confirmedAt = new Date().toISOString();
+    const generationStartedAt = new Date().toISOString();
     setState((previous) => {
       const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
       return {
@@ -3560,7 +3597,7 @@ function DirectorDesk() {
         reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
           ...invalidatePromptReview(item),
           completePromptStatus: "generating",
-          completePromptConfirmedAt: confirmedAt,
+          completePromptGenerationStartedAt: generationStartedAt,
           completePromptSourceRevision: sourceRevision,
         } : item),
       };
@@ -3575,6 +3612,7 @@ function DirectorDesk() {
           projectUid: submittedProjectUid,
           projectTitle: state.projectTitle,
           generationModel,
+          writingModelId: activeWritingModelId,
           globalSettings: effectiveGlobalSettings,
           sourceMangaRequestId: mangaSourceRequestId,
           sourceRevision,
@@ -3584,6 +3622,10 @@ function DirectorDesk() {
         }),
       });
       const result = await response.json() as CompleteShotPromptResult;
+      if (response.status === 409 && /已在生成|运行或排队/.test(result.error || "")) {
+        setToast(`Shot ${submittedShotId} 已有生成任务；正在恢复同一任务的进度，不会重复提交`);
+        return;
+      }
       if (!response.ok) throw new Error(result.error || "完整提示词生成失败");
       if (result.status !== "completed" || !completePromptResultMatchesStableShot(result, submittedProjectUid, targetShotIdentity) || result.sourceRevision !== sourceRevision || !result.prompt?.trim()) {
         throw new Error("Agent 返回结果与本次确认的 Shot 不一致");
@@ -3598,8 +3640,9 @@ function DirectorDesk() {
           completePromptResearch: result.research,
           completePromptWarnings: result.warnings,
           completePromptGeneratedAt: result.generatedAt,
+          completePromptGenerationStartedAt: undefined,
           completePromptSourceRevision: sourceRevision,
-          completePromptConfirmedAt: item.completePromptConfirmedAt || confirmedAt,
+          completePromptConfirmedAt: result.generatedAt || new Date().toISOString(),
           completePromptGeneratorId: result.generatorId?.trim() || legacyUnknownModelId,
           completePromptGeneratorProvider: result.generatorProvider?.trim() || undefined,
           completePromptRequestedGeneratorId: result.requestedGeneratorId?.trim() || undefined,
@@ -3626,7 +3669,6 @@ function DirectorDesk() {
       const message = error instanceof Error ? error.message : "完整提示词生成失败";
       setState((previous) => {
         if (previous.projectUid !== submittedProjectUid) return previous;
-        const targetIndex = previous.reviews.findIndex((item) => matchesStableShotIdentity(item.shot, targetShotIdentity));
         return {
           ...previous,
           currentShot: previous.currentShot,
@@ -3634,6 +3676,7 @@ function DirectorDesk() {
           reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) && item.completePromptStatus === "generating" && item.completePromptSourceRevision === sourceRevision ? {
             ...item,
             completePromptStatus: "error",
+            completePromptGenerationStartedAt: undefined,
             completePromptSummary: message,
           } : item),
           structureStatus: "draft",
@@ -3691,15 +3734,19 @@ function DirectorDesk() {
     // prompt lineage was persisted. Bind that unchanged draft to the current
     // evidence snapshot at review time so the read-only Reviewer can inspect
     // it without forcing a regeneration loop through the Creator desk.
-    const completePromptSourceRevision = review.completePromptSourceRevision || buildCompleteShotPromptRevision({
+    const currentCompletePromptSourceRevision = buildCompleteShotPromptRevision({
       projectTitle: state.projectTitle,
       modelId: generationModel,
+      writingModelId: activeWritingModelId,
       globalSettings: completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings),
       shot,
       shotAnnotations: review.annotations,
       panelAnnotations,
       sourceMangaRequestId: mangaSourceRequestId,
     });
+    const completePromptSourceRevision = review.completePromptStatus === "ready" && review.completePromptSourceRevision
+      ? review.completePromptSourceRevision
+      : currentCompletePromptSourceRevision;
     const sourceRevision = buildPromptReviewRevision({
       shotId: shot.id,
       completePrompt: review.completePrompt,
@@ -6324,7 +6371,7 @@ function DirectorDesk() {
               <label><span>Reviewer 审核模型（不影响 Creator）</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
               <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
               {!selectedPromptReviewer?.available ? <p className="prompt-review-config">{selectedPromptReviewer?.reason || "当前 Reviewer 的 env 尚未配置完整"}</p> : null}
-              {reviewControls.reason ? <div id="strict-review-blocked-reason" className="strict-review-blocked" role="status"><p>{reviewControls.reason}</p>{reviewControls.action === "creator" ? <button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); openCompleteShotPrompt(state.currentShot); }}>到创作台处理当前提示词</button> : null}</div> : <p className="strict-review-ready" role="status">当前 Shot 已可审核，无需等待其他 Shot 生成完成。</p>}
+              {reviewControls.reason ? <div id="strict-review-blocked-reason" className="strict-review-blocked" role="status"><p>{reviewControls.reason}</p>{reviewControls.action === "creator" ? <button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); openCompleteShotPrompt(state.currentShot); }}>到创作台处理当前提示词</button> : null}</div> : <p className="strict-review-ready" role="status">{review.completePromptStatus === "ready" ? "当前 Shot 已可审核，无需等待其他 Shot 生成完成。" : "将按当前提示词文本与当前原作画格创建新的只读审核快照。"}</p>}
               <button type="button" className="button primary" disabled={reviewControls.submitDisabled} aria-describedby={reviewControls.reason ? "strict-review-blocked-reason" : undefined} onClick={() => void reviewCompletePrompt()}>{review.promptReviewStatus === "reviewing" ? "严格审核中…" : promptReviewArtifactIsCurrent ? "重新审核当前只读快照" : "提交严格审核"}</button>
               <small>本按钮只创建审核报告，不会改写提示词、Shot、源文件或批准状态。</small>
             </section>
@@ -6841,11 +6888,20 @@ function DirectorDesk() {
           </header>
           {review.completePrompt ? (
             <p className="complete-shot-lineage">
-              Creator 模型：<strong>{creatorModelLineageLabel(review.completePromptGeneratorId, review.completePromptGeneratorProvider)}</strong>
+              {review.completePromptStatus === "generating" ? "当前展示上一版 · " : ""}Creator 模型：<strong>{creatorModelLineageLabel(review.completePromptGeneratorId, review.completePromptGeneratorProvider)}</strong>
               {review.completePromptRequestedGeneratorId && review.completePromptRequestedGeneratorId !== review.completePromptGeneratorId
                 ? ` · 请求模型：${review.completePromptRequestedGeneratorId}`
                 : ""}
+              {` · 完成时间：${displayDateTime(review.completePromptGeneratedAt)}`}
             </p>
+          ) : null}
+          {review.completePromptStatus === "generating" ? (
+            <div className="complete-shot-generation-status" role="status">
+              <b>正在生成新版本</b>
+              <span>模型：{writingModelSummary}</span>
+              <time>开始时间：{displayDateTime(review.completePromptGenerationStartedAt)}</time>
+              {review.completePrompt?.trim() ? <small>下方暂时保留上一版，生成成功后会整体替换并更新模型与完成时间。</small> : null}
+            </div>
           ) : null}
           {review.completePrompt ? (
             <div className="complete-shot-prompt-content">

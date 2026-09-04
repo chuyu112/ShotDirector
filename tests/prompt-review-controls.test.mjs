@@ -37,7 +37,7 @@ test("every unsupported state has a visible reason without marking drafts ready"
     { ...ready, bridge: { ...ready.bridge, draining: true } },
     { ...ready, reviewer: { available: false, reason: "未配置" } },
     { ...ready, hasSource: false },
-    ...["empty", "stale", "error", "generating"].map(completePromptStatus => ({ ...ready, review: { ...ready.review, completePromptStatus } })),
+    ...["generating"].map(completePromptStatus => ({ ...ready, review: { ...ready.review, completePromptStatus } })),
     { ...ready, review: { ...ready.review, completePrompt: " " } },
   ]) {
     const before = JSON.stringify(input);
@@ -46,6 +46,16 @@ test("every unsupported state has a visible reason without marking drafts ready"
     assert.ok(controls.reason);
     assert.equal(controls.selectingDisabled, false);
     assert.equal(JSON.stringify(input), before);
+  }
+});
+
+test("a retained prompt can be reviewed after it becomes stale or a regeneration fails", () => {
+  for (const completePromptStatus of ["stale", "error", "empty"]) {
+    const controls = promptReviewControls({
+      ...ready,
+      review: { ...ready.review, completePromptStatus },
+    });
+    assert.deepEqual(controls, { selectingDisabled: false, submitDisabled: false, reason: "", action: "" });
   }
 });
 

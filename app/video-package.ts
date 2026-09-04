@@ -116,6 +116,7 @@ export function buildShotUpstreamRevision(input: {
 export function buildCompleteShotPromptRevision(input: {
   projectTitle: string;
   modelId: string;
+  writingModelId?: string;
   globalSettings: GlobalSettings;
   shot: StoryboardShot;
   shotAnnotations: Record<string, string>;
@@ -125,6 +126,7 @@ export function buildCompleteShotPromptRevision(input: {
   return `complete-${hashText(JSON.stringify({
     projectTitle: input.projectTitle,
     modelId: input.modelId,
+    ...(input.writingModelId ? { writingModelId: input.writingModelId } : {}),
     globalSettings: input.globalSettings,
     shot: shotSourceRevisionPayload(input.shot),
     shotAnnotations: input.shotAnnotations,
