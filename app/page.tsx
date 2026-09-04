@@ -240,6 +240,19 @@ const writingModelCatalog: WritingModelOption[] = [
 ];
 const serverSelectableWritingModelIds = new Set<WritingModelId>(writingModelCatalog.map((model) => model.id));
 
+function creatorModelLineageLabel(modelId?: string, provider?: string) {
+  const normalizedModelId = String(modelId || "").trim() || legacyUnknownModelId;
+  const normalizedProvider = String(provider || "").trim();
+  if (!normalizedProvider || normalizedProvider === "codex" || normalizedProvider === "human-editor") {
+    return `${normalizedModelId}${normalizedProvider ? ` · ${normalizedProvider}` : ""}`;
+  }
+  const catalogModel = writingModelCatalog.find((item) => (
+    item.id === normalizedModelId
+    || (item.model === normalizedModelId && item.provider === normalizedProvider)
+  ));
+  return `${catalogModel?.label || normalizedModelId} · API`;
+}
+
 type PromptReviewFinding = {
   id: string;
   severity: PromptReviewSeverity;
@@ -6298,7 +6311,7 @@ function DirectorDesk() {
             <section className="strict-review-shot-heading"><span>CURRENT SNAPSHOT</span><h2>SHOT {shot.id} · {shot.title}</h2><p>{shot.duration} 秒 · 稳定 ID：{shot.shotUid || "缺失"} · 来源画格 {(shot.sourcePanels || []).join("、") || "无"}</p></section>
             <MangaPanelStrip requestId={mangaSourceRequestId} panelIds={shot.sourcePanels || []} pairingToken={bridge.pairingToken} />
             <section className="strict-review-prompt-card" aria-label={`Shot ${shot.id} 待审提示词只读快照`}>
-              <header><div><span>CREATOR PROMPT · READ ONLY</span><h2>待审完整提示词</h2></div><small>{review.completePromptGeneratorId ? `Creator：${review.completePromptGeneratorId}` : "尚无 Creator 模型记录"}</small></header>
+              <header><div><span>CREATOR PROMPT · READ ONLY</span><h2>待审完整提示词</h2></div><small>{review.completePromptGeneratorId ? `Creator：${creatorModelLineageLabel(review.completePromptGeneratorId, review.completePromptGeneratorProvider)}` : "尚无 Creator 模型记录"}</small></header>
               {review.completePrompt?.trim()
                 ? <pre>{review.completePrompt}</pre>
                 : <div className="strict-review-empty"><b>当前 Shot 还没有提示词讨论稿</b><p>请返回创作台完成拆图、画格分析、重新组合与提示词生成；审核台不会代为生成或修改。</p><button type="button" className="button secondary" onClick={() => switchDeskMode("creator")}>返回创作台</button></div>}
@@ -6828,11 +6841,10 @@ function DirectorDesk() {
           </header>
           {review.completePrompt ? (
             <p className="complete-shot-lineage">
-              Creator 模型：<strong>{review.completePromptGeneratorId || legacyUnknownModelId}</strong>
+              Creator 模型：<strong>{creatorModelLineageLabel(review.completePromptGeneratorId, review.completePromptGeneratorProvider)}</strong>
               {review.completePromptRequestedGeneratorId && review.completePromptRequestedGeneratorId !== review.completePromptGeneratorId
                 ? ` · 请求模型：${review.completePromptRequestedGeneratorId}`
                 : ""}
-              {review.completePromptGeneratorProvider ? ` · ${review.completePromptGeneratorProvider}` : ""}
             </p>
           ) : null}
           {review.completePrompt ? (

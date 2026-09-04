@@ -110,7 +110,10 @@ test("runs prompt review as an isolated non-approving reviewer task", async () =
 });
 
 test("keeps Creator and Reviewer model lineage explicit across legacy state and UI selection", async () => {
-  const page = await read("../app/page.tsx");
+  const [page, styles] = await Promise.all([
+    read("../app/page.tsx"),
+    read("../app/globals.css"),
+  ]);
 
   assert.match(page, /const legacyUnknownModelId = "legacy-unknown"/);
   assert.match(page, /completePromptGeneratorId: result\.generatorId\?\.trim\(\) \|\| legacyUnknownModelId/);
@@ -125,6 +128,12 @@ test("keeps Creator and Reviewer model lineage explicit across legacy state and 
   assert.match(page, /currentGeneratorId\.endsWith\("\+human-edited"\)/);
   assert.match(page, /currentGeneratorId \? `\$\{currentGeneratorId\}\+human-edited` : "human-edited"/);
   assert.match(page, /completePromptGeneratorProvider: "human-editor"/);
+  assert.match(page, /function creatorModelLineageLabel/);
+  assert.match(page, /catalogModel\?\.label \|\| normalizedModelId} · API/);
+  assert.match(page, /normalizedProvider === "codex"/);
+  assert.match(styles, /\.writing-model-picker\[open\] > summary \{ border-color: var\(--blue\)/);
+  assert.match(styles, /\.writing-model-menu > button\.active \{ color: white; background: var\(--blue\); \}/);
+  assert.match(styles, /\.reasoning-effort-picker:focus-within \{ border-color: var\(--blue\)/);
 });
 
 test("requires shot-structure approval before downstream generation", async () => {
