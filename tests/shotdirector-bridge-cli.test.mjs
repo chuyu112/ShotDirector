@@ -9,9 +9,11 @@ const bridgePath = new URL("../scripts/shotdirector-bridge.mjs", import.meta.url
 const mediaSchemaPath = new URL("../scripts/media-analysis.schema.json", import.meta.url);
 const panelBoxesSchemaPath = new URL("../scripts/manga-panel-boxes.schema.json", import.meta.url);
 
-test("bridge allows Codex tasks in source migration packages without git history", async () => {
+test("bridge text generation no longer depends on a Codex checkout or git history", async () => {
   const source = await readFile(bridgePath, "utf8");
-  assert.match(source, /"--skip-git-repo-check"/);
+  assert.doesNotMatch(source, /--skip-git-repo-check|CODEX_HOME|MANJING_CODEX_HOME/);
+  assert.match(source, /OpenAIResponsesProvider/);
+  assert.match(source, /CompatibleChatStructuredProvider/);
 });
 
 test("reasoning depth is task-locked for manga split, shot prompts and strict review", async () => {
@@ -57,14 +59,16 @@ test("compatible writing models receive attachments and bounded inline video evi
   assert.match(source, /promptVisiblePanelEvidence\(evidence/);
 });
 
-test("server Codex CLI uses isolated auth, image attachments and an explicit catalog transport", async () => {
+test("public text generation is API-only and keeps provider transport explicit", async () => {
   const source = await readFile(bridgePath, "utf8");
-  assert.match(source, /MANJING_CODEX_HOME/);
-  assert.match(source, /existsSync\(join\(codexHome, "auth\.json"\)\)/);
-  assert.match(source, /imagePaths\.flatMap\(\(imagePath\) => \["--image", imagePath\]\)/);
-  assert.match(source, /env: \{ \.\.\.process\.env, CODEX_HOME: codexHome \}/);
-  assert.match(source, /options\?\.transport === "codex-cli"/);
-  assert.match(source, /filter\(\(item\) => !item\.restrictedToSuperadmin \|\| item\.available\)/);
+  assert.doesNotMatch(source, /MANJING_CODEX_HOME|CODEX_HOME|codex-cli/);
+  assert.match(source, /config\.transport === "chat-completions"/);
+  assert.match(source, /config\.transport === "responses"/);
+  assert.match(source, /config\.transport === "anthropic-messages"/);
+  assert.match(source, /config\.transport === "doubao-responses"/);
+  assert.match(source, /prepareModelImageInputs/);
+  assert.match(source, /reviewModelConfigs\(process\.env\)/);
+  assert.match(source, /writingEnabled !== false/);
 });
 
 test("compatible providers force requested research supplement off and reject claimed sources", async () => {

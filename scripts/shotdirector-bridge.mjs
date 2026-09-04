@@ -22,6 +22,7 @@ import {
 } from "./complete-prompt-job-identity.mjs";
 import { OpenAIResponsesProvider } from "../server/openai-responses-provider.mjs";
 import { CompatibleChatStructuredProvider } from "../server/compatible-chat-structured-provider.mjs";
+import { AnthropicStructuredProvider } from "../server/anthropic-structured-provider.mjs";
 import { DoubaoResponsesProvider } from "../server/doubao-responses-provider.mjs";
 import { reviewModelConfigs, textModelConfigs } from "../server/text-model-catalog.mjs";
 import { prepareModelImageInputs } from "../server/model-image-atlas.mjs";
@@ -61,14 +62,6 @@ const libtvStatePath = join(libtvDir, "state.json");
 const libtvExecutable = process.env.LIBTV_BIN || (process.platform === "win32"
   ? join(process.env.USERPROFILE || "", ".libtv", "libtv.exe")
   : "libtv");
-const localCodexScript = join(workspace, "node_modules", "@openai", "codex", "bin", "codex.js");
-const globalCodexScript = join(process.env.APPDATA || "", "npm", "node_modules", "@openai", "codex", "bin", "codex.js");
-const configuredCodexExecutable = String(process.env.MANJING_CODEX_BIN || "").trim();
-const codexLaunch = configuredCodexExecutable
-  ? { command: configuredCodexExecutable, prefixArgs: [] }
-  : existsSync(localCodexScript)
-    ? { command: process.execPath, prefixArgs: [localCodexScript] }
-    : { command: process.execPath, prefixArgs: [globalCodexScript] };
 const revisionSchema = join(workspace, "scripts", "shot-revision.schema.json");
 const batchRevisionSchema = join(workspace, "scripts", "shot-revision-batch.schema.json");
 const globalSettingsRevisionSchema = join(workspace, "scripts", "global-settings-revision.schema.json");
@@ -162,7 +155,21 @@ function runtimeProvider(config) {
       return new OpenAIResponsesProvider({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
+        providerId: config.provider,
+        label: config.label,
+        allowedHosts: config.allowedHosts || [],
+        includeOpenAIExtensions: config.provider !== "jiekou-responses",
         allowedRoots: [dataRoot],
+      });
+    }
+    if (config.transport === "anthropic-messages") {
+      return new AnthropicStructuredProvider({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        providerId: config.provider,
+        label: config.label,
+        allowedHosts: config.allowedHosts,
       });
     }
     if (config.transport === "doubao-responses") {
@@ -179,19 +186,12 @@ function runtimeProvider(config) {
 }
 
 const writingModelRuntimes = new Map(textModelConfigs(process.env).map((config) => {
-  const provider = config.transport === "codex-cli" ? null : runtimeProvider(config);
-  const codexAvailable = config.transport === "codex-cli"
-    && config.configured
-    && existsSync(config.command)
-    && existsSync(join(config.codexHome, "auth.json"));
+  const provider = runtimeProvider(config);
   return [config.id, {
     ...config,
     runtimeProvider: provider,
-    available: config.transport === "codex-cli" ? codexAvailable : config.configured && provider.configured,
-    reason: config.reason
-      || (config.transport === "codex-cli" && (!config.command || !existsSync(config.command)) ? "服务器未安装 Codex CLI" : undefined)
-      || (config.transport === "codex-cli" && !existsSync(join(config.codexHome || "/nonexistent", "auth.json")) ? "服务器 Codex 尚未授权" : undefined)
-      || provider?.configurationError,
+    available: config.configured && provider.configured,
+    reason: config.reason || provider?.configurationError,
   }];
 }));
 
@@ -200,14 +200,14 @@ const requestedServerProvider = selectableProviderId(requestedAiProviderValue);
 const explicitlyRequestedAiProvider = serverWorker && requestedAiProviderValue && !requestedServerProvider
   ? "server-disabled"
   : requestedServerProvider || requestedAiProviderValue;
-const defaultServerAiProvider = ["glm-5.3-flash", "kimi-k3", "gpt-5.6-sol", "seed-2.1-pro"]
+const defaultServerAiProvider = ["glm-5.3-flash", "kimi-k3", "jk-gpt-5.6-sol", "seed-2.1-pro"]
   .find((id) => writingModelRuntimes.get(id)?.available) || "glm-5.3-flash";
 function selectableProviderId(value) {
   const normalized = String(value || "").trim();
   if (normalized === "glm") return "glm-5.3-flash";
   if (normalized === "kimi") return "kimi-k3";
-  if (normalized === "openai" || normalized === "responses") return "gpt-5.6-sol";
-  if (writingModelRuntimes.has(normalized)) return normalized;
+  if (normalized === "openai" || normalized === "responses") return "jk-gpt-5.6-sol";
+  if (writingModelRuntimes.get(normalized)?.writingEnabled !== false) return normalized;
   return null;
 }
 
@@ -244,6 +244,7 @@ let writingReasoningEffort = persistedWritingReasoningEffort();
 let primaryModelRuntime;
 let primaryCompatibleProvider;
 let primaryResponsesProvider;
+let primaryAnthropicProvider;
 let primaryDoubaoProvider;
 let primaryModelId;
 let primaryModelLabel;
@@ -257,10 +258,11 @@ function refreshPrimaryModelState() {
   primaryModelRuntime = writingModelRuntimes.get(aiProvider) || null;
   primaryCompatibleProvider = primaryModelRuntime?.transport === "chat-completions" ? primaryModelRuntime.runtimeProvider : null;
   primaryResponsesProvider = primaryModelRuntime?.transport === "responses" ? primaryModelRuntime.runtimeProvider : null;
+  primaryAnthropicProvider = primaryModelRuntime?.transport === "anthropic-messages" ? primaryModelRuntime.runtimeProvider : null;
   primaryDoubaoProvider = primaryModelRuntime?.transport === "doubao-responses" ? primaryModelRuntime.runtimeProvider : null;
-  primaryModelId = primaryModelRuntime?.model || (aiProvider === "server-disabled" ? requestedAiProviderValue : String(process.env.MANJING_CODEX_MODEL || "gpt-5.6-sol"));
-  primaryModelLabel = primaryModelRuntime?.label || (aiProvider === "server-disabled" ? "服务器禁用的文字模型" : "Codex CLI");
-  primarySupportsWebSearch = primaryModelRuntime?.supportsWebSearch === true || primaryModelRuntime?.transport === "codex-cli";
+  primaryModelId = primaryModelRuntime?.model || (aiProvider === "server-disabled" ? requestedAiProviderValue : "glm-5.3-flash");
+  primaryModelLabel = primaryModelRuntime?.label || (aiProvider === "server-disabled" ? "服务器禁用的文字模型" : "API 文字模型");
+  primarySupportsWebSearch = primaryModelRuntime?.supportsWebSearch === true;
   primarySupportsImages = primaryModelRuntime?.supportsImages === true;
   primaryProviderId = primaryModelRuntime?.provider || aiProvider;
   primaryModelAvailable = primaryModelRuntime?.available === true;
@@ -367,29 +369,16 @@ function customReviewerDefinitions() {
     return definitions.flatMap((item) => {
       const id = String(item?.id || "").trim();
       const label = String(item?.label || id).trim();
-      const kind = item?.kind === "codex" ? "codex" : "openai-compatible";
+      const kind = "openai-compatible";
       const model = String(item?.model || "").trim();
       if (!id || !label || !model) return [];
-      if (kind === "codex") {
-        return [{
-          id,
-          label,
-          provider: "codex",
-          transport: "codex",
-          model,
-          supportsImages: true,
-          evidenceMode: "direct-images",
-          available: primaryModelAvailable,
-          reason: primaryModelAvailable ? undefined : primaryModelUnavailableReason,
-        }];
-      }
       const baseUrl = String(item?.baseUrl || "").trim();
       const apiKeyEnv = String(item?.apiKeyEnv || "").trim();
       const apiKey = apiKeyEnv ? String(process.env[apiKeyEnv] || "").trim() : "";
       return [{
         id,
         label,
-        provider: "openai-compatible",
+        provider: kind,
         transport: "custom-chat-completions",
         model,
         baseUrl,
@@ -451,7 +440,7 @@ function publicModelProvider() {
 
 function publicWritingModelOptions() {
   return [...writingModelRuntimes.values()]
-    .filter((item) => !item.restrictedToSuperadmin || item.available)
+    .filter((item) => item.writingEnabled !== false)
     .map((item) => ({
     id: item.id,
     provider: item.provider,
@@ -869,129 +858,6 @@ function retainedCompletePromptJob(identity) {
   return findCompletePromptJob(lastCompletePromptJobs, identity);
 }
 
-function safeCodexError(stderr, code) {
-  if (/invalid_json_schema|Invalid schema for response_format/i.test(stderr)) {
-    return new Error("写作模型返回格式配置无效，请检查结构化输出配置");
-  }
-  if (/request timed out|timed out/i.test(stderr)) return new Error("GPT 请求超时，请重试");
-  if (/unauthorized|authentication|not logged in|401\b/i.test(stderr)) {
-    return new Error("GPT 连接未授权，请检查本地 Codex 登录状态");
-  }
-  if (/rate.?limit|too many requests|429\b/i.test(stderr)) return new Error("GPT 当前请求较多，请稍后重试");
-  return new Error(`GPT 任务执行失败（退出码 ${Number.isInteger(code) ? code : "未知"}）`);
-}
-
-function runCodexCli(prompt, { sandbox, outputPath, schemaPath, model = primaryModelId, webSearch = "disabled", instructions = "", imagePaths = [], reasoningEffort = writingReasoningEffort, onProgress = () => {}, timeoutMs = 15 * 60 * 1000 }) {
-  return new Promise((resolveRun, rejectRun) => {
-    onProgress("preparing", "正在准备 GPT 任务");
-    const codexRuntime = writingModelRuntimes.get("codex-gpt-5.6-sol");
-    const command = codexRuntime?.command || codexLaunch.command;
-    const prefixArgs = configuredCodexExecutable ? [] : codexLaunch.prefixArgs;
-    const codexHome = codexRuntime?.codexHome || String(process.env.MANJING_CODEX_HOME || "").trim();
-    if (!command || !existsSync(command) || !codexHome || !existsSync(join(codexHome, "auth.json"))) {
-      rejectRun(new Error("服务器 Codex CLI 尚未安装或授权"));
-      return;
-    }
-    const normalizedWebSearch = webSearch === "live" ? "live" : "disabled";
-    const args = [
-      ...prefixArgs, "exec", "-C", workspace, "--sandbox", sandbox,
-      "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-      "-c", `web_search="${normalizedWebSearch}"`,
-      "-m", model,
-      "-c", `model_reasoning_effort="${normalizedWritingReasoningEffort(reasoningEffort)}"`,
-      ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
-      "--output-schema", schemaPath, "-o", outputPath,
-      "--color", "never", "-",
-    ];
-    const child = spawn(command, args, {
-      cwd: workspace,
-      windowsHide: true,
-      env: { ...process.env, CODEX_HOME: codexHome },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stderr = "";
-    let signalBuffer = "";
-    let settled = false;
-    const seenSignals = new Set();
-    const clearRunTimers = () => {
-      clearTimeout(timer);
-      clearInterval(outputWatcher);
-    };
-    const resolveOnce = (message) => {
-      if (settled) return;
-      settled = true;
-      clearRunTimers();
-      onProgress("model-returned", message);
-      resolveRun();
-    };
-    const rejectOnce = (error) => {
-      if (settled) return;
-      settled = true;
-      clearRunTimers();
-      rejectRun(error);
-    };
-    const hasReadableOutput = () => {
-      try {
-        const value = readResult(outputPath);
-        return Boolean(value && typeof value === "object");
-      } catch {
-        return false;
-      }
-    };
-    const reportSignal = (key, stage, message) => {
-      if (seenSignals.has(key)) return;
-      seenSignals.add(key);
-      onProgress(stage, message);
-    };
-    const inspectStderr = (text) => {
-      signalBuffer = (signalBuffer + text).slice(-4000);
-      for (const match of signalBuffer.matchAll(/Reconnecting\.\.\.\s*(\d+)\/(\d+)/gi)) {
-        reportSignal(`reconnect-${match[1]}-${match[2]}`, "reconnecting", `连接短暂中断，正在自动重连（${match[1]}/${match[2]}）`);
-      }
-      for (const match of signalBuffer.matchAll(/retries=(\d+)\s+max_retries=(\d+)/gi)) {
-        reportSignal(`reconnect-${match[1]}-${match[2]}`, "reconnecting", `连接短暂中断，正在自动重连（${match[1]}/${match[2]}）`);
-      }
-      if (/falling back (?:from WebSockets )?to HTTPS|Falling back from WebSockets to HTTPS transport/i.test(signalBuffer)) {
-        reportSignal("https-fallback", "running", "实时连接不稳定，已切换到兼容传输继续处理");
-      }
-      if (/request timed out/i.test(signalBuffer)) {
-        reportSignal("slow-response", "running", "模型响应较慢，正在继续等待");
-      }
-    };
-    onProgress("running", "GPT 任务已启动，正在等待模型响应");
-    const timer = setTimeout(() => {
-      if (hasReadableOutput()) {
-        child.kill();
-        resolveOnce("GPT 结果已完整写入，正在校验");
-        return;
-      }
-      child.kill();
-      rejectOnce(new Error("GPT处理超时，请稍后重试"));
-    }, timeoutMs);
-    const outputWatcher = setInterval(() => {
-      if (!hasReadableOutput()) return;
-      child.kill();
-      resolveOnce("GPT 结果已完整写入，正在校验");
-    }, 1500);
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr = (stderr + text).slice(-200_000);
-      inspectStderr(text);
-    });
-    child.on("error", () => { rejectOnce(new Error("无法启动本地 GPT 任务")); });
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolveOnce("GPT 已返回结果，正在读取");
-      } else if (hasReadableOutput()) {
-        resolveOnce("GPT 结果已完整写入，正在校验");
-      } else {
-        rejectOnce(safeCodexError(stderr, code));
-      }
-    });
-    child.stdin.end(`${String(instructions || "").trim()}\n\n${prompt}`.trim(), "utf8");
-  });
-}
-
 async function runCodexResponses(prompt, {
   outputPath,
   schemaPath,
@@ -1009,7 +875,7 @@ async function runCodexResponses(prompt, {
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
   onProgress("running", imagePaths.length ? `正在提交文本和 ${imagePaths.length} 张图片` : "正在提交服务端模型任务");
   if (imagePaths.length && !primarySupportsImages) {
-    throw new Error(`${primaryModelLabel} 的当前 env 接口未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash 或 GPT-5.6 Sol`);
+    throw new Error(`${primaryModelLabel} 的当前 API 未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash、JK Gemini 3.8 Flash 或 JK GPT-5.6 Sol`);
   }
   const result = await primaryResponsesProvider.generate({
     prompt,
@@ -1022,7 +888,9 @@ async function runCodexResponses(prompt, {
     webSearch: webSearch === "live" && primarySupportsWebSearch,
     reasoningEffort: normalizedWritingReasoningEffort(reasoningEffort),
     serviceTier: String(process.env.MANJING_OPENAI_SERVICE_TIER || "default"),
-    maxOutputTokens: Number(process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS),
+    maxOutputTokens: Number(primaryModelRuntime?.provider === "jiekou-responses"
+      ? process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS
+      : process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS),
     metadata: { application: "manjing", tenant: tenantId, task: basename(schemaPath) },
     safetyIdentifier: tenantId,
     promptCacheKey: `manjing-${tenantId}-${basename(schemaPath, extname(schemaPath))}`,
@@ -1032,7 +900,7 @@ async function runCodexResponses(prompt, {
   try {
     structured = JSON.parse(result.text);
   } catch {
-    throw new Error("OpenAI Responses API 返回的结构化结果不是有效 JSON");
+    throw new Error(`${primaryModelLabel} API 返回的结构化结果不是有效 JSON`);
   }
   const temporaryPath = `${outputPath}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(structured, null, 2)}\n`, "utf8");
@@ -1061,7 +929,7 @@ async function runDoubaoStructured(prompt, {
 }) {
   if (!primaryDoubaoProvider?.configured) throw new Error(primaryModelUnavailableReason);
   if (imagePaths.length) {
-    throw new Error(`${primaryModelLabel} 的当前 env 接口未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash 或 GPT-5.6 Sol`);
+    throw new Error(`${primaryModelLabel} 的当前 API 未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash、JK Gemini 3.8 Flash 或 JK GPT-5.6 Sol`);
   }
   if (!existsSync(schemaPath)) throw new Error("找不到结构化输出 Schema");
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
@@ -1104,7 +972,7 @@ async function runCompatibleChatStructured(prompt, {
   if (!primaryCompatibleProvider?.configured) throw new Error(primaryModelUnavailableReason);
   if (!existsSync(schemaPath)) throw new Error("找不到结构化输出 Schema");
   if (imagePaths.length && !primarySupportsImages) {
-    throw new Error(`${primaryModelLabel} 的当前 env 接口未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash 或 GPT-5.6 Sol`);
+    throw new Error(`${primaryModelLabel} 的当前 API 未声明图片输入能力，请切换 Kimi K3、GLM-5.3-Flash、JK Gemini 3.8 Flash 或 JK GPT-5.6 Sol`);
   }
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
   onProgress("preparing", `正在准备 ${primaryModelLabel} 写作任务`);
@@ -1132,7 +1000,9 @@ async function runCompatibleChatStructured(prompt, {
         ? process.env.MANJING_GLM_MAX_OUTPUT_TOKENS
         : primaryModelRuntime?.provider === "kimi"
           ? process.env.MANJING_KIMI_MAX_OUTPUT_TOKENS
-          : process.env.MANJING_DEEPSEEK_MAX_OUTPUT_TOKENS),
+          : primaryModelRuntime?.provider === "jiekou-chat"
+            ? process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS
+            : process.env.MANJING_DEEPSEEK_MAX_OUTPUT_TOKENS),
       timeoutMs,
     });
   } finally {
@@ -1156,12 +1026,54 @@ async function runCompatibleChatStructured(prompt, {
   onProgress("model-returned", `${primaryModelLabel} 已返回，正在校验结构`);
 }
 
+async function runAnthropicStructured(prompt, {
+  outputPath,
+  schemaPath,
+  imagePaths = [],
+  instructions = "",
+  reasoningEffort: requestedReasoningEffort = writingReasoningEffort,
+  onProgress = () => {},
+  timeoutMs = 15 * 60 * 1000,
+}) {
+  if (!primaryAnthropicProvider?.configured) throw new Error(primaryModelUnavailableReason);
+  if (!existsSync(schemaPath)) throw new Error("找不到结构化输出 Schema");
+  if (imagePaths.length) throw new Error(`${primaryModelLabel} 当前 API 未声明图片输入能力`);
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+  const reasoningEffort = normalizedWritingReasoningEffort(requestedReasoningEffort);
+  onProgress("preparing", `正在准备 ${primaryModelLabel} Messages API 任务`);
+  onProgress("running", "正在提交服务端写作任务");
+  const result = await primaryAnthropicProvider.generate({
+    prompt,
+    instructions,
+    model: primaryModelId,
+    schema,
+    schemaName: basename(schemaPath, extname(schemaPath)),
+    imagePaths,
+    reasoningEffort,
+    maxOutputTokens: Number(process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS),
+    timeoutMs,
+  });
+  const structured = parseJsonResponseText(result.text);
+  const temporaryPath = `${outputPath}.${randomUUID()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(structured, null, 2)}\n`, "utf8");
+  renameSync(temporaryPath, outputPath);
+  writeFileSync(`${outputPath}.usage.json`, `${JSON.stringify({
+    provider: result.provider || primaryProviderId,
+    requestedModelId: primaryModelId,
+    responseId: result.responseId,
+    model: result.model || primaryModelId,
+    usage: result.usage || null,
+    reasoningEffort,
+    recordedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+  onProgress("model-returned", `${primaryModelLabel} 已返回，正在校验结构`);
+}
+
 function runCodex(prompt, options) {
-  if (options?.transport === "codex-cli") return runCodexCli(prompt, options);
   if (primaryModelRuntime?.transport === "chat-completions") return runCompatibleChatStructured(prompt, options);
   if (primaryModelRuntime?.transport === "responses") return runCodexResponses(prompt, options);
+  if (primaryModelRuntime?.transport === "anthropic-messages") return runAnthropicStructured(prompt, options);
   if (primaryModelRuntime?.transport === "doubao-responses") return runDoubaoStructured(prompt, options);
-  if (primaryModelRuntime?.transport === "codex-cli") return runCodexCli(prompt, options);
   return Promise.reject(new Error(`不支持的 MANJING_AI_PROVIDER：${aiProvider}`));
 }
 
@@ -3143,7 +3055,9 @@ async function callCompatibleReviewer(prompt, evidence, reviewer, report, system
               ? process.env.MANJING_DEEPSEEK_MAX_OUTPUT_TOKENS
               : reviewer.provider === "doubao-responses"
                 ? process.env.MANJING_DOUBAO_MAX_OUTPUT_TOKENS
-                : process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS),
+                : reviewer.provider.startsWith("jiekou-")
+                  ? process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS
+                  : process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS),
         metadata: { application: "manjing", tenant: tenantId, task: "strict-review" },
         safetyIdentifier: tenantId,
         promptCacheKey: `manjing-${tenantId}-strict-review`,

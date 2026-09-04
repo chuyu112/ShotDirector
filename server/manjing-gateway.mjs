@@ -495,6 +495,7 @@ export function createManjingGateway({
             openaiTextConfigured: Boolean((process.env.MANJING_OPENAI_API_KEY || process.env.OPENAI_API_KEY) && (process.env.MANJING_OPENAI_SOL_MODEL || process.env.OPENAI_SOL_MODEL || process.env.MANJING_OPENAI_MODEL || process.env.OPENAI_MODEL)),
             seedConfigured: Boolean((process.env.MANJING_DOUBAO_API_KEY || process.env.DOUBAO_API_KEY) && (process.env.MANJING_DOUBAO_MODEL || process.env.DOUBAO_MODEL)),
             deepseekConfigured: Boolean((process.env.MANJING_DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY) && (process.env.MANJING_DEEPSEEK_PRO_MODEL || process.env.DEEPSEEK_PRO_MODEL || process.env.MANJING_DEEPSEEK_MODEL || process.env.DEEPSEEK_MODEL)),
+            jiekouConfigured: Boolean(process.env.MANJING_JIEKOU_API_KEY || process.env.JIEKOU_API_KEY),
           },
           openaiImageConfigured: Boolean(process.env.OPENAI_API_KEY),
           libtv,

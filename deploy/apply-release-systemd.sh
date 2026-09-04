@@ -145,15 +145,8 @@ case "$ai_provider" in
     require_any_env_value "Kimi API URL" MANJING_KIMI_BASE_URL MANJING_KIMI_API_URL KIMI_API_URL
     require_any_env_value "Kimi model" MANJING_KIMI_MODEL KIMI_MODEL
     ;;
-  gpt-5.6-luna)
-    require_any_env_value "OpenAI-compatible API key" MANJING_OPENAI_API_KEY OPENAI_API_KEY
-    require_any_env_value "OpenAI-compatible API URL" MANJING_OPENAI_API_URL MANJING_OPENAI_BASE_URL OPENAI_API_URL OPENAI_BASE_URL
-    require_any_env_value "GPT-5.6 Luna model" MANJING_OPENAI_MODEL OPENAI_MODEL
-    ;;
-  gpt-5.6-sol)
-    require_any_env_value "OpenAI-compatible API key" MANJING_OPENAI_API_KEY OPENAI_API_KEY
-    require_any_env_value "OpenAI-compatible API URL" MANJING_OPENAI_API_URL MANJING_OPENAI_BASE_URL OPENAI_API_URL OPENAI_BASE_URL
-    require_any_env_value "GPT-5.6 Sol model" MANJING_OPENAI_SOL_MODEL OPENAI_SOL_MODEL
+  jk-gpt-5.6-sol|jk-gpt-5.6-luna|jk-gemini-3.8-flash|jk-claude-opus-5|jk-claude-sonnet-5)
+    require_any_env_value "JK API key" MANJING_JIEKOU_API_KEY JIEKOU_API_KEY
     ;;
   deepseek-v4-flash)
     require_any_env_value "DeepSeek API key" MANJING_DEEPSEEK_API_KEY DEEPSEEK_API_KEY

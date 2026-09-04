@@ -1,19 +1,5 @@
 const DEFINITIONS = Object.freeze([
   {
-    id: "codex-gpt-5.6-sol",
-    label: "Codex · GPT-5.6 Sol",
-    hint: "超级管理员专用 · 多模态",
-    provider: "codex",
-    transport: "codex-cli",
-    supportsImages: true,
-    supportsWebSearch: true,
-    reviewEnabled: true,
-    restrictedToSuperadmin: true,
-    commandVars: ["MANJING_CODEX_BIN"],
-    homeVars: ["MANJING_CODEX_HOME"],
-    modelVars: ["MANJING_CODEX_MODEL"],
-  },
-  {
     id: "glm-5.3-flash",
     label: "GLM-5.3-Flash",
     hint: "默认 · 多模态",
@@ -21,6 +7,7 @@ const DEFINITIONS = Object.freeze([
     transport: "chat-completions",
     compatibleKind: "glm",
     supportsImages: true,
+    writingEnabled: true,
     reviewEnabled: false,
     baseVars: ["MANJING_GLM_BASE_URL", "MANJING_GLM_API_URL", "GLM_API_URL"],
     keyVars: ["MANJING_GLM_API_KEY", "GLM_API_KEY"],
@@ -34,22 +21,11 @@ const DEFINITIONS = Object.freeze([
     transport: "chat-completions",
     compatibleKind: "kimi",
     supportsImages: true,
+    writingEnabled: true,
     reviewEnabled: true,
     baseVars: ["MANJING_KIMI_BASE_URL", "MANJING_KIMI_API_URL", "KIMI_API_URL"],
     keyVars: ["MANJING_KIMI_API_KEY", "KIMI_API_KEY"],
     modelVars: ["MANJING_KIMI_MODEL", "KIMI_MODEL"],
-  },
-  {
-    id: "gpt-5.6-luna",
-    label: "GPT-5.6 Luna",
-    hint: "稳定长文",
-    provider: "openai-compatible-responses",
-    transport: "responses",
-    supportsImages: false,
-    reviewEnabled: false,
-    baseVars: ["MANJING_OPENAI_API_URL", "MANJING_OPENAI_BASE_URL", "OPENAI_API_URL", "OPENAI_BASE_URL"],
-    keyVars: ["MANJING_OPENAI_API_KEY", "OPENAI_API_KEY"],
-    modelVars: ["MANJING_OPENAI_MODEL", "OPENAI_MODEL"],
   },
   {
     id: "deepseek-v4-flash",
@@ -59,6 +35,7 @@ const DEFINITIONS = Object.freeze([
     transport: "chat-completions",
     compatibleKind: "deepseek",
     supportsImages: false,
+    writingEnabled: true,
     reviewEnabled: false,
     baseVars: ["MANJING_DEEPSEEK_BASE_URL", "MANJING_DEEPSEEK_API_URL", "DEEPSEEK_API_URL"],
     keyVars: ["MANJING_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"],
@@ -71,7 +48,8 @@ const DEFINITIONS = Object.freeze([
     provider: "doubao-responses",
     transport: "doubao-responses",
     supportsImages: false,
-    reviewEnabled: true,
+    writingEnabled: true,
+    reviewEnabled: false,
     baseVars: ["MANJING_DOUBAO_BASE_URL", "MANJING_DOUBAO_API_URL", "DOUBAO_API_URL"],
     keyVars: ["MANJING_DOUBAO_API_KEY", "DOUBAO_API_KEY"],
     modelVars: ["MANJING_DOUBAO_MODEL", "DOUBAO_MODEL"],
@@ -84,24 +62,11 @@ const DEFINITIONS = Object.freeze([
     transport: "chat-completions",
     compatibleKind: "glm",
     supportsImages: false,
+    writingEnabled: false,
     reviewEnabled: true,
     baseVars: ["MANJING_GLM_BASE_URL", "MANJING_GLM_API_URL", "GLM_API_URL"],
     keyVars: ["MANJING_GLM_API_KEY", "GLM_API_KEY"],
     modelVars: ["MANJING_GLM_REVIEW_MODEL", "GLM_MODEL"],
-  },
-  {
-    id: "gpt-5.6-sol",
-    label: "GPT-5.6 Sol",
-    hint: "复杂写作与严格审核",
-    provider: "openai-compatible-responses",
-    transport: "responses",
-    supportsImages: true,
-    reviewEnabled: true,
-    baseVars: ["MANJING_OPENAI_API_URL", "MANJING_OPENAI_BASE_URL", "OPENAI_API_URL", "OPENAI_BASE_URL"],
-    keyVars: ["MANJING_OPENAI_API_KEY", "OPENAI_API_KEY"],
-    modelVars: ["MANJING_OPENAI_SOL_MODEL", "OPENAI_SOL_MODEL"],
-    enabledVar: "MANJING_OPENAI_SOL_ENABLED",
-    disabledReason: "当前代理账号尚未开通 GPT-5.6 Sol",
   },
   {
     id: "deepseek-v4-pro",
@@ -111,10 +76,91 @@ const DEFINITIONS = Object.freeze([
     transport: "chat-completions",
     compatibleKind: "deepseek",
     supportsImages: false,
-    reviewEnabled: true,
+    writingEnabled: true,
+    reviewEnabled: false,
     baseVars: ["MANJING_DEEPSEEK_BASE_URL", "MANJING_DEEPSEEK_API_URL", "DEEPSEEK_API_URL"],
     keyVars: ["MANJING_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"],
     modelVars: ["MANJING_DEEPSEEK_PRO_MODEL", "DEEPSEEK_PRO_MODEL"],
+  },
+  {
+    id: "jk-gpt-5.6-sol",
+    label: "JK GPT-5.6 Sol",
+    hint: "API · 复杂推理与正式交付",
+    provider: "jiekou-responses",
+    transport: "responses",
+    supportsImages: true,
+    writingEnabled: true,
+    reviewEnabled: true,
+    allowedHosts: ["api.jiekou.ai", "api.highwayapi.ai"],
+    defaultBaseUrl: "https://api.highwayapi.ai/openai/v1",
+    defaultModel: "gpt-5.6-sol",
+    baseVars: ["MANJING_JIEKOU_RESPONSES_BASE_URL", "JIEKOU_RESPONSES_BASE_URL"],
+    keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
+    modelVars: ["MANJING_JIEKOU_GPT_SOL_MODEL"],
+  },
+  {
+    id: "jk-gpt-5.6-luna",
+    label: "JK GPT-5.6 Luna",
+    hint: "API · 通用问答与长文创作",
+    provider: "jiekou-responses",
+    transport: "responses",
+    supportsImages: false,
+    writingEnabled: true,
+    reviewEnabled: false,
+    allowedHosts: ["api.jiekou.ai", "api.highwayapi.ai"],
+    defaultBaseUrl: "https://api.highwayapi.ai/openai/v1",
+    defaultModel: "gpt-5.6-luna",
+    baseVars: ["MANJING_JIEKOU_RESPONSES_BASE_URL", "JIEKOU_RESPONSES_BASE_URL"],
+    keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
+    modelVars: ["MANJING_JIEKOU_GPT_LUNA_MODEL"],
+  },
+  {
+    id: "jk-gemini-3.8-flash",
+    label: "JK Gemini 3.8 Flash",
+    hint: "API · 快速推理与多模态创作",
+    provider: "jiekou-chat",
+    transport: "chat-completions",
+    compatibleKind: "jiekou",
+    supportsImages: true,
+    writingEnabled: true,
+    reviewEnabled: true,
+    defaultBaseUrl: "https://api.highwayapi.ai/openai",
+    defaultModel: "gemini-3.8-flash",
+    baseVars: ["MANJING_JIEKOU_BASE_URL", "JIEKOU_BASE_URL"],
+    keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
+    modelVars: ["MANJING_JIEKOU_GEMINI_MODEL"],
+  },
+  {
+    id: "jk-claude-opus-5",
+    label: "JK Claude Opus 5",
+    hint: "API · 复杂分析与高质量创作",
+    provider: "jiekou-anthropic",
+    transport: "anthropic-messages",
+    supportsImages: false,
+    writingEnabled: true,
+    reviewEnabled: true,
+    allowedHosts: ["api.jiekou.ai", "api.highwayapi.ai"],
+    defaultBaseUrl: "https://api.highwayapi.ai/openai",
+    defaultModel: "claude-opus-5",
+    baseVars: ["MANJING_JIEKOU_BASE_URL", "JIEKOU_BASE_URL"],
+    keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
+    modelVars: ["MANJING_JIEKOU_CLAUDE_OPUS_MODEL"],
+  },
+  {
+    id: "jk-claude-sonnet-5",
+    label: "JK Claude Sonnet 5",
+    hint: "API · 通用分析与创作",
+    provider: "jiekou-anthropic",
+    transport: "anthropic-messages",
+    supportsImages: false,
+    writingEnabled: true,
+    reviewEnabled: false,
+    allowedHosts: ["api.jiekou.ai", "api.highwayapi.ai"],
+    defaultBaseUrl: "https://api.highwayapi.ai/openai",
+    defaultModel: "claude-sonnet-5",
+    baseVars: ["MANJING_JIEKOU_BASE_URL", "JIEKOU_BASE_URL"],
+    keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
+    modelVars: ["MANJING_JIEKOU_CLAUDE_SONNET_MODEL"],
   },
 ]);
 
@@ -133,47 +179,15 @@ export function textModelDefinition(modelId) {
 export function textModelConfig(modelId, env = process.env) {
   const definition = textModelDefinition(modelId);
   if (!definition) return null;
-  if (definition.transport === "codex-cli") {
-    const command = firstConfigured(env, definition.commandVars);
-    const codexHome = firstConfigured(env, definition.homeVars);
-    const model = firstConfigured(env, definition.modelVars);
-    const enabled = /^(?:1|true|yes|on)$/i.test(String(env?.MANJING_CODEX_ENABLED || "").trim());
-    const tenantId = String(env?.MANJING_TENANT_ID || "").trim();
-    const tenantRole = String(env?.MANJING_TENANT_ROLE || "").trim().toLowerCase();
-    const allowedTenantIds = new Set(String(env?.MANJING_CODEX_ALLOWED_TENANT_IDS || "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean));
-    const tenantAllowed = Boolean(tenantRole === "superadmin" && tenantId && allowedTenantIds.has(tenantId));
-    const missing = [
-      ...(!command.value ? [definition.commandVars.join(" / ")] : []),
-      ...(!codexHome.value ? [definition.homeVars.join(" / ")] : []),
-      ...(!model.value ? [definition.modelVars.join(" / ")] : []),
-    ];
-    return {
-      ...definition,
-      command: command.value,
-      codexHome: codexHome.value,
-      model: model.value,
-      configured: enabled && tenantAllowed && missing.length === 0,
-      reason: !enabled
-        ? "服务器 Codex 尚未启用"
-        : !tenantAllowed
-          ? "仅超级管理员可使用"
-          : missing.length ? `未配置 ${missing.join("、")}` : undefined,
-      resolvedFrom: {
-        command: command.name,
-        codexHome: codexHome.name,
-        model: model.name,
-        enabled: "MANJING_CODEX_ENABLED",
-        tenantRole: "MANJING_TENANT_ROLE",
-        allowedTenantIds: "MANJING_CODEX_ALLOWED_TENANT_IDS",
-      },
-    };
-  }
-  const baseUrl = firstConfigured(env, definition.baseVars);
+  const configuredBaseUrl = firstConfigured(env, definition.baseVars);
   const apiKey = firstConfigured(env, definition.keyVars);
-  const model = firstConfigured(env, definition.modelVars);
+  const configuredModel = firstConfigured(env, definition.modelVars);
+  const baseUrl = configuredBaseUrl.value
+    ? configuredBaseUrl
+    : { name: "default", value: String(definition.defaultBaseUrl || "") };
+  const model = configuredModel.value
+    ? configuredModel
+    : { name: "default", value: String(definition.defaultModel || "") };
   const explicitlyDisabled = definition.enabledVar
     ? /^(?:0|false|no|off)$/i.test(String(env?.[definition.enabledVar] || "").trim())
     : false;
@@ -208,6 +222,10 @@ export function reviewModelConfigs(env = process.env) {
   return textModelConfigs(env).filter((model) => model.reviewEnabled);
 }
 
+export function writingModelConfigs(env = process.env) {
+  return textModelConfigs(env).filter((model) => model.writingEnabled !== false);
+}
+
 export const textModelCatalog = DEFINITIONS.map((definition) => ({
   id: definition.id,
   label: definition.label,
@@ -215,5 +233,6 @@ export const textModelCatalog = DEFINITIONS.map((definition) => ({
   provider: definition.provider,
   transport: definition.transport,
   supportsImages: definition.supportsImages,
+  writingEnabled: definition.writingEnabled !== false,
   reviewEnabled: definition.reviewEnabled,
 }));

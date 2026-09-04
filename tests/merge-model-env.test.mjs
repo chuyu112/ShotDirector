@@ -23,6 +23,7 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
     const examplePath = join(root, "runner.example.env");
     const outputPath = join(root, "merged.env");
     const deployPath = join(root, "deploy.env");
+    const jiekouPath = join(root, "jiekou.env");
     writeFileSync(basePath, [
       "MANJING_AI_PROVIDER=kimi",
       "MANJING_ALLOWED_ORIGINS=https://manjing.jadecircle.cn",
@@ -39,6 +40,8 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
       "OPENAI_API_URL=https://text-proxy.example/v1",
       "OPENAI_API_KEY=text-secret",
       "OPENAI_MODEL=gpt-luna-from-env",
+      "JIEKOU_BASE_URL=https://api.highwayapi.ai/openai",
+      "JIEKOU_API_KEY=runner-jk-secret",
       "DOUBAO_API_URL=https://ark.cn-beijing.volces.com/api/v3",
       "DOUBAO_API_KEY=seed-secret",
       "DOUBAO_MODEL=seed-from-env",
@@ -54,18 +57,27 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
       "DEEPSEEK_MODEL=deepseek-flash-from-env",
       "DEEPSEEK_PRO_MODEL=deepseek-pro-from-env",
     ].join("\n"));
-    writeFileSync(deployPath, "MANJING_OPENAI_API_KEY=new-image-secret\n");
+    writeFileSync(deployPath, [
+      "MANJING_OPENAI_API_KEY=new-image-secret",
+      "MANJING_JIEKOU_API_KEY=deploy-jk-secret",
+    ].join("\n"));
+    writeFileSync(jiekouPath, [
+      "JIEKOU_BASE_URL=https://api.jiekou.ai/openai",
+      "JIEKOU_API_KEY=separate-jk-secret",
+    ].join("\n"));
 
     const result = spawnSync(process.execPath, [
       resolve("deploy/merge-model-env.mjs"), basePath, runnerPath, examplePath, outputPath,
-      deployPath, "https://manjing.jadecircle.cn",
+      deployPath, "https://manjing.jadecircle.cn", jiekouPath,
     ], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     const merged = values(readFileSync(outputPath, "utf8"));
-    assert.equal(merged.MANJING_AI_PROVIDER, "kimi-k3");
-    assert.equal(merged.MANJING_OPENAI_API_KEY, "text-secret");
-    assert.equal(merged.MANJING_OPENAI_MODEL, "gpt-luna-from-env");
-    assert.equal(merged.MANJING_OPENAI_SOL_MODEL, "gpt-sol-from-env");
+    assert.equal(merged.MANJING_AI_PROVIDER, "glm-5.3-flash");
+    assert.equal(merged.MANJING_MANGA_CROP_MODEL, "glm-5.3-flash");
+    assert.equal(merged.MANJING_JIEKOU_API_KEY, "separate-jk-secret");
+    assert.equal(merged.MANJING_JIEKOU_BASE_URL, "https://api.jiekou.ai/openai");
+    assert.equal(merged.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.highwayapi.ai/openai/v1");
+    assert.equal(merged.MANJING_OPENAI_API_KEY, undefined);
     assert.equal(merged.MANJING_DOUBAO_MODEL, "seed-from-env");
     assert.equal(merged.MANJING_GLM_REVIEW_MODEL, "glm-review-from-env");
     assert.equal(merged.MANJING_DEEPSEEK_PRO_MODEL, "deepseek-pro-from-env");

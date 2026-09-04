@@ -6,12 +6,15 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 35 * 60 * 1000;
 const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
-function normalizedBaseUrl(value) {
+function normalizedBaseUrl(value, allowedHosts = []) {
   const baseUrl = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
   const parsed = new URL(baseUrl);
-  if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
-    throw new Error("OpenAI API Base URL 必须使用 HTTPS");
+  const local = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+  if (parsed.protocol !== "https:" && !local) {
+    throw new Error("Responses API Base URL 必须使用 HTTPS");
   }
+  if (!local && allowedHosts.length && !allowedHosts.includes(parsed.hostname)) throw new Error("Responses API Base URL 不属于当前模型的受信域名");
+  if (parsed.username || parsed.password) throw new Error("Responses API Base URL 不能包含账号或密码");
   return baseUrl;
 }
 
@@ -84,12 +87,19 @@ export class OpenAIResponsesProvider {
     baseUrl = process.env.OPENAI_BASE_URL,
     organization = process.env.OPENAI_ORG_ID,
     project = process.env.OPENAI_PROJECT_ID,
+    providerId = "openai-compatible-responses",
+    label = "OpenAI Responses",
+    allowedHosts = [],
+    includeOpenAIExtensions = true,
     fetchImpl = globalThis.fetch,
     allowedRoots = [],
     maxImageBytes = DEFAULT_MAX_IMAGE_BYTES,
   } = {}) {
     this.apiKey = String(apiKey || "").trim();
-    this.baseUrl = normalizedBaseUrl(baseUrl);
+    this.id = String(providerId || "openai-compatible-responses").trim();
+    this.label = String(label || "OpenAI Responses").trim();
+    this.baseUrl = normalizedBaseUrl(baseUrl, allowedHosts);
+    this.includeOpenAIExtensions = includeOpenAIExtensions !== false;
     this.organization = String(organization || "").trim();
     this.project = String(project || "").trim();
     this.fetchImpl = fetchImpl;
@@ -135,7 +145,7 @@ export class OpenAIResponsesProvider {
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   }) {
-    if (!this.configured) throw new Error("服务器尚未配置 OPENAI_API_KEY");
+    if (!this.configured) throw new Error(`服务器尚未配置 ${this.label} API Key`);
     if (typeof this.fetchImpl !== "function") throw new Error("当前运行时不支持 fetch");
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("模型提示词为空");
     if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("结构化输出 Schema 无效");
@@ -155,10 +165,12 @@ export class OpenAIResponsesProvider {
         },
       },
       store: false,
-      service_tier: serviceTier,
-      safety_identifier: stableSafetyIdentifier(safetyIdentifier),
-      metadata: sanitizedMetadata(metadata),
-      ...(promptCacheKey ? { prompt_cache_key: String(promptCacheKey).slice(0, 128) } : {}),
+      ...(this.includeOpenAIExtensions ? {
+        service_tier: serviceTier,
+        safety_identifier: stableSafetyIdentifier(safetyIdentifier),
+        metadata: sanitizedMetadata(metadata),
+        ...(promptCacheKey ? { prompt_cache_key: String(promptCacheKey).slice(0, 128) } : {}),
+      } : {}),
       ...(Number.isFinite(maxOutputTokens) ? { max_output_tokens: Math.max(1, Math.floor(maxOutputTokens)) } : {}),
       ...(webSearch ? { tools: [{ type: "web_search" }] } : {}),
     };
@@ -177,27 +189,28 @@ export class OpenAIResponsesProvider {
         signal: combinedSignal(signal, Math.max(1_000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS)),
       });
     } catch (error) {
-      if (error?.name === "TimeoutError" || error?.name === "AbortError") throw new Error("OpenAI Responses API 请求超时或已取消");
-      throw new Error(`OpenAI Responses API 连接失败：${error instanceof Error ? error.message : "未知错误"}`);
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") throw new Error(`${this.label} API 请求超时或已取消`);
+      throw new Error(`${this.label} API 连接失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message = String(payload?.error?.message || `HTTP ${response.status}`).slice(0, 500);
-      const error = new Error(`OpenAI Responses API 失败：${message}`);
+      const error = new Error(`${this.label} API 失败：${message}`);
       error.statusCode = response.status;
       throw error;
     }
     if (payload.status === "failed" || payload.status === "cancelled" || payload.status === "incomplete") {
-      throw new Error(`OpenAI Responses API 未完成：${payload?.error?.message || payload?.incomplete_details?.reason || payload.status}`);
+      throw new Error(`${this.label} API 未完成：${payload?.error?.message || payload?.incomplete_details?.reason || payload.status}`);
     }
     const text = responseOutputText(payload);
-    if (!text) throw new Error("OpenAI Responses API 没有返回结构化文本");
+    if (!text) throw new Error(`${this.label} API 没有返回结构化文本`);
     return {
       text,
       responseId: payload.id,
       model: payload.model || model,
       serviceTier: payload.service_tier,
       usage: payload.usage || null,
+      provider: this.id,
     };
   }
 }

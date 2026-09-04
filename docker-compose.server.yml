@@ -29,7 +29,6 @@ services:
       LIBTV_BIN: /usr/local/bin/libtv
     volumes:
       - manjing-data:/data
-      - manjing-codex-home:/var/lib/manjing/codex-superadmin
     ports:
       - "127.0.0.1:${MANJING_GATEWAY_HOST_PORT:-18180}:8080"
     stop_grace_period: 15m30s
@@ -50,4 +49,3 @@ networks:
 
 volumes:
   manjing-data:
-  manjing-codex-home:

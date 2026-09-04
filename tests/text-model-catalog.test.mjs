@@ -4,6 +4,7 @@ import {
   reviewModelConfigs,
   textModelConfig,
   textModelConfigs,
+  writingModelConfigs,
 } from "../server/text-model-catalog.mjs";
 
 const cuiyiEnv = {
@@ -25,14 +26,17 @@ const cuiyiEnv = {
   DOUBAO_API_URL: "https://ark.cn-beijing.volces.com/api/v3",
   DOUBAO_API_KEY: "doubao-test-key",
   DOUBAO_MODEL: "doubao-seed-2-1-pro-260628",
+  JIEKOU_API_KEY: "jk-test-key",
+  JIEKOU_BASE_URL: "https://api.highwayapi.ai/openai",
+  JIEKOU_RESPONSES_BASE_URL: "https://api.highwayapi.ai/openai/v1",
 };
 
 test("model catalog resolves provider values only from the supplied Cuiyi env", () => {
-  const sol = textModelConfig("gpt-5.6-sol", cuiyiEnv);
-  assert.equal(sol.baseUrl, cuiyiEnv.OPENAI_API_URL);
-  assert.equal(sol.apiKey, cuiyiEnv.OPENAI_API_KEY);
-  assert.equal(sol.model, cuiyiEnv.OPENAI_SOL_MODEL);
-  assert.equal(sol.resolvedFrom.model, "OPENAI_SOL_MODEL");
+  const sol = textModelConfig("jk-gpt-5.6-sol", cuiyiEnv);
+  assert.equal(sol.baseUrl, cuiyiEnv.JIEKOU_RESPONSES_BASE_URL);
+  assert.equal(sol.apiKey, cuiyiEnv.JIEKOU_API_KEY);
+  assert.equal(sol.model, "gpt-5.6-sol");
+  assert.equal(sol.resolvedFrom.model, "default");
   assert.equal(sol.configured, true);
 
   const seed = textModelConfig("seed-2.1-pro", cuiyiEnv);
@@ -52,69 +56,47 @@ test("missing GLM and DeepSeek keys stay visibly unavailable", () => {
 
 test("public and strict-review catalogs include every requested model", () => {
   assert.deepEqual(textModelConfigs(cuiyiEnv).map(({ id }) => id), [
-    "codex-gpt-5.6-sol",
     "glm-5.3-flash",
     "kimi-k3",
-    "gpt-5.6-luna",
     "deepseek-v4-flash",
     "seed-2.1-pro",
     "glm-5.3",
-    "gpt-5.6-sol",
     "deepseek-v4-pro",
+    "jk-gpt-5.6-sol",
+    "jk-gpt-5.6-luna",
+    "jk-gemini-3.8-flash",
+    "jk-claude-opus-5",
+    "jk-claude-sonnet-5",
+  ]);
+  assert.deepEqual(writingModelConfigs(cuiyiEnv).map(({ id }) => id), [
+    "glm-5.3-flash",
+    "kimi-k3",
+    "deepseek-v4-flash",
+    "seed-2.1-pro",
+    "deepseek-v4-pro",
+    "jk-gpt-5.6-sol",
+    "jk-gpt-5.6-luna",
+    "jk-gemini-3.8-flash",
+    "jk-claude-opus-5",
+    "jk-claude-sonnet-5",
   ]);
   assert.deepEqual(reviewModelConfigs(cuiyiEnv).map(({ id }) => id), [
-    "codex-gpt-5.6-sol",
     "kimi-k3",
-    "seed-2.1-pro",
     "glm-5.3",
-    "gpt-5.6-sol",
-    "deepseek-v4-pro",
+    "jk-gpt-5.6-sol",
+    "jk-gemini-3.8-flash",
+    "jk-claude-opus-5",
   ]);
-});
-
-test("Codex CLI is configured only for an explicitly allowed tenant", () => {
-  const shared = {
-    MANJING_CODEX_ENABLED: "true",
-    MANJING_CODEX_BIN: "/usr/local/bin/codex",
-    MANJING_CODEX_HOME: "/var/lib/manjing/codex-superadmin",
-    MANJING_CODEX_MODEL: "gpt-5.6-sol",
-    MANJING_CODEX_ALLOWED_TENANT_IDS: "superadmin-id",
-  };
-  const allowed = textModelConfig("codex-gpt-5.6-sol", {
-    ...shared,
-    MANJING_TENANT_ID: "superadmin-id",
-    MANJING_TENANT_ROLE: "superadmin",
-  });
-  assert.equal(allowed.configured, true);
-  assert.equal(allowed.restrictedToSuperadmin, true);
-  assert.equal(allowed.model, "gpt-5.6-sol");
-
-  const deniedById = textModelConfig("codex-gpt-5.6-sol", {
-    ...shared,
-    MANJING_TENANT_ID: "ordinary-user-id",
-    MANJING_TENANT_ROLE: "superadmin",
-  });
-  assert.equal(deniedById.configured, false);
-  assert.match(deniedById.reason, /仅超级管理员/);
-
-  const deniedByRole = textModelConfig("codex-gpt-5.6-sol", {
-    ...shared,
-    MANJING_TENANT_ID: "superadmin-id",
-    MANJING_TENANT_ROLE: "user",
-  });
-  assert.equal(deniedByRole.configured, false);
-  assert.match(deniedByRole.reason, /仅超级管理员/);
 });
 
 test("an empty env never fabricates an available provider", () => {
   assert.equal(textModelConfigs({}).some(({ configured }) => configured), false);
 });
 
-test("GPT Sol stays visible but unavailable when the proxy account gate is disabled", () => {
-  const sol = textModelConfig("gpt-5.6-sol", {
-    ...cuiyiEnv,
-    MANJING_OPENAI_SOL_ENABLED: "false",
-  });
+test("JK models stay unavailable without a server-side API key", () => {
+  const sol = textModelConfig("jk-gpt-5.6-sol", {});
   assert.equal(sol.configured, false);
-  assert.match(sol.reason, /账号尚未开通/);
+  assert.match(sol.reason, /JIEKOU_API_KEY/);
+  assert.equal(sol.baseUrl, "https://api.highwayapi.ai/openai/v1");
+  assert.equal(sol.model, "gpt-5.6-sol");
 });

@@ -22,8 +22,6 @@ ENV NODE_ENV=production \
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 tini unzip \
-  && npm install --global @openai/codex@0.152.0 \
-  && /usr/local/bin/codex --version \
   && rm -rf /var/lib/apt/lists/*
 
 ARG INSTALL_LIBTV=1
@@ -50,8 +48,7 @@ RUN if [ "$INSTALL_LIBTV" = "1" ]; then \
 
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
-RUN mkdir -p /data /var/lib/manjing/codex-superadmin \
-  && chown -R node:node /data /var/lib/manjing/codex-superadmin
+RUN mkdir -p /data && chown -R node:node /data
 USER node
 EXPOSE 3000 8080
 ENTRYPOINT ["/usr/bin/tini", "--"]

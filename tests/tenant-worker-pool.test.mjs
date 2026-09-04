@@ -81,12 +81,16 @@ test("worker pool forwards only an environment allowlist and caps active project
       MANJING_KIMI_MAX_OUTPUT_TOKENS: "16384",
       MANJING_KIMI_REASONING_EFFORT: "high",
       MANJING_KIMI_REASONING_EFFORT_REASONING: "max",
+      MANJING_JIEKOU_API_KEY: "jk-server-key",
+      MANJING_JIEKOU_BASE_URL: "https://api.highwayapi.ai/openai",
+      MANJING_JIEKOU_RESPONSES_BASE_URL: "https://api.highwayapi.ai/openai/v1",
+      MANJING_JIEKOU_MAX_OUTPUT_TOKENS: "16384",
       MANJING_CODEX_ENABLED: "true",
       MANJING_CODEX_BIN: "/usr/local/bin/codex",
       MANJING_CODEX_HOME: "/var/lib/manjing/codex-superadmin",
       MANJING_CODEX_MODEL: "gpt-5.6-sol",
       MANJING_CODEX_ALLOWED_TENANT_IDS: "user-a",
-      MANJING_MANGA_CROP_MODEL: "codex-gpt-5.6-sol",
+      MANJING_MANGA_CROP_MODEL: "glm-5.3-flash",
       KIMI_API_KEY: "legacy-kimi-key",
       KIMI_API_URL: "https://api.kimi.com/coding/v1",
       KIMI_MODEL: "k3",
@@ -147,12 +151,15 @@ test("worker pool forwards only an environment allowlist and caps active project
   assert.equal(spawns[0].options.env.MANJING_KIMI_MAX_OUTPUT_TOKENS, "16384");
   assert.equal(spawns[0].options.env.MANJING_KIMI_REASONING_EFFORT, "high");
   assert.equal(spawns[0].options.env.MANJING_KIMI_REASONING_EFFORT_REASONING, "max");
-  assert.equal(spawns[0].options.env.MANJING_CODEX_ENABLED, "true");
-  assert.equal(spawns[0].options.env.MANJING_CODEX_BIN, "/usr/local/bin/codex");
-  assert.equal(spawns[0].options.env.MANJING_CODEX_HOME, "/var/lib/manjing/codex-superadmin");
-  assert.equal(spawns[0].options.env.MANJING_CODEX_MODEL, "gpt-5.6-sol");
-  assert.equal(spawns[0].options.env.MANJING_CODEX_ALLOWED_TENANT_IDS, "user-a");
-  assert.equal(spawns[0].options.env.MANJING_MANGA_CROP_MODEL, "codex-gpt-5.6-sol");
+  assert.equal(spawns[0].options.env.MANJING_CODEX_ENABLED, undefined);
+  assert.equal(spawns[0].options.env.MANJING_CODEX_BIN, undefined);
+  assert.equal(spawns[0].options.env.MANJING_CODEX_HOME, undefined);
+  assert.equal(spawns[0].options.env.MANJING_CODEX_MODEL, undefined);
+  assert.equal(spawns[0].options.env.MANJING_CODEX_ALLOWED_TENANT_IDS, undefined);
+  assert.equal(spawns[0].options.env.MANJING_MANGA_CROP_MODEL, "glm-5.3-flash");
+  assert.equal(spawns[0].options.env.MANJING_JIEKOU_API_KEY, "jk-server-key");
+  assert.equal(spawns[0].options.env.MANJING_JIEKOU_BASE_URL, "https://api.highwayapi.ai/openai");
+  assert.equal(spawns[0].options.env.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.highwayapi.ai/openai/v1");
   assert.equal(spawns[0].options.env.KIMI_API_KEY, "legacy-kimi-key");
   assert.equal(spawns[0].options.env.KIMI_API_URL, "https://api.kimi.com/coding/v1");
   assert.equal(spawns[0].options.env.KIMI_MODEL, "k3");

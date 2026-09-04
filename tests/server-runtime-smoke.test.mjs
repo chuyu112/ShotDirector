@@ -127,16 +127,18 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
     assert.deepEqual(health.writingModels.map(({ id }) => id), [
       "glm-5.3-flash",
       "kimi-k3",
-      "gpt-5.6-luna",
       "deepseek-v4-flash",
       "seed-2.1-pro",
-      "glm-5.3",
-      "gpt-5.6-sol",
       "deepseek-v4-pro",
+      "jk-gpt-5.6-sol",
+      "jk-gpt-5.6-luna",
+      "jk-gemini-3.8-flash",
+      "jk-claude-opus-5",
+      "jk-claude-sonnet-5",
     ]);
     assert.equal(health.writingModels.find(({ id }) => id === "glm-5.3-flash").selected, true);
     assert.equal(health.writingModels.find(({ id }) => id === "kimi-k3").available, true);
-    assert.equal(health.writingModels.find(({ id }) => id === "gpt-5.6-luna").available, false);
+    assert.equal(health.writingModels.find(({ id }) => id === "jk-gpt-5.6-luna").available, false);
     assert.deepEqual(health.reasoningPolicy, {
       selected: "high",
       options: ["low", "high", "max"],
@@ -153,7 +155,7 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
     const deferred = await fetch(`${base}/api/writing-model`, {
       method: "POST",
       headers: { Origin: base, Cookie: cookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ id: "gpt-5.6-luna" }),
+      body: JSON.stringify({ id: "jk-gpt-5.6-luna" }),
     });
     assert.equal(deferred.status, 409);
 
@@ -192,7 +194,7 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
   }
 });
 
-test("server worker exposes the GPT Sol alias but fails closed until its exact env is complete", { timeout: 15_000 }, async () => {
+test("server worker maps the legacy openai alias to JK GPT Sol and fails closed without its API key", { timeout: 15_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "manjing-openai-disabled-"));
   const appRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
   const port = await reservePort();
@@ -214,6 +216,8 @@ test("server worker exposes the GPT Sol alias but fails closed until its exact e
       MANJING_ALLOWED_ORIGINS: "http://localhost:3000",
       MANJING_ALLOWED_HOSTS: `127.0.0.1:${port}`,
       MANJING_AI_PROVIDER: "openai",
+      JIEKOU_API_KEY: "",
+      MANJING_JIEKOU_API_KEY: "",
       OPENAI_API_KEY: "must-not-enable-writing",
       MANJING_OPENAI_API_KEY: "",
       MANJING_OPENAI_API_URL: "",
@@ -236,13 +240,13 @@ test("server worker exposes the GPT Sol alias but fails closed until its exact e
     const base = `http://127.0.0.1:${port}`;
     const health = await waitForJson(`${base}/health`, child, () => stderr);
     assert.equal(health.connected, false);
-    assert.equal(health.modelProvider.id, "openai-compatible-responses");
-    assert.equal(health.modelProvider.selectionId, "gpt-5.6-sol");
+    assert.equal(health.modelProvider.id, "jiekou-responses");
+    assert.equal(health.modelProvider.selectionId, "jk-gpt-5.6-sol");
     assert.equal(health.modelProvider.configured, false);
     assert.equal(health.modelProvider.model, "gpt-5.6-sol");
     assert.equal(health.modelProvider.supportsImages, true);
-    assert.equal(health.writingModels.find((model) => model.id === "gpt-5.6-sol").selected, true);
-    assert.equal(health.writingModels.find((model) => model.id === "gpt-5.6-sol").available, false);
+    assert.equal(health.writingModels.find((model) => model.id === "jk-gpt-5.6-sol").selected, true);
+    assert.equal(health.writingModels.find((model) => model.id === "jk-gpt-5.6-sol").available, false);
 
     const forbidden = await fetch(`${base}/writing-model`, {
       method: "POST",
@@ -251,7 +255,7 @@ test("server worker exposes the GPT Sol alias but fails closed until its exact e
         "Content-Type": "application/json",
         "X-Manjing-Token": token,
       },
-      body: JSON.stringify({ id: "gpt-5.6-luna" }),
+      body: JSON.stringify({ id: "jk-gpt-5.6-luna" }),
     });
     assert.equal(forbidden.status, 409);
   } finally {

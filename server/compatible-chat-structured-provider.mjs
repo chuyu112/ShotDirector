@@ -29,6 +29,12 @@ const PROVIDERS = Object.freeze({
     model: "deepseek-v4-pro",
     label: "DeepSeek V4 Pro",
   },
+  jiekou: {
+    baseUrl: "https://api.highwayapi.ai/openai",
+    allowedHosts: ["api.jiekou.ai", "api.highwayapi.ai"],
+    model: "gemini-3.8-flash",
+    label: "JK Gemini 3.8 Flash",
+  },
 });
 
 const IMAGE_FORMATS = Object.freeze({
@@ -61,7 +67,7 @@ const IMAGE_FORMATS = Object.freeze({
 function providerDefinition(kind) {
   const normalized = String(kind || "").trim().toLowerCase();
   const definition = PROVIDERS[normalized];
-  if (!definition) throw new TypeError("兼容文字模型 kind 只支持 glm、kimi 或 deepseek");
+  if (!definition) throw new TypeError("兼容文字模型 kind 只支持 glm、kimi、deepseek 或 jiekou");
   return { kind: normalized, ...definition };
 }
 
@@ -71,6 +77,11 @@ function localTestHost(hostname) {
 
 function officialHost(hostname, domain) {
   return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function providerHostAllowed(hostname, definition) {
+  if (Array.isArray(definition.allowedHosts) && definition.allowedHosts.includes(hostname)) return true;
+  return Boolean(definition.domain && officialHost(hostname, definition.domain));
 }
 
 function normalizedChatCompletionsUrl(value, definition) {
@@ -84,8 +95,9 @@ function normalizedChatCompletionsUrl(value, definition) {
   const local = localTestHost(url.hostname);
   if (!local && url.protocol !== "https:") throw new Error(`${definition.label} API 必须使用 HTTPS`);
   if (local && url.protocol !== "http:" && url.protocol !== "https:") throw new Error("本地测试 API 只支持 HTTP 或 HTTPS");
-  if (!local && !officialHost(url.hostname, definition.domain)) {
-    throw new Error(`${definition.label} API 必须使用官方 ${definition.domain} 域名`);
+  if (!local && !providerHostAllowed(url.hostname, definition)) {
+    const expected = definition.allowedHosts?.join("、") || definition.domain;
+    throw new Error(`${definition.label} API 必须使用受信域名 ${expected}`);
   }
   url.hash = "";
   url.search = "";
@@ -311,6 +323,8 @@ export class CompatibleChatStructuredProvider {
         ? { thinking: { type: "enabled" }, reasoning_effort: effort }
         : this.kind === "deepseek"
           ? { thinking: { type: "enabled" }, temperature: 0.7 }
+          : this.kind === "jiekou"
+            ? { temperature: 0.7 }
           : { reasoning_effort: effort }),
     };
     let response;

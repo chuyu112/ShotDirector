@@ -47,7 +47,7 @@ type PanelDropTarget = {
   position: "end";
   createShotAt?: number;
 };
-type WritingModelId = "codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "gpt-5.6-luna" | "deepseek-v4-flash" | "seed-2.1-pro" | "glm-5.3" | "gpt-5.6-sol" | "deepseek-v4-pro";
+type WritingModelId = "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
 type AssetImageRatio = "16:9" | "9:16" | "1:1" | "3:4" | "4:3" | "3:2" | "2:3" | "4:5" | "5:4" | "21:9";
@@ -227,15 +227,16 @@ type WritingModelOption = {
 };
 
 const writingModelCatalog: WritingModelOption[] = [
-  { id: "codex-gpt-5.6-sol", label: "Codex · GPT-5.6 Sol", hint: "超级管理员专用 · 多模态", provider: "codex", model: "gpt-5.6-sol", available: false, reason: "仅超级管理员可用" },
   { id: "glm-5.3-flash", label: "GLM-5.3-Flash", hint: "默认 · 多模态", provider: "glm", model: "glm-5.3-flash", available: false, reason: "正在读取服务器状态" },
-  { id: "kimi-k3", label: "Kimi K3", hint: "聊天与创作", provider: "kimi", model: "k3", available: false, reason: "正在读取服务器状态" },
-  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "稳定长文", provider: "openai-compatible-responses", model: "gpt-5.6-luna", available: false, reason: "正在读取服务器 env" },
+  { id: "kimi-k3", label: "Kimi K3", hint: "聊天与创作 · 多模态", provider: "kimi", model: "k3", available: false, reason: "正在读取服务器状态" },
   { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "快速文字创作", provider: "deepseek", model: "deepseek-v4-flash", available: false, reason: "正在读取服务器 env" },
+  { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "复杂文字创作", provider: "deepseek", model: "deepseek-v4-pro", available: false, reason: "正在读取服务器 env" },
   { id: "seed-2.1-pro", label: "Seed 2.1 Pro", hint: "长篇文字与创意写作", provider: "doubao-responses", model: "doubao-seed-2-1-pro-260628", available: false, reason: "正在读取服务器 env" },
-  { id: "glm-5.3", label: "GLM 5.3", hint: "严格审核 · 文字推理", provider: "glm", model: "glm-5.3", available: false, reason: "正在读取服务器 env" },
-  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "复杂写作与严格审核", provider: "openai-compatible-responses", model: "gpt-5.6-sol", available: false, reason: "正在读取服务器 env" },
-  { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "复杂文字创作与严格审核", provider: "deepseek", model: "deepseek-v4-pro", available: false, reason: "正在读取服务器 env" },
+  { id: "jk-gpt-5.6-sol", label: "JK GPT-5.6 Sol", hint: "API · 复杂推理与正式交付", provider: "jiekou-responses", model: "gpt-5.6-sol", available: false, reason: "正在读取服务器 env" },
+  { id: "jk-gpt-5.6-luna", label: "JK GPT-5.6 Luna", hint: "API · 通用问答与长文创作", provider: "jiekou-responses", model: "gpt-5.6-luna", available: false, reason: "正在读取服务器 env" },
+  { id: "jk-gemini-3.8-flash", label: "JK Gemini 3.8 Flash", hint: "API · 快速推理与多模态", provider: "jiekou-chat", model: "gemini-3.8-flash", available: false, reason: "正在读取服务器 env" },
+  { id: "jk-claude-opus-5", label: "JK Claude Opus 5", hint: "API · 复杂分析与高质量创作", provider: "jiekou-anthropic", model: "claude-opus-5", available: false, reason: "正在读取服务器 env" },
+  { id: "jk-claude-sonnet-5", label: "JK Claude Sonnet 5", hint: "API · 通用分析与创作", provider: "jiekou-anthropic", model: "claude-sonnet-5", available: false, reason: "正在读取服务器 env" },
 ];
 const serverSelectableWritingModelIds = new Set<WritingModelId>(writingModelCatalog.map((model) => model.id));
 
@@ -2070,9 +2071,7 @@ function DirectorDesk() {
   const generationModel = state.generationModel || defaultGenerationModel;
   const writingModelOptions = useMemo(() => {
     const live = new Map((bridge.writingModels || []).map((model) => [model.id, model]));
-    return writingModelCatalog
-      .filter((fallback) => fallback.id !== "codex-gpt-5.6-sol" || tenantScope.mode === "local" || tenantScope.role === "superadmin")
-      .map((fallback) => {
+    return writingModelCatalog.map((fallback) => {
       const remote = live.get(fallback.id);
       const serverSelectable = serverSelectableWritingModelIds.has(fallback.id);
       const available = serverSelectable && Boolean(remote?.available);
@@ -6309,7 +6308,7 @@ function DirectorDesk() {
           <aside className="strict-review-report-column">
             <section className="strict-review-control-card">
               <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>每次都是隔离的新 Agent Session，只输出问题、证据与建议。</p></div>
-              <label><span>Reviewer 模型</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
+              <label><span>Reviewer 审核模型（不影响 Creator）</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
               <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
               {!selectedPromptReviewer?.available ? <p className="prompt-review-config">{selectedPromptReviewer?.reason || "当前 Reviewer 的 env 尚未配置完整"}</p> : null}
               {reviewControls.reason ? <div id="strict-review-blocked-reason" className="strict-review-blocked" role="status"><p>{reviewControls.reason}</p>{reviewControls.action === "creator" ? <button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); openCompleteShotPrompt(state.currentShot); }}>到创作台处理当前提示词</button> : null}</div> : <p className="strict-review-ready" role="status">当前 Shot 已可审核，无需等待其他 Shot 生成完成。</p>}
@@ -6346,8 +6345,8 @@ function DirectorDesk() {
             <button type="button" role="tab" aria-selected="false" onClick={() => switchDeskMode("strict-review")}><b>严格审核台</b><small>只审不改</small></button>
           </div>
           <details ref={writingModelMenuRef} className="writing-model-picker">
-            <summary aria-label={`当前写作模型：${writingModelSummary}`}>
-              <span>写作模型</span><strong>{writingModelSummary}</strong><i aria-hidden="true">⌄</i>
+            <summary aria-label={`当前 Creator 生成模型：${writingModelSummary}`}>
+              <span>Creator 生成模型</span><strong>{writingModelSummary}</strong><i aria-hidden="true">⌄</i>
             </summary>
             <div className="writing-model-menu" role="listbox" aria-label="选择并拖动排列写作模型">
               <header><strong>Chat / Work 模型</strong><small>按住可用模型拖动排序</small></header>
@@ -6409,7 +6408,7 @@ function DirectorDesk() {
                     onPointerCancel={(event) => finishTouchWritingModelDrag(event, true)}
                   >⣿</span>
                   <span><strong>{model.label}</strong><small>{model.available ? model.hint : model.reason || "待接入"}</small></span>
-                  <em>{model.id === activeWritingModel?.id ? "✓" : model.available ? "" : model.id === "gpt-5.6-luna" ? "停用" : "待接入"}</em>
+                  <em>{model.id === activeWritingModel?.id ? "✓" : model.available ? "" : "待接入"}</em>
                 </button>
               ))}
             </div>

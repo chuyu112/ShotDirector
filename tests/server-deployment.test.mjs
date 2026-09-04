@@ -56,6 +56,7 @@ test("runtime image pins and verifies both LibTV Linux architectures", async () 
   assert.match(dockerfile, /cli\/\$\{LIBTV_VERSION\}\/libtv-linux-\$\{libtv_arch\}\.zip/);
   assert.match(dockerfile, /unzip -j "\$libtv_zip" '\*\/libtv'/);
   assert.doesNotMatch(dockerfile, /cli\/latest\/install-libtv-cli/);
+  assert.doesNotMatch(dockerfile, /@openai\/codex|\/usr\/local\/bin\/codex/);
 });
 
 test("tenant bridge probes the executable version and drains CLI queues on termination", async () => {
@@ -74,13 +75,14 @@ test("nginx preserves the public host and overwrites spoofable forwarded address
   assert.doesNotMatch(nginx, /\$proxy_add_x_forwarded_for/);
 });
 
-test("systemd nginx serves the Manjing domain only over HTTPS", async () => {
+test("systemd nginx serves only the current Kakayiduo domain over HTTPS", async () => {
   const nginx = await readFile(new URL("../deploy/nginx.manjing.systemd.conf", import.meta.url), "utf8");
-  assert.match(nginx, /server_name manjing\.jadecircle\.cn/);
+  assert.match(nginx, /server_name kakayiduo\.cloud www\.kakayiduo\.cloud/);
+  assert.doesNotMatch(nginx, /manjing\.jadecircle\.cn/);
   assert.match(nginx, /listen 80;/);
-  assert.match(nginx, /return 308 https:\/\/manjing\.jadecircle\.cn\$request_uri/);
+  assert.match(nginx, /return 308 https:\/\/kakayiduo\.cloud\$request_uri/);
   assert.match(nginx, /listen 443 ssl;/);
-  assert.match(nginx, /ssl_certificate \/etc\/letsencrypt\/live\/manjing\.jadecircle\.cn\/fullchain\.pem/);
+  assert.match(nginx, /ssl_certificate \/etc\/letsencrypt\/live\/kakayiduo\.cloud\/fullchain\.pem/);
   assert.match(nginx, /Strict-Transport-Security/);
   assert.equal((nginx.match(/proxy_set_header X-Forwarded-For \$remote_addr/g) || []).length, 2);
   assert.doesNotMatch(nginx, /listen 5173/);
@@ -88,14 +90,10 @@ test("systemd nginx serves the Manjing domain only over HTTPS", async () => {
 
 test("server env declares the env-driven model catalog and keeps provider credentials empty", async () => {
   const example = await readFile(new URL("../.env.server.example", import.meta.url), "utf8");
-  assert.match(example, /^MANJING_AI_PROVIDER=kimi-k3$/m);
+  assert.match(example, /^MANJING_AI_PROVIDER=glm-5\.3-flash$/m);
   assert.match(example, /^MANJING_WRITING_REASONING_EFFORT=high$/m);
-  assert.match(example, /^MANJING_CODEX_ENABLED=false$/m);
-  assert.match(example, /^MANJING_CODEX_BIN=\/usr\/local\/bin\/codex$/m);
-  assert.match(example, /^MANJING_CODEX_HOME=\/var\/lib\/manjing\/codex-superadmin$/m);
-  assert.match(example, /^MANJING_CODEX_MODEL=gpt-5\.6-sol$/m);
-  assert.match(example, /^MANJING_CODEX_ALLOWED_TENANT_IDS=$/m);
-  assert.match(example, /^MANJING_MANGA_CROP_MODEL=codex-gpt-5\.6-sol$/m);
+  assert.match(example, /^MANJING_MANGA_CROP_MODEL=glm-5\.3-flash$/m);
+  assert.doesNotMatch(example, /^MANJING_CODEX_/m);
   assert.match(example, /^KIMI_API_URL=https:\/\/api\.kimi\.com\/coding\/v1$/m);
   assert.match(example, /^KIMI_MODEL=k3$/m);
   assert.match(example, /^GLM_API_URL=https:\/\/open\.bigmodel\.cn\/api\/paas\/v4$/m);
@@ -103,10 +101,10 @@ test("server env declares the env-driven model catalog and keeps provider creden
   assert.match(example, /^GLM_FLASH_MODEL=glm-5\.3-flash$/m);
   assert.match(example, /^MANJING_GLM_MAX_OUTPUT_TOKENS=16384$/m);
   assert.match(example, /^MANJING_KIMI_MAX_OUTPUT_TOKENS=16384$/m);
-  assert.match(example, /^OPENAI_API_URL=https:\/\/www\.moyu\.info\/v1$/m);
-  assert.match(example, /^OPENAI_MODEL=gpt-5\.6-luna$/m);
-  assert.match(example, /^OPENAI_SOL_MODEL=gpt-5\.6-sol$/m);
-  assert.match(example, /^MANJING_OPENAI_SOL_ENABLED=false$/m);
+  assert.match(example, /^JIEKOU_BASE_URL=https:\/\/api\.highwayapi\.ai\/openai$/m);
+  assert.match(example, /^JIEKOU_RESPONSES_BASE_URL=https:\/\/api\.highwayapi\.ai\/openai\/v1$/m);
+  assert.match(example, /^JIEKOU_API_KEY=$/m);
+  assert.match(example, /^MANJING_JIEKOU_MAX_OUTPUT_TOKENS=16384$/m);
   assert.match(example, /^DEEPSEEK_API_URL=https:\/\/api\.deepseek\.com$/m);
   assert.match(example, /^DEEPSEEK_MODEL=deepseek-v4-flash$/m);
   assert.match(example, /^DEEPSEEK_PRO_MODEL=deepseek-v4-pro$/m);
@@ -115,7 +113,6 @@ test("server env declares the env-driven model catalog and keeps provider creden
   assert.match(example, /^OPENAI_API_KEY=$/m);
   assert.match(example, /^KIMI_API_KEY=$/m);
   assert.match(example, /^GLM_API_KEY=$/m);
-  assert.match(example, /^MANJING_OPENAI_API_KEY=$/m);
   assert.match(example, /^DEEPSEEK_API_KEY=$/m);
   assert.match(example, /^DOUBAO_API_KEY=$/m);
 });
@@ -125,8 +122,7 @@ test("systemd release validates credentials for the selected writing provider", 
   assert.match(script, /ai_provider="\$\(env_value MANJING_AI_PROVIDER\)"/);
   assert.match(script, /glm\|glm-5\.3-flash\)[\s\S]*?"GLM API key"[\s\S]*?GLM_API_KEY[\s\S]*?"GLM Flash model"/);
   assert.match(script, /kimi\|kimi-k3\)[\s\S]*?"Kimi API key"[\s\S]*?KIMI_API_KEY[\s\S]*?"Kimi model"/);
-  assert.match(script, /gpt-5\.6-luna\)[\s\S]*?"OpenAI-compatible API key"[\s\S]*?"GPT-5\.6 Luna model"/);
-  assert.match(script, /gpt-5\.6-sol\)[\s\S]*?"OpenAI-compatible API key"[\s\S]*?"GPT-5\.6 Sol model"/);
+  assert.match(script, /jk-gpt-5\.6-sol\|jk-gpt-5\.6-luna\|jk-gemini-3\.8-flash\|jk-claude-opus-5\|jk-claude-sonnet-5\)[\s\S]*?"JK API key"[\s\S]*?JIEKOU_API_KEY/);
   assert.match(script, /deepseek-v4-flash\)[\s\S]*?"DeepSeek API key"[\s\S]*?"DeepSeek Flash model"/);
   assert.match(script, /deepseek-v4-pro\)[\s\S]*?"DeepSeek API key"[\s\S]*?"DeepSeek Pro model"/);
   assert.match(script, /seed-2\.1-pro\)[\s\S]*?"Seed API key"[\s\S]*?"Seed model"/);

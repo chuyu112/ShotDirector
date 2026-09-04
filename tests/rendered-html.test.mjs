@@ -97,7 +97,8 @@ test("runs prompt review as an isolated non-approving reviewer task", async () =
   assert.match(page, /const completePromptSourceRevision = review\.completePromptSourceRevision \|\| buildCompleteShotPromptRevision/);
   assert.match(page, /completePromptSourceRevision,\n\s+approved: false/);
   assert.match(page, /operationMode: "strict-review"/);
-  assert.match(bridge, /--ephemeral/);
+  assert.match(bridge, /reviewer\.runtimeProvider\.generate\(/);
+  assert.match(bridge, /task: "strict-review"/);
   assert.match(bridge, /SHOTDIRECTOR_REVIEWERS_JSON/);
   assert.match(bridge, /review-shot-prompt/);
   assert.match(bridge, /不能输出修改后的完整提示词/);
@@ -118,7 +119,7 @@ test("keeps Creator and Reviewer model lineage explicit across legacy state and 
   assert.match(page, /const savedPromptReviewer = reviewerOptions\.find\(\(item\) => item\.id === review\.promptReviewerId\)/);
   assert.match(page, /const selectedPromptReviewer = savedPromptReviewer \|\| reviewerOptions\.find\(\(item\) => item\.available\) \|\| reviewerOptions\[0\]/);
   assert.match(page, /Creator 模型：/);
-  assert.match(page, /Reviewer 模型/);
+  assert.match(page, /Reviewer 审核模型（不影响 Creator）/);
   assert.match(page, /evidenceMode\?: "direct-images" \| "structured-panel-evidence"/);
   assert.match(page, /promptReviewerModel: result\.reviewerModel\?\.trim\(\) \|\| undefined/);
   assert.match(page, /currentGeneratorId\.endsWith\("\+human-edited"\)/);

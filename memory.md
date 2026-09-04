@@ -1,5 +1,10 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-05 API 模型链路
+
+- 文字模型改为 API-only：顶部是独立的 Creator 生成模型，严格审核页是独立 Reviewer 模型，两者选择不互相覆盖。旧项目的 `writing-model-selection.json` 保存了 `codex-gpt-5.6-sol`，因此曾出现“Reviewer 选 GLM 5.3，Creator 却走服务器 Codex GPT 登录额度”的混淆。公开目录已移除 Codex CLI，旧选择不再生效，Creator 默认落到已配置的 GLM-5.3-Flash API。
+- 已对齐翠易 10 个 Chat／Work 模型和 5 个 Reviewer 模型，新增 JK GPT Responses、JK Gemini Chat Completions 和 JK Claude Anthropic Messages 适配层。不做静默 fallback，API Key 只在 Gateway／Worker 环境中传递。
+
 ## 2026-09-03 阅读顺序约束
 
 - 用户确认不重新裁剪，只修复阅读顺序和排版。第6话第2张右页的现有裁图 ID 顺序应为 R-G02 → R-G01 → R-G03 → R-G05 → R-G06 → R-G04；ID 不重命名、图片不互换，其中 R-G04 现有复合裁图保持原样。

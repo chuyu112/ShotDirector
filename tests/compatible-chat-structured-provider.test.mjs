@@ -128,6 +128,34 @@ test("Kimi accepts localhost tests and parses fenced ordinary content", async ()
   assert.equal(result.text, '{"ok":true}');
 });
 
+test("JK Gemini uses the trusted API route without provider-specific reasoning fields", async () => {
+  let captured;
+  const provider = new CompatibleChatStructuredProvider({
+    kind: "jiekou",
+    apiKey: "jk-test-secret",
+    model: "gemini-3.8-flash",
+    fetchImpl: async (url, options) => {
+      captured = { url: String(url), body: JSON.parse(options.body) };
+      return new Response(JSON.stringify({
+        id: "jk-gemini-response-1",
+        model: "gemini-3.8-flash",
+        choices: [{ message: { tool_calls: [{
+          type: "function",
+          function: { name: "result", arguments: "{\"ok\":true}" },
+        }] } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const result = await provider.generate({ prompt: "返回 JSON", schema, schemaName: "result", reasoningEffort: "max" });
+  assert.equal(captured.url, "https://api.highwayapi.ai/openai/chat/completions");
+  assert.equal(captured.body.model, "gemini-3.8-flash");
+  assert.equal(captured.body.temperature, 0.7);
+  assert.equal("reasoning_effort" in captured.body, false);
+  assert.equal("thinking" in captured.body, false);
+  assert.equal(result.provider, "jiekou");
+  assert.equal(result.text, '{"ok":true}');
+});
+
 test("provider rejects non-official hosts and non-HTTPS remote endpoints", () => {
   assert.throws(() => new CompatibleChatStructuredProvider({
     kind: "glm", apiKey: "x", baseUrl: "http://open.bigmodel.cn/api/paas/v4",
@@ -141,6 +169,9 @@ test("provider rejects non-official hosts and non-HTTPS remote endpoints", () =>
   assert.throws(() => new CompatibleChatStructuredProvider({
     kind: "kimi", apiKey: "x", baseUrl: "https://user:password@api.kimi.com/coding/v1",
   }), /账号或密码/);
+  assert.throws(() => new CompatibleChatStructuredProvider({
+    kind: "jiekou", apiKey: "x", baseUrl: "https://api.highwayapi.ai.evil.example/openai",
+  }), /api\.highwayapi\.ai/);
   assert.doesNotThrow(() => new CompatibleChatStructuredProvider({
     kind: "glm", apiKey: "x", baseUrl: "http://localhost:9000/v1",
   }));

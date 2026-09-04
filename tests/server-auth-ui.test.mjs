@@ -28,15 +28,16 @@ test("all director-desk bridge fetches include the session cookie", async () => 
   assert.doesNotMatch(page, /(^|[^.\w])fetch\(/m);
 });
 
-test("writing model picker mirrors the env-driven eight-model catalog and only switches through the server", async () => {
+test("writing model picker mirrors the env-driven API-only catalog and only switches through the server", async () => {
   const [page, css, bridge] = await Promise.all([
     readFile(pagePath, "utf8"),
     readFile(cssPath, "utf8"),
     readFile(bridgePath, "utf8"),
   ]);
-  for (const label of ["Codex · GPT-5.6 Sol", "GLM-5.3-Flash", "Kimi K3", "GPT-5.6 Luna", "DeepSeek V4 Flash", "Seed 2.1 Pro", "GLM 5.3", "GPT-5.6 Sol", "DeepSeek V4 Pro"]) {
+  for (const label of ["GLM-5.3-Flash", "Kimi K3", "DeepSeek V4 Flash", "DeepSeek V4 Pro", "Seed 2.1 Pro", "JK GPT-5.6 Sol", "JK GPT-5.6 Luna", "JK Gemini 3.8 Flash", "JK Claude Opus 5", "JK Claude Sonnet 5"]) {
     assert.match(page, new RegExp(label.replace(/[.]/g, "\\.")));
   }
+  assert.doesNotMatch(page, /Codex · GPT-5\.6 Sol/);
   assert.match(page, /writingModels: Array\.isArray\(value\.writingModels\)/);
   assert.match(page, /bridgeBase}\/writing-model/);
   assert.match(page, /disabled=\{!model\.available \|\| !bridge\.connected \|\| bridge\.busy/);
@@ -48,7 +49,8 @@ test("writing model picker mirrors the env-driven eight-model catalog and only s
   assert.match(page, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
   assert.match(page, /event\.key === "ArrowUp" \|\| event\.key === "ArrowDown"/);
   assert.match(page, /serverSelectableWritingModelIds = new Set<WritingModelId>\(writingModelCatalog\.map\(\(model\) => model\.id\)\)/);
-  assert.match(page, /fallback\.id !== "codex-gpt-5\.6-sol" \|\| tenantScope\.mode === "local" \|\| tenantScope\.role === "superadmin"/);
+  assert.match(page, /Creator 生成模型/);
+  assert.match(page, /Reviewer 审核模型（不影响 Creator）/);
   assert.match(page, /selected: available && Boolean\(remote\?\.selected\)/);
   assert.match(page, /activeWritingModel = writingModelOptions\.find\(\(model\) => model\.selected && model\.available\)/);
   assert.match(page, /activeWritingModel\?\.label \|\| \(bridge\.connected \? "暂无可用模型" : "未连接"\)/);

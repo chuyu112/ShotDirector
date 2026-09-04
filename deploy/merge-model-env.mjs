@@ -4,7 +4,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 function usage() {
-  console.error("usage: node deploy/merge-model-env.mjs <base-env> <runner-env> <runner-example-env> <output-env> [deploy-env] [allowed-origin]");
+  console.error("usage: node deploy/merge-model-env.mjs <base-env> <runner-env> <runner-example-env> <output-env> [deploy-env] [allowed-origin] [jiekou-env]");
   process.exit(2);
 }
 
@@ -52,7 +52,7 @@ function mergeLines(baseText, updates) {
   return `${lines.join("\n").replace(/\n+$/u, "")}\n\n# 漫镜文字模型：从翠易 runner env 白名单映射。\n${additions.join("\n")}\n`;
 }
 
-const [, , basePath, runnerPath, runnerExamplePath, outputPath, deployEnvPath, allowedOrigin] = process.argv;
+const [, , basePath, runnerPath, runnerExamplePath, outputPath, deployEnvPath, allowedOrigin, jiekouEnvPath] = process.argv;
 if (!basePath || !runnerPath || !runnerExamplePath || !outputPath) usage();
 
 const baseText = readFileSync(resolve(basePath), "utf8");
@@ -60,21 +60,18 @@ const base = parseEnv(baseText);
 const runner = parseEnv(readFileSync(resolve(runnerPath), "utf8"));
 const runnerExample = parseEnv(readFileSync(resolve(runnerExamplePath), "utf8"));
 const deployEnv = deployEnvPath ? parseEnv(readFileSync(resolve(deployEnvPath), "utf8")) : new Map();
+const jiekouEnv = jiekouEnvPath ? parseEnv(readFileSync(resolve(jiekouEnvPath), "utf8")) : new Map();
 if (!base.get("MANJING_ALLOWED_ORIGINS") || !base.has("MANJING_COOKIE_SECURE")) {
   throw new Error("基础 env 不是已部署的漫镜服务器配置");
 }
 
 const updates = new Map([
-  ["MANJING_AI_PROVIDER", "kimi-k3"],
+  ["MANJING_AI_PROVIDER", "glm-5.3-flash"],
+  ["MANJING_MANGA_CROP_MODEL", "glm-5.3-flash"],
   ["MANJING_KIMI_BASE_URL", requiredValue(runner, "KIMI_API_URL", "翠易 .env.runner")],
   ["MANJING_KIMI_API_KEY", requiredValue(runner, "KIMI_API_KEY", "翠易 .env.runner")],
   ["MANJING_KIMI_MODEL", requiredValue(runner, "KIMI_MODEL", "翠易 .env.runner")],
   ["MANJING_KIMI_REASONING_EFFORT", requiredValue(runner, "KIMI_REASONING_EFFORT", "翠易 .env.runner")],
-  ["MANJING_OPENAI_API_URL", requiredValue(runner, "OPENAI_API_URL", "翠易 .env.runner")],
-  ["MANJING_OPENAI_API_KEY", requiredValue(runner, "OPENAI_API_KEY", "翠易 .env.runner")],
-  ["MANJING_OPENAI_MODEL", requiredValue(runner, "OPENAI_MODEL", "翠易 .env.runner")],
-  ["MANJING_OPENAI_SOL_MODEL", requiredValue(runnerExample, "OPENAI_SOL_MODEL", "翠易 .env.runner.example")],
-  ["MANJING_OPENAI_SOL_ENABLED", String(deployEnv.get("MANJING_OPENAI_SOL_ENABLED") || base.get("MANJING_OPENAI_SOL_ENABLED") || "false")],
   ["MANJING_DOUBAO_BASE_URL", requiredValue(runner, "DOUBAO_API_URL", "翠易 .env.runner")],
   ["MANJING_DOUBAO_API_KEY", requiredValue(runner, "DOUBAO_API_KEY", "翠易 .env.runner")],
   ["MANJING_DOUBAO_MODEL", requiredValue(runner, "DOUBAO_MODEL", "翠易 .env.runner")],
@@ -85,6 +82,22 @@ const updates = new Map([
   ["MANJING_DEEPSEEK_MODEL", requiredValue(runnerExample, "DEEPSEEK_MODEL", "翠易 .env.runner.example")],
   ["MANJING_DEEPSEEK_PRO_MODEL", requiredValue(runnerExample, "DEEPSEEK_PRO_MODEL", "翠易 .env.runner.example")],
 ]);
+
+const jiekouApiKey = String(
+  jiekouEnv.get("MANJING_JIEKOU_API_KEY")
+  || jiekouEnv.get("JIEKOU_API_KEY")
+  || deployEnv.get("MANJING_JIEKOU_API_KEY")
+  || deployEnv.get("JIEKOU_API_KEY")
+  || runner.get("JIEKOU_API_KEY")
+  || base.get("MANJING_JIEKOU_API_KEY")
+  || base.get("JIEKOU_API_KEY")
+  || "",
+).trim();
+if (jiekouApiKey) {
+  updates.set("MANJING_JIEKOU_API_KEY", jiekouApiKey);
+  updates.set("MANJING_JIEKOU_BASE_URL", String(jiekouEnv.get("JIEKOU_BASE_URL") || deployEnv.get("JIEKOU_BASE_URL") || runner.get("JIEKOU_BASE_URL") || base.get("JIEKOU_BASE_URL") || "https://api.highwayapi.ai/openai"));
+  updates.set("MANJING_JIEKOU_RESPONSES_BASE_URL", String(jiekouEnv.get("JIEKOU_RESPONSES_BASE_URL") || deployEnv.get("JIEKOU_RESPONSES_BASE_URL") || base.get("JIEKOU_RESPONSES_BASE_URL") || "https://api.highwayapi.ai/openai/v1"));
+}
 
 if (allowedOrigin) {
   const origin = new URL(allowedOrigin);
@@ -108,6 +121,7 @@ for (const [sourceKey, targetKey] of [
 
 for (const key of [
   "MANJING_OPENAI_MAX_OUTPUT_TOKENS",
+  "MANJING_JIEKOU_MAX_OUTPUT_TOKENS",
   "MANJING_DEEPSEEK_MAX_OUTPUT_TOKENS",
   "MANJING_DOUBAO_MAX_OUTPUT_TOKENS",
 ]) {
@@ -124,6 +138,7 @@ const statusKeys = [
   "MANJING_KIMI_API_KEY",
   "MANJING_GLM_API_KEY",
   "MANJING_OPENAI_API_KEY",
+  "MANJING_JIEKOU_API_KEY",
   "MANJING_DOUBAO_API_KEY",
   "MANJING_DEEPSEEK_API_KEY",
 ];
