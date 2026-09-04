@@ -76,7 +76,7 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
     assert.equal(merged.MANJING_MANGA_CROP_MODEL, "glm-5.3-flash");
     assert.equal(merged.MANJING_JIEKOU_API_KEY, "separate-jk-secret");
     assert.equal(merged.MANJING_JIEKOU_BASE_URL, "https://api.jiekou.ai/openai");
-    assert.equal(merged.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.highwayapi.ai/openai/v1");
+    assert.equal(merged.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.jiekou.ai/openai/v1");
     assert.equal(merged.MANJING_OPENAI_API_KEY, undefined);
     assert.equal(merged.MANJING_DOUBAO_MODEL, "seed-from-env");
     assert.equal(merged.MANJING_GLM_REVIEW_MODEL, "glm-review-from-env");

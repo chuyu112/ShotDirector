@@ -36,6 +36,14 @@ function quoted(value) {
   return JSON.stringify(String(value));
 }
 
+function normalizedJiekouOpenAiBase(value) {
+  const url = new URL(String(value || "https://api.highwayapi.ai/openai").trim());
+  if (url.protocol !== "https:" || !["api.jiekou.ai", "api.highwayapi.ai"].includes(url.hostname) || url.username || url.password) {
+    throw new Error("JK 服务地址必须使用受信的 HTTPS 域名");
+  }
+  return `${url.origin}/openai`;
+}
+
 function mergeLines(baseText, updates) {
   const emitted = new Set();
   const lines = String(baseText || "").split(/\r?\n/u).flatMap((line) => {
@@ -94,9 +102,10 @@ const jiekouApiKey = String(
   || "",
 ).trim();
 if (jiekouApiKey) {
+  const jiekouOpenAiBase = normalizedJiekouOpenAiBase(jiekouEnv.get("JIEKOU_BASE_URL") || deployEnv.get("JIEKOU_BASE_URL") || runner.get("JIEKOU_BASE_URL") || base.get("JIEKOU_BASE_URL"));
   updates.set("MANJING_JIEKOU_API_KEY", jiekouApiKey);
-  updates.set("MANJING_JIEKOU_BASE_URL", String(jiekouEnv.get("JIEKOU_BASE_URL") || deployEnv.get("JIEKOU_BASE_URL") || runner.get("JIEKOU_BASE_URL") || base.get("JIEKOU_BASE_URL") || "https://api.highwayapi.ai/openai"));
-  updates.set("MANJING_JIEKOU_RESPONSES_BASE_URL", String(jiekouEnv.get("JIEKOU_RESPONSES_BASE_URL") || deployEnv.get("JIEKOU_RESPONSES_BASE_URL") || base.get("JIEKOU_RESPONSES_BASE_URL") || "https://api.highwayapi.ai/openai/v1"));
+  updates.set("MANJING_JIEKOU_BASE_URL", jiekouOpenAiBase);
+  updates.set("MANJING_JIEKOU_RESPONSES_BASE_URL", `${jiekouOpenAiBase}/v1`);
 }
 
 if (allowedOrigin) {
