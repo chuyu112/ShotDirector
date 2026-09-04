@@ -25,6 +25,7 @@ import { CompatibleChatStructuredProvider } from "../server/compatible-chat-stru
 import { AnthropicStructuredProvider } from "../server/anthropic-structured-provider.mjs";
 import { DoubaoResponsesProvider } from "../server/doubao-responses-provider.mjs";
 import { reviewModelConfigs, textModelConfigs } from "../server/text-model-catalog.mjs";
+import { migratedWritingModelSelection } from "../server/writing-model-selection.mjs";
 import { prepareModelImageInputs } from "../server/model-image-atlas.mjs";
 import { OpenAIImageProvider } from "../server/openai-image-provider.mjs";
 import { LibtvServerWorker } from "../server/libtv-worker.mjs";
@@ -219,7 +220,11 @@ function configuredSelectableProvider(value) {
 function persistedWritingProvider() {
   try {
     const saved = JSON.parse(readFileSync(writingModelSelectionPath, "utf8"));
-    return configuredSelectableProvider(saved?.id || saved?.provider);
+    const migration = migratedWritingModelSelection(saved);
+    if (migration.migrated) {
+      atomicWriteText(writingModelSelectionPath, `${JSON.stringify(migration.selection, null, 2)}\n`);
+    }
+    return configuredSelectableProvider(migration.selection?.id || migration.selection?.provider);
   } catch {
     return null;
   }

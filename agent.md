@@ -71,7 +71,7 @@ npm run lint
 - 必须增加跨 provider 回归验收：同一批漫画分别走 GLM、Kimi、GPT 或测试替身时，断言阅读顺序和画格覆盖不变，并验证 Kimi 截断、技术分批和重试不会额外增加 Shot 或打散原有 `sourcePanels`。
 - 漫画工作流必须先让用户审核、合并或删除 Shot。生成完整提示词只产生“讨论稿”，绝不自动批准。讨论稿必须交给一个全新、隔离的 Reviewer 任务审查；Reviewer 只返回问题、建议和“可讨论／需修改”结论，不能改写原提示词、不能自动应用修改、不能替用户批准。只有用户本人明确点击签字盖章，才批准并解锁该 Shot。
 - Reviewer 使用可扩展注册表，当前对齐翠易的 5 个审核模型：Kimi K3、GLM 5.3、JK GPT-5.6 Sol、JK Gemini 3.8 Flash、JK Claude Opus 5。Creator 与 Reviewer 的选择、会话和运行记录必须完全分开；Reviewer 下拉框绝不代表 Creator 模型。每次结果必须保存请求模型、实际响应模型、provider 和 usage；人工改稿必须使旧审查过期。
-- 顶部“Creator 生成模型”目录对齐翠易的 10 个 Chat／Work API 模型：GLM-5.3-Flash、Kimi K3、DeepSeek V4 Flash、DeepSeek V4 Pro、Seed 2.1 Pro、JK GPT-5.6 Sol、JK GPT-5.6 Luna、JK Gemini 3.8 Flash、JK Claude Opus 5、JK Claude Sonnet 5。用户可按项目保存显示顺序；未配置或未验收的模型必须明确显示不可用原因，不得静默 fallback。旧项目若保存了 `codex-gpt-5.6-sol`，加载时必须将该失效选择安全落到已配置的默认 API 模型，不能再调用 Codex CLI。任务进行中禁止切换，避免同一 Run 混用模型。
+- 顶部“Chat / Work 模型”目录对齐翠易的 10 个 API 模型：GLM-5.3-Flash、Kimi K3、DeepSeek V4 Flash、DeepSeek V4 Pro、Seed 2.1 Pro、JK GPT-5.6 Sol、JK GPT-5.6 Luna、JK Gemini 3.8 Flash、JK Claude Opus 5、JK Claude Sonnet 5。用户可按项目保存显示顺序；未配置或未验收的模型必须明确显示不可用原因，不得静默 fallback。旧项目保存的 `codex-gpt-5.6-sol`／`gpt-5.6-sol` 必须原地迁移为 `jk-gpt-5.6-sol`，`codex-gpt-5.6-luna`／`gpt-5.6-luna` 必须原地迁移为 `jk-gpt-5.6-luna`；旧标识不得继续留在项目文件中，也不能再调用 Codex CLI。任务进行中禁止切换，避免同一 Run 混用模型。
 - Reviewer 报告必须绑定完整提示词文本、来源版本和 Reviewer ID。提示词、画格组合、时长、批注或 Reviewer 选择发生变化时，旧报告立即过期，并撤销尚未重新确认的批准状态；前端和桥接后端都必须校验版本，不能只靠界面禁用。
 - 故事背景、最终美术风格和人物画像是跨 Shot 继承的全局连续层；每个 Shot 上传或生成的人物图、场景图、道具图、生图提示词、全能参考、分镜图和视频数据均按 Shot 独立存储。同名资产不得自动跨 Shot 覆盖或复用。
 - 项目与全局文件是两层独立概念。项目保存单话或单个制作任务的漫画素材、Shot、批注、审核和产物；用户级全局文件保存作品共用的世界观、最终美术风格、改编重点及人物／场景／道具参考资产。例如「城市猎人」全局文件可分别加载到「第6话」和「第7话」项目，但不得合并或覆盖各项目的 Shot 与素材。

@@ -399,7 +399,7 @@ input:focus-visible {
 
 .topbar {
   position: relative;
-  z-index: 40;
+  z-index: 90;
   min-height: 74px;
   display: grid;
   grid-template-columns: 1fr auto;

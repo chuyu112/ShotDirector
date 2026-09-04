@@ -2,7 +2,7 @@
 
 ## 2026-09-05 API 模型链路
 
-- 文字模型改为 API-only：顶部是独立的 Creator 生成模型，严格审核页是独立 Reviewer 模型，两者选择不互相覆盖。旧项目的 `writing-model-selection.json` 保存了 `codex-gpt-5.6-sol`，因此曾出现“Reviewer 选 GLM 5.3，Creator 却走服务器 Codex GPT 登录额度”的混淆。公开目录已移除 Codex CLI，旧选择不再生效，Creator 默认落到已配置的 GLM-5.3-Flash API。
+- 文字模型改为 API-only：顶部是独立的 Chat / Work（Creator）模型，严格审核页是独立 Reviewer 模型，两者选择不互相覆盖。旧项目的 `writing-model-selection.json` 若保存 `codex-gpt-5.6-sol`／`gpt-5.6-sol`，载入时原地改写为 `jk-gpt-5.6-sol`；旧 Luna 同理改写为 `jk-gpt-5.6-luna`。公开目录与项目文件不再保留旧标识，也不再调用 Codex CLI。
 - 已对齐翠易 10 个 Chat／Work 模型和 5 个 Reviewer 模型，新增 JK GPT Responses、JK Gemini Chat Completions 和 JK Claude Anthropic Messages 适配层。不做静默 fallback，API Key 只在 Gateway／Worker 环境中传递。
 
 ## 2026-09-03 阅读顺序约束

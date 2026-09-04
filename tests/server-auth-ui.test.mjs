@@ -49,7 +49,7 @@ test("writing model picker mirrors the env-driven API-only catalog and only swit
   assert.match(page, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
   assert.match(page, /event\.key === "ArrowUp" \|\| event\.key === "ArrowDown"/);
   assert.match(page, /serverSelectableWritingModelIds = new Set<WritingModelId>\(writingModelCatalog\.map\(\(model\) => model\.id\)\)/);
-  assert.match(page, /Creator 生成模型/);
+  assert.match(page, /Chat \/ Work 模型/);
   assert.match(page, /Reviewer 审核模型（不影响 Creator）/);
   assert.match(page, /selected: available && Boolean\(remote\?\.selected\)/);
   assert.match(page, /activeWritingModel = writingModelOptions\.find\(\(model\) => model\.selected && model\.available\)/);
@@ -57,6 +57,8 @@ test("writing model picker mirrors the env-driven API-only catalog and only swit
   assert.match(page, /model\.available \? model\.hint : model\.reason \|\| "待接入"/);
   assert.match(css, /\.writing-model-picker\s*\{/);
   assert.match(css, /\.writing-model-menu\s*\{/);
+  assert.match(css, /\.topbar\s*\{[\s\S]*?z-index:\s*90/);
+  assert.match(css, /\.top-shot-prompt-bar\s*\{[\s\S]*?z-index:\s*45/);
   assert.match(css, /\.writing-model-menu > button:disabled/);
   assert.match(css, /max-height: min\(420px, calc\(100dvh - 112px\)\)/);
   assert.match(css, /overflow-y: auto/);

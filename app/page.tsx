@@ -6345,8 +6345,8 @@ function DirectorDesk() {
             <button type="button" role="tab" aria-selected="false" onClick={() => switchDeskMode("strict-review")}><b>严格审核台</b><small>只审不改</small></button>
           </div>
           <details ref={writingModelMenuRef} className="writing-model-picker">
-            <summary aria-label={`当前 Creator 生成模型：${writingModelSummary}`}>
-              <span>Creator 生成模型</span><strong>{writingModelSummary}</strong><i aria-hidden="true">⌄</i>
+            <summary aria-label={`当前 Chat / Work 模型：${writingModelSummary}`}>
+              <span>Chat / Work 模型</span><strong>{writingModelSummary}</strong><i aria-hidden="true">⌄</i>
             </summary>
             <div className="writing-model-menu" role="listbox" aria-label="选择并拖动排列写作模型">
               <header><strong>Chat / Work 模型</strong><small>按住可用模型拖动排序</small></header>
@@ -6413,10 +6413,10 @@ function DirectorDesk() {
               ))}
             </div>
           </details>
-          <label className="reasoning-effort-picker" title="一般创作可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
+          <label className="reasoning-effort-picker" title="Chat / Work 可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
             <span>推理深度</span>
             <select
-              aria-label="一般创作推理深度"
+              aria-label="Chat / Work 推理深度"
               value={selectedReasoningEffort}
               disabled={!bridge.connected || bridge.busy || switchingReasoningEffort}
               onChange={(event) => void selectReasoningEffort(event.target.value as ReasoningEffort)}
