@@ -3675,17 +3675,31 @@ function DirectorDesk() {
     const submissionShotKey = shot.shotUid || shot.id;
     promptReviewSubmission.current.add(submissionShotKey);
     const panelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [panelId, state.sourceMangaPanelAnnotations?.[panelId] || ""]));
+    // Older saved projects can contain a valid ready prompt created before
+    // prompt lineage was persisted. Bind that unchanged draft to the current
+    // evidence snapshot at review time so the read-only Reviewer can inspect
+    // it without forcing a regeneration loop through the Creator desk.
+    const completePromptSourceRevision = review.completePromptSourceRevision || buildCompleteShotPromptRevision({
+      projectTitle: state.projectTitle,
+      modelId: generationModel,
+      globalSettings: completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings),
+      shot,
+      shotAnnotations: review.annotations,
+      panelAnnotations,
+      sourceMangaRequestId: mangaSourceRequestId,
+    });
     const sourceRevision = buildPromptReviewRevision({
       shotId: shot.id,
       completePrompt: review.completePrompt,
-      completePromptSourceRevision: review.completePromptSourceRevision,
+      completePromptSourceRevision,
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
       reviewerId: selectedPromptReviewer.id,
     });
     setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
       ...previous,
-      reviews: previous.reviews.map((item, index) => item.shot.shotUid === shot.shotUid ? {
+      reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid ? {
         ...item,
+        completePromptSourceRevision,
         approved: false,
         approvedAt: undefined,
         promptReviewerId: selectedPromptReviewer.id,
@@ -3711,7 +3725,7 @@ function DirectorDesk() {
           globalSettings: state.globalSettings,
           sourceMangaRequestId: mangaSourceRequestId,
           sourceRevision,
-          completePromptSourceRevision: review.completePromptSourceRevision,
+          completePromptSourceRevision,
           reviewerId: selectedPromptReviewer.id,
           completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
           completePrompt: review.completePrompt,

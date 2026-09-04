@@ -17,7 +17,7 @@ export function promptReviewControls({ review, reviewer, bridge, hasSource }) {
   else if (!review.completePrompt?.trim()) {
     reason = "当前 Shot 尚无完整提示词，请先到创作台生成讨论稿。";
     action = "creator";
-  } else if (review.completePromptStatus !== "ready" || !review.completePromptSourceRevision) {
+  } else if (review.completePromptStatus !== "ready") {
     reason = "当前提示词尚未就绪或已过期，请到创作台处理。旧稿保留，不会自动改写。";
     action = "creator";
   } else if (!hasSource) reason = "当前 Shot 缺少关联漫画画格，无法核对原作证据。";
@@ -31,7 +31,7 @@ export function promptReviewShotLabel(review) {
   if (review.completePromptStatus === "generating") return "提示词生成中";
   if (review.completePromptStatus === "stale") return "提示词需更新";
   if (!review.completePrompt?.trim()) return "等待 Creator 提示词";
-  if (review.completePromptStatus !== "ready" || !review.completePromptSourceRevision) return "提示词需处理";
+  if (review.completePromptStatus !== "ready") return "提示词需处理";
   if (review.promptReviewStatus === "ready") return "已有审核";
   return "待审核";
 }

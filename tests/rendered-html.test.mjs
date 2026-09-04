@@ -94,6 +94,8 @@ test("runs prompt review as an isolated non-approving reviewer task", async () =
   assert.match(page, /promptReviewSourceRevision/);
   assert.match(page, /const promptReviewArtifactIsCurrent = review\.promptReviewStatus === "ready"/);
   assert.match(page, /const promptReviewIsCurrent = promptReviewArtifactIsCurrent[\s\S]*?verdict === "discussion-ready"/);
+  assert.match(page, /const completePromptSourceRevision = review\.completePromptSourceRevision \|\| buildCompleteShotPromptRevision/);
+  assert.match(page, /completePromptSourceRevision,\n\s+approved: false/);
   assert.match(page, /operationMode: "strict-review"/);
   assert.match(bridge, /--ephemeral/);
   assert.match(bridge, /SHOTDIRECTOR_REVIEWERS_JSON/);

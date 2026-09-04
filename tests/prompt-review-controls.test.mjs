@@ -39,7 +39,6 @@ test("every unsupported state has a visible reason without marking drafts ready"
     { ...ready, hasSource: false },
     ...["empty", "stale", "error", "generating"].map(completePromptStatus => ({ ...ready, review: { ...ready.review, completePromptStatus } })),
     { ...ready, review: { ...ready.review, completePrompt: " " } },
-    { ...ready, review: { ...ready.review, completePromptSourceRevision: undefined } },
   ]) {
     const before = JSON.stringify(input);
     const controls = promptReviewControls(input);
@@ -48,6 +47,15 @@ test("every unsupported state has a visible reason without marking drafts ready"
     assert.equal(controls.selectingDisabled, false);
     assert.equal(JSON.stringify(input), before);
   }
+});
+
+test("a ready legacy prompt without persisted source lineage can enter strict review", () => {
+  const controls = promptReviewControls({
+    ...ready,
+    review: { ...ready.review, completePromptSourceRevision: undefined },
+  });
+  assert.deepEqual(controls, { selectingDisabled: false, submitDisabled: false, reason: "", action: "" });
+  assert.equal(promptReviewShotLabel({ ...ready.review, completePromptSourceRevision: undefined }), "待审核");
 });
 
 test("shot navigation distinguishes stale drafts and active generation from ready drafts", () => {
