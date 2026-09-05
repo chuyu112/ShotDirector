@@ -312,6 +312,23 @@ async function pollMediaJob(base, cookie, requestId, timeoutMs = 30_000) {
   throw new Error(`素材任务 ${requestId} 超时：${JSON.stringify(last?.payload || {})}`);
 }
 
+async function pollHarnessRun(base, cookie, runId, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = await jsonRequest(base, `/api/harness/runs/${encodeURIComponent(runId)}`, { cookie });
+    if (last.response.status === 200 && last.payload.status === "completed") return last.payload;
+    if (last.response.status === 200 && ["failed", "aborted", "interrupted"].includes(last.payload.status)) {
+      throw new Error(`Harness Run ${runId} 失败：${JSON.stringify(last.payload)}`);
+    }
+    if (last.response.status !== 202) {
+      throw new Error(`Harness Run ${runId} 查询失败（HTTP ${last.response.status}）：${JSON.stringify(last.payload)}`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  throw new Error(`Harness Run ${runId} 超时：${JSON.stringify(last?.payload || {})}`);
+}
+
 function readyVideoPackage(shot, approved = true, artworkStatus = "ready") {
   const upstreamRevision = buildShotUpstreamRevision({
     projectTitle,
@@ -692,18 +709,21 @@ test("server production chain covers five-shot manga workflow without paid APIs"
           panelAnnotations: {},
         },
       });
-      assert.equal(result.response.status, 200);
-      assert.equal(result.payload.status, "completed");
-      assert.equal(result.payload.reviewerId, "kimi-k3");
-      assert.equal(result.payload.reviewerProvider, "kimi");
-      assert.equal(result.payload.reviewerRequestedModel, fakeKimiModel);
-      assert.equal(result.payload.reviewerModel, fakeKimiModel);
-      assert.equal(result.payload.reviewerUsage?.total_tokens, 20);
-      assert.equal(result.payload.completePromptGeneratorId, fakeGlmModel);
-      assert.equal(result.payload.report.verdict, "discussion-ready");
-      assert.equal(result.payload.sourceRevision, reviewRevision);
-      assert.equal(result.payload.evidence.independentRun, true);
-      reviewResults.push(result.payload);
+      assert.equal(result.response.status, 202);
+      assert.equal(result.payload.status, "queued");
+      assert.match(result.payload.runId, /^run-[a-f0-9-]{36}$/i);
+      assert.match(result.payload.sessionId, /\.review\./);
+      const reviewed = await pollHarnessRun(base, ownerCookie, result.payload.runId);
+      assert.equal(reviewed.reviewerId, "kimi-k3");
+      assert.equal(reviewed.reviewerProvider, "kimi");
+      assert.equal(reviewed.reviewerRequestedModel, fakeKimiModel);
+      assert.equal(reviewed.reviewerModel, fakeKimiModel);
+      assert.equal(reviewed.reviewerUsage?.total_tokens, 20);
+      assert.equal(reviewed.completePromptGeneratorId, fakeGlmModel);
+      assert.equal(reviewed.report.verdict, "discussion-ready");
+      assert.equal(reviewed.sourceRevision, reviewRevision);
+      assert.equal(reviewed.evidence.independentRun, true);
+      reviewResults.push(reviewed);
     }
 
     const beforeApproval = deriveProductionPipeline({

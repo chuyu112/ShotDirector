@@ -93,9 +93,36 @@ test("durable local Harness restores creator context and records Run/event/check
   assert.match(ledger, /"eventType":"manjing\.session\.closed"/);
 });
 
+test("Harness persists an accepted asynchronous review Run before model execution", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "manjing-harness-queued-review-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ManjingHarnessStore(root);
+  const job = {
+    id: "run-11111111-2222-4333-8444-555555555555",
+    conversationId: "manjing-review-11111111-2222-4333-8444-555555555555",
+    agentRole: "review",
+    modelId: "claude-opus-5",
+    kind: "prompt-review",
+  };
+
+  const queued = await store.queueRun(job, {
+    requestId: "11111111-2222-4333-8444-555555555555",
+    projectUid: "project-alpha",
+    shotUid: "shot-alpha",
+    sourceRevision: "review-revision-1",
+  });
+  assert.equal(queued.status, "queued");
+  assert.match(queued.sessionId, /\.review\.run-/);
+  assert.deepEqual(await store.getRun(job.id), queued);
+
+  const running = await store.beginRun(job);
+  assert.equal(running.status, "running");
+  assert.equal(running.requestId, queued.requestId);
+  assert.equal(running.sourceRevision, queued.sourceRevision);
+});
+
 test("review policy cannot edit or approve", () => {
   assert.match(manjingAgentPolicies.review, /只能指出问题、证据和修改建议/);
   assert.match(manjingAgentPolicies.review, /禁止改写原提示词/);
   assert.match(manjingAgentPolicies.review, /替用户批准 Shot/);
 });
-

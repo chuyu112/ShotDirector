@@ -75,6 +75,33 @@ export class ManjingHarnessStore {
     return join(this.runsPath, `${safePart(runId, "run")}.json`);
   }
 
+  async getRun(runId) {
+    const normalized = safePart(runId, "");
+    if (!normalized || normalized !== String(runId || "")) return null;
+    return readJson(this.runPath(normalized));
+  }
+
+  async queueRun(job, detail = {}) {
+    if (!job?.id || !job?.conversationId) throw new TypeError("Harness 排队任务缺少 Run 或 Session 标识");
+    const queuedAt = new Date().toISOString();
+    const record = {
+      harnessVersion: MANJING_PI_HARNESS_VERSION,
+      protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+      runId: String(job.id),
+      conversationId: String(job.conversationId),
+      sessionId: manjingHarnessSessionId(job),
+      agentRole: job.agentRole,
+      modelId: job.textModelId || job.modelId || null,
+      kind: job.kind || null,
+      status: "queued",
+      ...detail,
+      queuedAt,
+      updatedAt: queuedAt,
+    };
+    await serialized(this.runPath(job.id), () => atomicJsonWrite(this.runPath(job.id), record));
+    return record;
+  }
+
   async loadSession(job) {
     const expectedSessionId = manjingHarnessSessionId(job);
     const value = await readJson(this.sessionPath(expectedSessionId));
@@ -90,20 +117,25 @@ export class ManjingHarnessStore {
   async beginRun(job) {
     const startedAt = new Date().toISOString();
     const sessionId = manjingHarnessSessionId(job);
-    const record = {
-      harnessVersion: MANJING_PI_HARNESS_VERSION,
-      protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
-      runId: String(job.id),
-      conversationId: String(job.conversationId),
-      sessionId,
-      agentRole: job.agentRole,
-      modelId: job.textModelId || job.modelId || null,
-      kind: job.kind || null,
-      status: "running",
-      startedAt,
-      updatedAt: startedAt,
-    };
-    await serialized(this.runPath(job.id), () => atomicJsonWrite(this.runPath(job.id), record));
+    let record;
+    await serialized(this.runPath(job.id), async () => {
+      const queued = await readJson(this.runPath(job.id));
+      record = {
+        ...(queued || {}),
+        harnessVersion: MANJING_PI_HARNESS_VERSION,
+        protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+        runId: String(job.id),
+        conversationId: String(job.conversationId),
+        sessionId,
+        agentRole: job.agentRole,
+        modelId: job.textModelId || job.modelId || null,
+        kind: job.kind || null,
+        status: "running",
+        startedAt,
+        updatedAt: startedAt,
+      };
+      await atomicJsonWrite(this.runPath(job.id), record);
+    });
     return record;
   }
 

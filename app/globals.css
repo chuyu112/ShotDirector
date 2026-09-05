@@ -5119,7 +5119,8 @@ input:focus-visible {
 .strict-review-control-card > .button { margin-top: 8px; }
 .strict-review-control-card > small { margin-bottom: 18px; color: var(--muted); font-size: 8px; line-height: 1.5; }
 .strict-review-evidence-mode { padding: 9px 10px; background: #f0eee8; color: #4b4842 !important; }
-.strict-review-running { padding: 18px; color: #254279; font-size: 10px; font-weight: 850; }
+.strict-review-running { display: flex; flex-direction: column; gap: 7px; padding: 18px; color: #254279; font-size: 10px; font-weight: 850; }
+.strict-review-running small { color: #6d7687; font-family: var(--font-mono); font-size: 9px; font-weight: 700; overflow-wrap: anywhere; }
 .strict-review-report.needs-revision { border-top: 4px solid var(--red); }
 .strict-review-report.discussion-ready { border-top: 4px solid var(--green); }
 .strict-review-report .prompt-review-checks,

@@ -9,8 +9,8 @@ export function promptReviewRecoveryDecision({
   timeoutMs = promptReviewRecoveryTimeoutMs,
 } = {}) {
   if (httpStatus === 200 && resultStatus === "completed") return { action: "completed" };
-  if (httpStatus === 202 || resultStatus === "running") return { action: "waiting" };
-  if (resultStatus === "failed" || terminalJobStatus === "failed") return { action: "failed", reason: "terminal" };
+  if (httpStatus === 202 || resultStatus === "queued" || resultStatus === "running") return { action: "waiting" };
+  if (["failed", "aborted", "interrupted"].includes(resultStatus) || ["failed", "aborted", "interrupted"].includes(terminalJobStatus)) return { action: "failed", reason: "terminal" };
   if (terminalJobStatus === "completed" && httpStatus >= 400) return { action: "failed", reason: "missing-result" };
 
   const explicitClientFailure = httpStatus >= 400

@@ -298,11 +298,14 @@ type PromptReviewResult = {
   sourceRevision: string;
   reviewedAt: string;
   requestId?: string;
+  runId?: string;
+  sessionId?: string;
+  protocolVersion?: number;
   error?: string;
 };
 
 type PromptReviewRecoveryResult = Partial<Omit<PromptReviewResult, "status">> & {
-  status?: "running" | "completed" | "failed";
+  status?: "queued" | "running" | "completed" | "failed" | "aborted" | "interrupted";
   message?: string;
   error?: string;
 };
@@ -354,6 +357,7 @@ type ShotReview = {
   promptReviewStartedAt?: string;
   promptReviewedAt?: string;
   promptReviewRequestId?: string;
+  promptReviewRunId?: string;
   promptReviewError?: string;
   selectedDirectorView?: string;
   chat?: ShotChatState;
@@ -535,7 +539,10 @@ type BridgeJob = {
   assetKind?: ShotAssetKind;
   assetName?: string;
   requestId?: string;
-  status?: "running" | "completed" | "failed";
+  runId?: string;
+  sessionId?: string;
+  protocolVersion?: number;
+  status?: "queued" | "running" | "completed" | "failed" | "aborted" | "interrupted";
   stage?: string;
   message?: string;
   startedAt?: string;
@@ -1010,6 +1017,7 @@ function invalidatePromptReview(review: ShotReview): ShotReview {
     promptReviewStartedAt: undefined,
     promptReviewedAt: undefined,
     promptReviewRequestId: undefined,
+    promptReviewRunId: undefined,
     promptReviewError: undefined,
     approved: false,
     approvedAt: undefined,
@@ -1286,6 +1294,7 @@ function normalizeReviewForResume(review: ShotReview, projectUid = "project-lega
     promptReviewStartedAt: typeof review.promptReviewStartedAt === "string" ? review.promptReviewStartedAt : undefined,
     promptReviewedAt: typeof review.promptReviewedAt === "string" ? review.promptReviewedAt : undefined,
     promptReviewRequestId: typeof review.promptReviewRequestId === "string" ? review.promptReviewRequestId : undefined,
+    promptReviewRunId: typeof review.promptReviewRunId === "string" ? review.promptReviewRunId : undefined,
     promptReviewError: typeof review.promptReviewError === "string" ? review.promptReviewError : undefined,
     seededAssetReferenceIds: Array.isArray(review.seededAssetReferenceIds)
       ? review.seededAssetReferenceIds.filter((item) => typeof item === "string")
@@ -2903,9 +2912,7 @@ function DirectorDesk() {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
     if (promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
     if (promptReviewIsCurrent) return;
-    const matchingLiveJob = (bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && job.status === "running") || (bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.sourceRevision === review.promptReviewSourceRevision && bridge.activeJob.status === "running" ? bridge.activeJob : undefined);
-    if (matchingLiveJob) return;
-    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && job.status !== "running") || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.sourceRevision === review.promptReviewSourceRevision && bridge.lastJob.status !== "running" ? bridge.lastJob : undefined);
+    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && ["completed", "failed", "aborted", "interrupted"].includes(job.status || "")) || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.sourceRevision === review.promptReviewSourceRevision && ["completed", "failed", "aborted", "interrupted"].includes(bridge.lastJob.status || "") ? bridge.lastJob : undefined);
     if (review.promptReviewStatus !== "reviewing" && !matchingTerminalJob) return;
     const recoveryReviewerId = review.promptReviewerId || selectedPromptReviewerId;
     const sourceRevision = buildPromptReviewRevision({
@@ -2915,7 +2922,7 @@ function DirectorDesk() {
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
       reviewerId: recoveryReviewerId,
     });
-    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${matchingTerminalJob?.finishedAt || "disk"}`;
+    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${review.promptReviewRunId || matchingTerminalJob?.finishedAt || "legacy"}`;
     if (recoveringPromptReview.current === recoveryKey) return;
     recoveringPromptReview.current = recoveryKey;
     let active = true;
@@ -2923,7 +2930,10 @@ function DirectorDesk() {
       let httpStatus = 0;
       let result: PromptReviewRecoveryResult = {};
       try {
-        const response = await bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
+        const recoveryUrl = review.promptReviewRunId
+          ? `${bridgeBase}/harness/runs/${encodeURIComponent(review.promptReviewRunId)}`
+          : `${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`;
+        const response = await bridgeFetch(recoveryUrl, {
           cache: "no-store",
           headers: { "X-Manjing-Token": bridge.pairingToken as string },
         });
@@ -2937,6 +2947,17 @@ function DirectorDesk() {
         });
         if (!active) return;
         if (decision.action === "waiting") {
+          if (result.runId || result.message) {
+            setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+              ...previous,
+              reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision && item.promptReviewStatus === "reviewing" ? {
+                ...item,
+                promptReviewRunId: result.runId || item.promptReviewRunId,
+                promptReviewRequestId: result.requestId || item.promptReviewRequestId,
+                promptReviewError: result.message || undefined,
+              } : item),
+            }));
+          }
           recoveringPromptReview.current = "";
           return;
         }
@@ -2958,6 +2979,7 @@ function DirectorDesk() {
             promptReviewStartedAt: undefined,
             promptReviewedAt: result.reviewedAt,
             promptReviewRequestId: result.requestId,
+            promptReviewRunId: result.runId || item.promptReviewRunId,
             promptReviewError: undefined,
           } : item),
         }));
@@ -2989,7 +3011,7 @@ function DirectorDesk() {
       }
     })();
     return () => { active = false; };
-  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStartedAt, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
+  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewRunId, review.promptReviewStartedAt, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -3830,6 +3852,7 @@ function DirectorDesk() {
         promptReviewStartedAt,
         promptReviewedAt: undefined,
         promptReviewRequestId: undefined,
+        promptReviewRunId: undefined,
         promptReviewError: undefined,
       } : item),
     }));
@@ -3860,9 +3883,24 @@ function DirectorDesk() {
       responseStatus = response.status;
       const result = await response.json() as PromptReviewRecoveryResult;
       if (!response.ok) {
-        definitiveResponseFailure = result.status === "failed"
+        definitiveResponseFailure = result.status === "failed" || result.status === "aborted" || result.status === "interrupted"
           || (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 409);
         throw new Error(result.error || "独立审查失败");
+      }
+      if (result.status === "queued" || result.status === "running") {
+        if (!result.runId) throw new Error("Harness 未返回可恢复的 Run ID");
+        setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+          ...previous,
+          reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision ? {
+            ...item,
+            promptReviewStatus: "reviewing" as PromptReviewStatus,
+            promptReviewRunId: result.runId,
+            promptReviewRequestId: result.requestId,
+            promptReviewError: undefined,
+          } : item),
+        }));
+        setToast(`${selectedPromptReviewer.label} 已进入后台审核队列；可切换 Shot 或刷新页面`);
+        return;
       }
       if (result.status !== "completed" || result.shotId !== shot.id || result.reviewerId !== selectedPromptReviewer.id || result.sourceRevision !== sourceRevision || !result.report) {
         definitiveResponseFailure = true;
@@ -3880,6 +3918,7 @@ function DirectorDesk() {
           promptReviewStartedAt: undefined,
           promptReviewedAt: result.reviewedAt,
           promptReviewRequestId: result.requestId,
+          promptReviewRunId: result.runId,
           promptReviewError: undefined,
         } : item),
       }));
@@ -6457,10 +6496,10 @@ function DirectorDesk() {
 
             {review.promptReviewStatus === "error" ? <p className="prompt-review-error">{review.promptReviewError || "严格审核失败，请重试。"}</p> : null}
             {review.promptReviewStatus === "stale" ? <p className="prompt-review-stale">Creator 内容已改变；旧报告只读保留，必须针对当前快照重新审核。</p> : null}
-            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || review.promptReviewError || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</div> : null}
+            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running"><span>{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || review.promptReviewError || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</span>{review.promptReviewRunId ? <small>Harness Run · {review.promptReviewRunId}</small> : null}</div> : null}
             {review.promptReviewReport ? (
               <section className={`strict-review-report ${review.promptReviewReport.verdict}`}>
-                <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · 无修改权 · 无批准权</small></header>
+                <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · {review.promptReviewRunId || "legacy run"} · 无修改权 · 无批准权</small></header>
                 <div className="prompt-review-checks">{Object.entries(review.promptReviewReport.checks).map(([key, passed]) => <span key={key} className={passed ? "pass" : "fail"}>{passed ? "✓" : "!"} {{ sourceBoundary: "剧情边界", characterContinuity: "人物连续性", timingFeasible: "时长可执行", dialogueFeasible: "对白可执行", cameraAndActionCoherent: "镜头动作", soundAndNegativeComplete: "声音禁止项" }[key as keyof PromptReviewReport["checks"]]}</span>)}</div>
                 {review.promptReviewReport.findings.length ? <ol className="prompt-review-findings">{review.promptReviewReport.findings.map((finding) => <li key={finding.id} className={finding.severity}><div><span>{finding.severity === "blocking" ? "阻断" : finding.severity === "warning" ? "警告" : "建议"}</span><b>{finding.title}</b><small>{finding.category}{finding.panelIds.length ? ` · ${finding.panelIds.join("、")}` : ""}</small></div><p>{finding.detail}</p><strong>建议方向：{finding.suggestion}</strong></li>)}</ol> : <p className="prompt-review-clean">未发现需要列出的具体问题。</p>}
                 {review.promptReviewReport.strengths.length ? <p className="prompt-review-strengths">已确认：{review.promptReviewReport.strengths.join("；")}</p> : null}

@@ -127,4 +127,8 @@ test("bridge shares the five-Shot queue while binding each task to its submissio
   assert.match(source, /Chat \/ Work 模型已变化，请按当前模型重新提交/);
   assert.match(source, /reviewer\.runtimeProvider\.generate\(/);
   assert.doesNotMatch(source, /CODEX_HOME|codex-cli/);
+  assert.match(source, /enqueuePromptReviewRun\(payload, writingRuntimeContext\(\)\)/);
+  assert.match(source, /sendJson\(res, accepted\.httpStatus, accepted\.body/);
+  assert.match(source, /url\.pathname\.startsWith\("\/harness\/runs\/"\)/);
+  assert.doesNotMatch(source, /"\/review-shot-prompt": reviewCompleteShotPrompt/);
 });

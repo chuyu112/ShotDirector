@@ -16,6 +16,10 @@ import {
   ManjingHarnessStore,
   runPersistentManjingAgentTurn,
 } from "../runner/manjing-harness-store.mjs";
+import {
+  MANJING_PI_SESSION_PROTOCOL_VERSION,
+  manjingHarnessSessionId,
+} from "../runner/manjing-pi-harness.mjs";
 import { extractPaidTaskId, mustNotAutoResubmit, paidFailureFor, paidTaskId } from "./paid-task-safety.mjs";
 import {
   completePromptIdentity,
@@ -506,6 +510,7 @@ function hasActiveWritingModelWork() {
   return Boolean(shuttingDown
     || modelTests.active
     || activeJob
+    || pendingPromptReviewRuns.size
     || activeCompletePromptJobs.size
     || activeArtworkJobs.size
     || activeAssetJobs.size
@@ -559,6 +564,7 @@ let activeJob = null;
 let lastJob = null;
 const activeCompletePromptJobs = new Map();
 const lastCompletePromptJobs = new Map();
+const pendingPromptReviewRuns = new Map();
 const activeArtworkJobs = new Map();
 const lastArtworkJobs = new Map();
 const activeAssetJobs = new Map();
@@ -830,6 +836,9 @@ function publicJob(job) {
     assetKind: job.assetKind,
     assetName: job.assetName ? String(job.assetName).slice(0, 240) : undefined,
     requestId: job.requestId,
+    runId: job.runId,
+    sessionId: job.sessionId,
+    protocolVersion: job.protocolVersion,
     status: job.status,
     startedAt: job.startedAt,
     updatedAt: job.updatedAt,
@@ -4036,13 +4045,16 @@ async function withCompletePromptJob(identity, projectTitle, work, type = "compl
     throw error;
   }
   pruneCompletePromptJobs(lastCompletePromptJobs);
-  const requestId = randomUUID();
+  const requestedRequestId = String(jobMetadata.requestId || "").trim();
+  const requestId = isMediaId(requestedRequestId) ? requestedRequestId : randomUUID();
+  const visibleJobMetadata = { ...jobMetadata };
+  delete visibleJobMetadata.requestId;
   const startedAt = new Date().toISOString();
   const job = {
     type,
     chatTurnId: chatTurnId || undefined,
     ...identity,
-    ...jobMetadata,
+    ...visibleJobMetadata,
     projectTitle,
     requestId,
     status: "running",
@@ -4252,7 +4264,7 @@ async function chatWithShot(payload) {
   }
 }
 
-async function reviewCompleteShotPrompt(payload) {
+function strictReviewSubmission(payload) {
   assertStrictReviewRequest(payload);
   const shot = payload?.shot;
   const panelIds = Array.isArray(shot?.sourcePanels) ? shot.sourcePanels.map((value) => String(value || "").trim()).filter(Boolean) : [];
@@ -4267,6 +4279,27 @@ async function reviewCompleteShotPrompt(payload) {
   const reviewer = reviewerRegistry().find((item) => item.id === payload.reviewerId);
   if (!reviewer) throw new Error("所选 Reviewer 不存在或已被移除");
   if (!reviewer.available) throw new Error(reviewer.reason || `${reviewer.label} 尚未配置`);
+  return { shot, panelIds, reviewer };
+}
+
+function strictReviewHarnessJob(reviewer, requestId) {
+  return {
+    id: `run-${requestId}`,
+    conversationId: `manjing-review-${requestId}`,
+    agentRole: "review",
+    modelId: reviewer.model,
+    textModelId: reviewer.model,
+    responseMode: "reasoning",
+    kind: "prompt-review",
+  };
+}
+
+async function reviewCompleteShotPrompt(payload, options = {}) {
+  const { shot, panelIds, reviewer } = strictReviewSubmission(payload);
+  const requestId = isMediaId(options.requestId) ? options.requestId : randomUUID();
+  const harnessJob = strictReviewHarnessJob(reviewer, requestId);
+  const runId = harnessJob.id;
+  const sessionId = manjingHarnessSessionId(harnessJob);
 
   const analysis = recoverMediaAnalysisResult(payload.sourceMangaRequestId);
   if (analysis?.kind !== "manga" || !Array.isArray(analysis.mangaPages)) throw new Error("来源漫画分析结果不可用");
@@ -4288,8 +4321,9 @@ async function reviewCompleteShotPrompt(payload) {
   const evidence = { panelIds, panels };
   const reviewSnapshotHash = strictReviewSnapshotHash(payload, evidence, reviewer);
 
-  return withCompletePromptJob(completePromptIdentityFromPayload(payload), payload.projectTitle, async (requestId, report) => {
-    const outputPath = join(responseDir, `prompt-review-${requestId}.json`);
+  return withCompletePromptJob(completePromptIdentityFromPayload(payload), payload.projectTitle, async (jobRequestId, report) => {
+    await harnessStore.beginRun(harnessJob);
+    const outputPath = join(responseDir, `prompt-review-${jobRequestId}.json`);
     const prompt = promptReviewerAgentPrompt(payload, evidence, reviewer);
     const reviewStartedAt = Date.now();
     const attempts = [];
@@ -4312,15 +4346,7 @@ async function reviewCompleteShotPrompt(payload) {
     } else {
       const reviewed = await runPersistentManjingAgentTurn({
         store: harnessStore,
-        job: {
-          id: `run-${requestId}`,
-          conversationId: `manjing-review-${requestId}`,
-          agentRole: "review",
-          modelId: reviewer.model,
-          textModelId: reviewer.model,
-          responseMode: "reasoning",
-          kind: "prompt-review",
-        },
+        job: harnessJob,
         prompt,
         runModel: async ({ prompt: providerPrompt, systemPrompt }) => {
           const candidate = await generateStrictReview({
@@ -4336,13 +4362,13 @@ async function reviewCompleteShotPrompt(payload) {
                 const value = await callCompatibleReviewer(stagePrompt, evidence, reviewer, report, systemPrompt, { schema, phase, startedAt: reviewStartedAt, timeoutMs: remaining });
                 compatibleReviewerLineage = structuredModelLineage(value, reviewer.model, reviewer.provider);
                 attempts.push({ phase, startedAt, finishedAt: new Date().toISOString(), status: 'completed', ...compatibleReviewerLineage });
-                writeFileSync(join(responseDir, `prompt-review-${requestId}.${phase}.json`), JSON.stringify(value));
+                writeFileSync(join(responseDir, `prompt-review-${jobRequestId}.${phase}.json`), JSON.stringify(value));
                 return value;
               } catch (error) {
                 attempts.push({ phase, startedAt, finishedAt: new Date().toISOString(), status: 'failed', diagnostics: error.diagnostics || { code: 'request_failed' } });
                 throw error;
               } finally {
-                writeFileSync(join(responseDir, `prompt-review-${requestId}.attempts.json`), JSON.stringify(attempts));
+                writeFileSync(join(responseDir, `prompt-review-${jobRequestId}.attempts.json`), JSON.stringify(attempts));
               }
             },
           });
@@ -4376,17 +4402,126 @@ async function reviewCompleteShotPrompt(payload) {
       reviewSnapshotHash,
       reviewEvidenceMode: reviewer.evidenceMode,
       reviewedAt: new Date().toISOString(),
-      requestId,
+      requestId: jobRequestId,
+      runId,
+      sessionId,
+      protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
     };
-    writeFileSync(join(responseDir, `prompt-review-${requestId}.committed.json`), `${JSON.stringify(committed, null, 2)}\n`, "utf8");
+    writeFileSync(join(responseDir, `prompt-review-${jobRequestId}.committed.json`), `${JSON.stringify(committed, null, 2)}\n`, "utf8");
     return committed;
-  }, "prompt-review").then(result => {
+  }, "prompt-review", "", {
+    requestId,
+    runId,
+    sessionId,
+    protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+  }).then(result => {
     reviewerCallHealth.set(reviewer.id, { status: 'succeeded', checkedAt: new Date().toISOString() });
     return result;
   }, error => {
     reviewerCallHealth.set(reviewer.id, { status: 'failed', checkedAt: new Date().toISOString(), message: error.diagnostics?.httpStatus === 504 ? '上次调用：上游网关超时，可手动重试或选择其他模型' : error.code === 'output_limit' ? '上次调用：输出超限，未产生完整报告' : '上次调用未完成，可查看错误后手动重试' });
     throw error;
   });
+}
+
+async function enqueuePromptReviewRun(payload, taskRuntime) {
+  const { reviewer } = strictReviewSubmission(payload);
+  const identity = completePromptIdentityFromPayload(payload);
+  const runKey = completePromptJobKey(identity);
+  const pending = pendingPromptReviewRuns.get(runKey);
+  if (pending) return { httpStatus: 202, body: pending.acknowledgement };
+
+  const live = [...activeCompletePromptJobs.values()].find((job) => (
+    job.type === "prompt-review"
+    && job.projectUid === identity.projectUid
+    && job.shotUid === identity.shotUid
+    && job.sourceRevision === identity.sourceRevision
+  ));
+  if (live) {
+    return {
+      httpStatus: 202,
+      body: {
+        status: "running",
+        ...publicJob(live),
+      },
+    };
+  }
+
+  try {
+    const completed = recoverLatestPromptReview({
+      shotId: identity.shotId,
+      sourceRevision: identity.sourceRevision,
+      projectUid: identity.projectUid,
+      shotUid: identity.shotUid,
+    });
+    return { httpStatus: 200, body: { status: "completed", ...completed } };
+  } catch {
+    // No committed report exists for this exact immutable review snapshot.
+  }
+
+  const requestId = randomUUID();
+  const harnessJob = strictReviewHarnessJob(reviewer, requestId);
+  const runId = harnessJob.id;
+  const sessionId = manjingHarnessSessionId(harnessJob);
+  const queuedAt = new Date().toISOString();
+  const acknowledgement = {
+    status: "queued",
+    protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+    runId,
+    sessionId,
+    requestId,
+    kind: "prompt-review",
+    projectUid: identity.projectUid,
+    shotUid: identity.shotUid,
+    shotId: identity.shotId,
+    sourceRevision: identity.sourceRevision,
+    reviewerId: reviewer.id,
+    reviewerModel: reviewer.model,
+    queuedAt,
+  };
+  const entry = { acknowledgement, completion: null };
+  pendingPromptReviewRuns.set(runKey, entry);
+  try {
+    await harnessStore.queueRun(harnessJob, {
+      requestId,
+      projectUid: identity.projectUid,
+      shotUid: identity.shotUid,
+      shotId: identity.shotId,
+      sourceRevision: identity.sourceRevision,
+      reviewerId: reviewer.id,
+      reviewerModel: reviewer.model,
+    });
+  } catch (error) {
+    pendingPromptReviewRuns.delete(runKey);
+    throw error;
+  }
+
+  const completion = writingModelTaskContext.run(taskRuntime, () => reviewCompleteShotPrompt(payload, { requestId }));
+  entry.completion = completion;
+  void completion.then(async () => {
+    await harnessStore.finishRun(harnessJob, "completed", {
+      requestId,
+      projectUid: identity.projectUid,
+      shotUid: identity.shotUid,
+      shotId: identity.shotId,
+      sourceRevision: identity.sourceRevision,
+      reviewerId: reviewer.id,
+      resultCommitted: true,
+    });
+  }, async (error) => {
+    await harnessStore.finishRun(harnessJob, error?.name === "AbortError" ? "aborted" : "failed", {
+      requestId,
+      projectUid: identity.projectUid,
+      shotUid: identity.shotUid,
+      shotId: identity.shotId,
+      sourceRevision: identity.sourceRevision,
+      reviewerId: reviewer.id,
+      error: error instanceof Error ? error.message.slice(0, 2_000) : "严格审核任务失败",
+    });
+  }).finally(() => {
+    if (pendingPromptReviewRuns.get(runKey) === entry) pendingPromptReviewRuns.delete(runKey);
+  }).catch(() => undefined);
+
+  return { httpStatus: 202, body: acknowledgement };
 }
 
 async function reviseShots(payload) {
@@ -5021,6 +5156,63 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname.startsWith("/harness/runs/")) {
+    if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
+    if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
+    const runId = safeDecodeURIComponent(url.pathname.slice("/harness/runs/".length));
+    if (!runId || !/^run-[a-f0-9-]{36}$/i.test(runId)) { sendJson(res, 400, { error: "Harness Run ID 无效" }, origin); return; }
+
+    const inMemoryJob = [...activeCompletePromptJobs.values(), ...lastCompletePromptJobs.values()]
+      .find((job) => job.runId === runId);
+    const pendingRun = [...pendingPromptReviewRuns.values()]
+      .find((entry) => entry.acknowledgement.runId === runId);
+    const record = await harnessStore.getRun(runId);
+    const requestId = String(inMemoryJob?.requestId || pendingRun?.acknowledgement.requestId || record?.requestId || runId.slice(4));
+    const committedPath = join(responseDir, `prompt-review-${requestId}.committed.json`);
+    if (existsSync(committedPath)) {
+      sendJson(res, 200, {
+        protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+        runId,
+        sessionId: record?.sessionId || inMemoryJob?.sessionId,
+        status: "completed",
+        ...readResult(committedPath),
+      }, origin);
+      return;
+    }
+    if (inMemoryJob?.status === "running") {
+      sendJson(res, 202, {
+        protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+        runId,
+        sessionId: inMemoryJob.sessionId || record?.sessionId,
+        status: record?.status === "queued" ? "queued" : "running",
+        ...publicJob(inMemoryJob),
+      }, origin);
+      return;
+    }
+    if (pendingRun) {
+      sendJson(res, 202, {
+        ...pendingRun.acknowledgement,
+        status: record?.status === "running" ? "running" : "queued",
+      }, origin);
+      return;
+    }
+    if (record) {
+      const terminalStatus = record.status === "completed" && !record.resultCommitted ? "interrupted" : record.status;
+      sendJson(res, 200, {
+        ...record,
+        protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+        runId,
+        status: terminalStatus === "queued" || terminalStatus === "running" ? "interrupted" : terminalStatus,
+        ...(terminalStatus === "queued" || terminalStatus === "running" || terminalStatus === "interrupted"
+          ? { error: "服务已重启，该审核 Run 未留下完整报告；不会自动重复调用模型" }
+          : {}),
+      }, origin);
+      return;
+    }
+    sendJson(res, 404, { error: "找不到该 Harness Run" }, origin);
+    return;
+  }
+
   if (url.pathname === '/model-tests' && ['GET', 'POST'].includes(req.method)) {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: '只接受漫镜页面请求' }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: '页面尚未配对' }, origin); return; }
@@ -5549,7 +5741,25 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const handlers = { "/shot-chat": chatWithShot, "/annotations": reviseShot, "/annotations-batch": reviseShots, "/complete-shot-prompt": generateCompleteShotPrompt, "/review-shot-prompt": reviewCompleteShotPrompt, "/global-annotations": reviseGlobalSettings, "/source-global-settings": saveGlobalSettings, "/recover-annotation-output": recoverAnnotationOutput, "/source-shot": saveSourceShot, "/generate": generateArtwork, "/generate-asset": generateAsset, "/generate-asset-gpt": generateAssetWithGpt, "/load-script": loadScript };
+  if (req.method === "POST" && url.pathname === "/review-shot-prompt") {
+    if (!allowedOrigins.has(origin)) { sendJson(res, 403, { status: "failed", error: "只接受本地漫镜页面请求" }, origin); return; }
+    if (!hasPairingToken(req)) { sendJson(res, 401, { status: "failed", error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
+    try {
+      const payload = await readBody(req);
+      const accepted = await enqueuePromptReviewRun(payload, writingRuntimeContext());
+      sendJson(res, accepted.httpStatus, accepted.body, origin);
+    } catch (error) {
+      sendJson(res, Number(error?.statusCode) || 500, {
+        status: "failed",
+        error: error instanceof Error ? error.message : "严格审核任务提交失败",
+        remoteTaskId: paidTaskId(error),
+        retryPolicy: mustNotAutoResubmit(error) ? "manual-check-required" : "manual-retry-allowed",
+      }, origin);
+    }
+    return;
+  }
+
+  const handlers = { "/shot-chat": chatWithShot, "/annotations": reviseShot, "/annotations-batch": reviseShots, "/complete-shot-prompt": generateCompleteShotPrompt, "/global-annotations": reviseGlobalSettings, "/source-global-settings": saveGlobalSettings, "/recover-annotation-output": recoverAnnotationOutput, "/source-shot": saveSourceShot, "/generate": generateArtwork, "/generate-asset": generateAsset, "/generate-asset-gpt": generateAssetWithGpt, "/load-script": loadScript };
   if (req.method === "POST" && handlers[url.pathname]) {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
@@ -5564,7 +5774,6 @@ const server = createServer(async (req, res) => {
       const message = error instanceof Error ? error.message : "处理失败";
       const status = Number(error?.statusCode) || (message === "写作模型正在处理另一个任务，请等待完成" ? 409 : 500);
       sendJson(res, status, {
-        ...(url.pathname === "/review-shot-prompt" ? { status: "failed" } : {}),
         error: message,
         ...(error?.code === "ANNOTATION_BATCH_LIMIT_EXCEEDED" ? {
           code: error.code,
@@ -5585,6 +5794,7 @@ function bridgeHasActiveWork() {
   return Boolean(
     modelTests.active ||
     activeJob ||
+    pendingPromptReviewRuns.size ||
     activeCompletePromptJobs.size ||
     activeArtworkJobs.size ||
     activeAssetJobs.size ||
@@ -5599,6 +5809,16 @@ function bridgeHasActiveWork() {
 function shutdownJobSnapshot() {
   return [
     activeJob,
+    ...[...pendingPromptReviewRuns.values()].map((entry) => ({
+      type: "prompt-review",
+      requestId: entry.acknowledgement.requestId,
+      runId: entry.acknowledgement.runId,
+      shotId: entry.acknowledgement.shotId,
+      status: entry.acknowledgement.status,
+      stage: "queued",
+      startedAt: entry.acknowledgement.queuedAt,
+      updatedAt: entry.acknowledgement.queuedAt,
+    })),
     ...activeCompletePromptJobs.values(),
     ...activeArtworkJobs.values(),
     ...activeAssetJobs.values(),
