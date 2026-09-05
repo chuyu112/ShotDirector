@@ -6405,6 +6405,7 @@ function DirectorDesk() {
       <header className="topbar">
         <div className="brand-block"><span className="brand-mark">漫镜</span><div><b>漫镜</b><small>MANJING · 漫画导演工作台</small></div></div>
         <div className="topbar-actions">
+          <div className="topbar-control-group" aria-label="工作台与模型控制">
           <div className="desk-mode-switch compact" role="tablist" aria-label="漫镜工作版本">
             <button type="button" role="tab" aria-selected="true" className="active"><b>创作台</b><small>拆图 · 分析 · 重组 · 提示词</small></button>
             <button type="button" role="tab" aria-selected="false" onClick={() => switchDeskMode("strict-review")}><b>严格审核台</b><small>只审不改</small></button>
@@ -6492,6 +6493,7 @@ function DirectorDesk() {
             </select>
             <small>拆图 LOW · 单镜提示词/审核 MAX</small>
           </label>
+          </div>
           <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : !hydrated || !projectArchiveLoaded ? "读取项目存档" : tenantScope.mode === "server" ? "服务器项目自动保存" : "本机自动保存"}</div>
         </div>
       </header>

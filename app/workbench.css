@@ -1,0 +1,126 @@
+/* Manjing workbench: neutral surfaces, blue actions, semantic status colors.
+   Loaded after legacy component layouts; never style crop geometry or canvas content. */
+:root {
+  --surface: #ffffff;
+  --surface-muted: #f5f4f0;
+  --line-strong: #aaa69c;
+  --control-radius: 4px;
+  --panel-radius: 6px;
+  --control-height: 40px;
+  --header-control-height: 64px;
+  --focus-ring: 0 0 0 3px rgb(23 92 255 / 20%);
+  --floating-shadow: 0 8px 24px rgb(21 21 21 / 12%);
+}
+
+.app-shell .topbar { grid-template-columns: minmax(150px, .5fr) minmax(0, 3fr); gap: 20px; }
+.app-shell .topbar-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.topbar-control-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 10px; width: 100%; min-width: 0; }
+.topbar-control-group > .desk-mode-switch,
+.topbar-control-group > .writing-model-picker,
+.topbar-control-group > .reasoning-effort-picker {
+  width: 100%; min-width: 0; height: var(--header-control-height); margin: 0;
+}
+.topbar-control-group > .desk-mode-switch { grid-column: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line-strong); border-radius: var(--control-radius); }
+.topbar-control-group .desk-mode-switch button { min-width: 0; min-height: 0; align-content: center; padding: 6px 8px; border-radius: 2px; }
+.topbar-control-group .desk-mode-switch b { font-size: 12px; }
+.topbar-control-group .desk-mode-switch small { font-size: 10px; line-height: 1.4; }
+.topbar-control-group .writing-model-picker > summary {
+  height: 100%; min-height: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px;
+  align-content: center; padding: 8px 12px; border-color: var(--line-strong); border-radius: var(--control-radius);
+}
+.topbar-control-group .writing-model-picker > summary span { grid-column: 1; font-size: 10px; }
+.topbar-control-group .writing-model-picker > summary strong { grid-column: 1; grid-row: 2; font-size: 13px; }
+.topbar-control-group .writing-model-picker > summary i { grid-column: 2; grid-row: 1 / 3; }
+.topbar-control-group .reasoning-effort-picker { padding: 8px 12px; align-content: center; border-color: var(--line-strong); border-radius: var(--control-radius); }
+.topbar-control-group .reasoning-effort-picker > span { font-size: 10px; }
+.topbar-control-group .reasoning-effort-picker > select { width: 100%; font: inherit; font-size: 13px; font-weight: 700; }
+.topbar-control-group .reasoning-effort-picker > small { font-size: 10px; line-height: 1.4; }
+.app-shell .save-status { max-width: 170px; font-size: 11px; line-height: 1.5; }
+.app-shell .save-status i { flex-shrink: 0; }
+.app-shell .writing-model-menu { border-color: var(--line-strong); border-radius: var(--panel-radius); box-shadow: var(--floating-shadow); }
+.app-shell .writing-model-menu > header { border-color: var(--line); }
+
+/* Common controls: selection is blue; green/red/yellow retain workflow meaning. */
+.app-shell .button { min-height: var(--control-height); border-radius: var(--control-radius); font-size: 12px; font-weight: 700; line-height: 1.4; }
+.app-shell .button.secondary { border-color: var(--line-strong); background: var(--surface); }
+.app-shell .button.primary { border-color: var(--blue); }
+.app-shell .button:disabled { opacity: 1; color: #77746d; background: #eeece6; border-color: var(--line); cursor: not-allowed; }
+.app-shell .button.secondary:not(:disabled):hover { background: var(--blue-soft); border-color: var(--blue); color: var(--blue); }
+.app-shell :where(button, select, input, textarea) { font-family: inherit; }
+.app-shell :where(button, summary, select, input, textarea):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.app-shell :where(textarea, input[type="text"]) { border-radius: var(--control-radius); line-height: 1.6; }
+.app-shell :where(textarea, input[type="text"]):focus { border-color: var(--blue); }
+.app-shell :where(select) { font-family: inherit; }
+
+/* Repeated generation actions are one action family, not orange/green variants. */
+.app-shell .top-shot-prompt-bar { background: var(--panel); border-bottom: 1px solid var(--line-strong); box-shadow: 0 3px 10px rgb(21 21 21 / 6%); }
+.app-shell .top-shot-prompt-bar span { color: var(--blue); }
+.app-shell .top-shot-prompt-bar.ready { border-color: var(--green); background: #f1f8f4; }
+.app-shell .top-shot-prompt-bar > button,
+.app-shell .top-shot-prompt-bar.ready > button,
+.app-shell .shot-title-prompt-button,
+.app-shell .shot-title-prompt-button.ready,
+.app-shell .complete-shot-prompt-button {
+  min-height: 44px; border: 1px solid var(--blue); border-radius: var(--control-radius);
+  background: var(--blue); color: white; box-shadow: none; font-size: 12px; font-weight: 700;
+}
+.app-shell .top-shot-prompt-bar > button:not(:disabled):hover,
+.app-shell .shot-title-prompt-button:not(:disabled):hover,
+.app-shell .complete-shot-prompt-button:not(:disabled):hover { background: #104be0; }
+.app-shell .top-shot-prompt-bar > button:disabled,
+.app-shell .shot-title-prompt-button:disabled,
+.app-shell .complete-shot-prompt-button:disabled { background: #eeece6; border-color: var(--line); color: #77746d; opacity: 1; box-shadow: none; }
+.app-shell .shot-duration-control button.active { background: var(--blue); box-shadow: none; }
+
+/* Work surfaces are quiet. Preserve yellow panel selections and approval markers. */
+.app-shell .shot-structure-review { background: var(--surface-muted); }
+.app-shell .shot-structure-review.is-confirmed { background: #f1f8f4; }
+.app-shell .panel-assembly-board { border-color: var(--line); border-radius: var(--panel-radius); background: var(--panel); }
+.app-shell .panel-shot-group { border-radius: var(--panel-radius); }
+.app-shell .panel-shot-group.is-current { border-color: var(--blue); box-shadow: inset 0 3px 0 var(--blue); }
+.app-shell .panel-shot-group.is-approved { border-color: var(--green); box-shadow: inset 0 3px 0 var(--green); }
+.app-shell .panel-shot-group.is-drop-target { border-color: var(--blue); box-shadow: var(--focus-ring); }
+.app-shell .panel-shot-groups-top { border-radius: var(--control-radius); box-shadow: none; }
+.app-shell :where(.strict-review-control-card, .strict-review-prompt-card, .coverage-summary-card, .director-recipes-panel, .coverage-ledger, .model-test-settings, .shot-chat) {
+  border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--panel); box-shadow: none;
+}
+.app-shell .complete-shot-prompt-panel { background: var(--panel); }
+.app-shell .complete-shot-prompt-panel > header span { color: var(--blue); }
+.app-shell .complete-shot-prompt-panel textarea { border-color: var(--line-strong); border-radius: var(--control-radius); }
+.app-shell .complete-shot-prompt-panel textarea:focus { outline: 2px solid var(--blue); border-color: var(--blue); }
+.app-shell .complete-shot-prompt-panel.stale,
+.app-shell .complete-shot-prompt-panel.error { background: #fff8df; }
+.app-shell .complete-shot-copy-mini { border-color: var(--line); border-radius: var(--control-radius); box-shadow: none; color: var(--blue); }
+.app-shell .complete-shot-copy-mini:hover { background: var(--blue-soft); border-color: var(--blue); }
+.app-shell :where(.global-settings-page, .asset-ledger-page, .coverage-page) { margin-top: 20px; }
+.app-shell .global-page-heading h1 { font-size: 24px; }
+.app-shell .global-settings-fields { gap: 1px; background: var(--line); }
+.app-shell .model-test-settings h2 { font-size: 20px; }
+.app-shell .model-test-settings header span { color: var(--blue); font-size: 10px; }
+.app-shell .model-test-settings details { margin: 12px 0; border: 1px solid var(--line); border-radius: var(--control-radius); padding: 12px; background: var(--surface); }
+.app-shell .model-test-settings summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.app-shell .model-test-settings pre { padding: 10px; background: var(--surface-muted); font-family: var(--font-geist-mono); }
+.app-shell .model-test-table th { background: var(--surface-muted); }
+.app-shell .model-test-table td { vertical-align: middle; }
+
+@media (max-width: 1280px) {
+  .app-shell .topbar { grid-template-columns: 1fr; gap: 12px; }
+  .app-shell .topbar-actions { grid-template-columns: minmax(0, 1fr) auto; }
+}
+@media (max-width: 900px) {
+  .app-shell .topbar-actions { grid-template-columns: 1fr; }
+  .app-shell .save-status { max-width: none; justify-self: start; }
+}
+@media (max-width: 700px) {
+  .topbar-control-group { grid-template-columns: 1fr; gap: 8px; }
+  .topbar-control-group > .desk-mode-switch { grid-column: auto; }
+  .app-shell .writing-model-menu { width: 100%; left: 0; right: auto; max-height: min(320px, 50dvh); }
+  .app-shell .top-shot-prompt-bar > button { min-width: 0; width: 100%; }
+  .app-shell .model-test-settings { padding: 16px; }
+  .app-shell .model-test-settings header { align-items: stretch; gap: 12px; }
+  .app-shell .model-test-settings header > button { width: 100%; min-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell :where(button, summary, input, textarea, select) { transition: none; }
+}
