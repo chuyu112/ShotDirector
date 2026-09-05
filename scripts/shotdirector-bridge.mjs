@@ -27,7 +27,7 @@ import { DoubaoResponsesProvider } from "../server/doubao-responses-provider.mjs
 import { reviewModelConfigs, textModelConfigs } from "../server/text-model-catalog.mjs";
 import { migratedWritingModelSelection } from "../server/writing-model-selection.mjs";
 import { prepareModelImageInputs } from "../server/model-image-atlas.mjs";
-import { generateStrictReview, strictReviewTokenBudget } from '../server/strict-review-generation.mjs';
+import { bindReviewerIdentity, generateStrictReview, strictReviewTokenBudget } from '../server/strict-review-generation.mjs';
 import { OpenAIImageProvider } from "../server/openai-image-provider.mjs";
 import { LibtvServerWorker } from "../server/libtv-worker.mjs";
 import { assertAnnotationBatchShotLimit } from "../server/request-limits.mjs";
@@ -3074,7 +3074,7 @@ async function callCompatibleReviewer(prompt, evidence, reviewer, report, system
         promptCacheKey: `manjing-${tenantId}-strict-review`,
         timeoutMs: options.timeoutMs || 20 * 60 * 1000,
       });
-      return attachStructuredModelLineage(parseJsonResponseText(result.text), {
+      return attachStructuredModelLineage(bindReviewerIdentity(parseJsonResponseText(result.text), reviewer.id), {
         provider: result.provider || reviewer.provider,
         requestedModelId: reviewer.model,
         effectiveModelId: result.model || reviewer.model,

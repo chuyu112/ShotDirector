@@ -1,9 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { generateStrictReview, strictReviewTokenBudget, REVIEW_CHECKS } from '../server/strict-review-generation.mjs';
+import { bindReviewerIdentity, generateStrictReview, strictReviewTokenBudget, REVIEW_CHECKS } from '../server/strict-review-generation.mjs';
 const schema = JSON.parse(readFileSync(new URL('../scripts/prompt-review.schema.json', import.meta.url)));
 const report = keys => ({ status: 'completed', shotId: '01', reviewerId: 'glm-5.3', evidence: { sourcePanels: ['R-G02', 'R-G01'] }, report: { verdict: 'needs-revision', summary: '需要修改', strengths: [], checks: Object.fromEntries(keys.map(k => [k, false])), findings: [{ id: '1', severity: 'blocking', panelIds: ['R-G02'], title: '冲突' }] } });
+test('server binds only omitted reviewer identity without changing judgments or hiding mismatches', () => {
+  const candidate=report(REVIEW_CHECKS);
+  delete candidate.reviewerId;
+  const bound=bindReviewerIdentity(candidate,'glm-5.3');
+  assert.equal(bound.reviewerId,'glm-5.3');
+  assert.equal(bound.report,candidate.report);
+  assert.equal(bound.evidence,candidate.evidence);
+  assert.equal(candidate.reviewerId,undefined);
+  assert.equal(bindReviewerIdentity({...candidate,reviewerId:'wrong'},'glm-5.3').reviewerId,'wrong');
+});
 test('review budget is separate from legacy generic output limit', () => {
   assert.equal(strictReviewTokenBudget('glm', 16384), 65536);
   assert.equal(strictReviewTokenBudget('jiekou-anthropic', undefined), 65536);

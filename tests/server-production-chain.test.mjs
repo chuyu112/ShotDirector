@@ -252,7 +252,12 @@ function fakeStructuredResult(schemaName, prompt) {
     const replyOnly = current.includes("只讨论，不改稿");
     return { action: replyOnly ? "reply" : "revise", reply: "已核对当前画格。", prompt: replyOnly ? "" : context.currentPrompt + "\n补充：保持两秒停顿。", sourcePanels: context.shot.sourcePanels };
   }
-  if (schemaName === "prompt-review") return promptReviewFixture(requestedShotId(prompt));
+  if (schemaName === "prompt-review") {
+    const result = promptReviewFixture(requestedShotId(prompt));
+    // Real GLM output can omit server-owned identity despite complete judgments.
+    delete result.reviewerId;
+    return result;
+  }
   throw new Error(`测试模型不支持 schema：${schemaName}`);
 }
 

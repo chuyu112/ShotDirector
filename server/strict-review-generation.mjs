@@ -1,5 +1,14 @@
 export const REVIEW_CHECKS = ['sourceBoundary', 'characterContinuity', 'timingFeasible', 'dialogueFeasible', 'cameraAndActionCoherent', 'soundAndNegativeComplete'];
 
+// The provider's identity is server-owned routing metadata, not a model judgment.
+// Fill only an omitted ID; a conflicting ID must still fail normal validation.
+export function bindReviewerIdentity(candidate, reviewerId) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate;
+  if (Object.hasOwn(candidate, 'reviewerId')) return candidate;
+  if (typeof reviewerId !== 'string' || !reviewerId.trim()) throw new Error('缺少服务端 Reviewer 身份');
+  return { ...candidate, reviewerId };
+}
+
 // These are request budgets, not a claim about a model's maximum capability.
 export function strictReviewTokenBudget(provider, configured) {
   const floor = provider === 'glm' || provider === 'jiekou-anthropic' ? 65_536 : 32_768;
