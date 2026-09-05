@@ -16,6 +16,7 @@ import { planPanelDrop } from "./panel-drag-grouping.mjs";
 import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysisReadingOrder, type ReadingPage } from "./manga-reading-order.mjs";
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
 import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
+import { promptReviewRecoveryDecision } from "./prompt-review-recovery.mjs";
 import { persistProjectSnapshot } from "./project-save.mjs";
 import { LineListField, LineListTextarea } from "./line-list-field";
 import { TextInputDialog } from "./text-input-dialog";
@@ -300,6 +301,12 @@ type PromptReviewResult = {
   error?: string;
 };
 
+type PromptReviewRecoveryResult = Partial<Omit<PromptReviewResult, "status">> & {
+  status?: "running" | "completed" | "failed";
+  message?: string;
+  error?: string;
+};
+
 type AnnotationBatchResult = {
   status?: string;
   shots: StoryboardShot[];
@@ -344,6 +351,7 @@ type ShotReview = {
   promptReviewStatus?: PromptReviewStatus;
   promptReviewReport?: PromptReviewReport;
   promptReviewSourceRevision?: string;
+  promptReviewStartedAt?: string;
   promptReviewedAt?: string;
   promptReviewRequestId?: string;
   promptReviewError?: string;
@@ -999,6 +1007,7 @@ function invalidatePromptReview(review: ShotReview): ShotReview {
     ...review,
     promptReviewStatus: review.promptReviewReport ? "stale" : "empty",
     promptReviewSourceRevision: undefined,
+    promptReviewStartedAt: undefined,
     promptReviewedAt: undefined,
     promptReviewRequestId: undefined,
     promptReviewError: undefined,
@@ -1264,7 +1273,9 @@ function normalizeReviewForResume(review: ShotReview, projectUid = "project-lega
       ? review.promptReviewerModel.trim()
       : undefined,
     promptReviewStatus: review.promptReviewStatus === "reviewing"
-      ? "stale"
+      ? typeof review.promptReviewStartedAt === "string" && review.promptReviewStartedAt
+        ? "reviewing"
+        : "stale"
       : review.promptReviewStatus === "ready" || review.promptReviewStatus === "stale" || review.promptReviewStatus === "error"
         ? review.promptReviewStatus
         : "empty",
@@ -1272,6 +1283,7 @@ function normalizeReviewForResume(review: ShotReview, projectUid = "project-lega
       ? review.promptReviewReport
       : undefined,
     promptReviewSourceRevision: typeof review.promptReviewSourceRevision === "string" ? review.promptReviewSourceRevision : undefined,
+    promptReviewStartedAt: typeof review.promptReviewStartedAt === "string" ? review.promptReviewStartedAt : undefined,
     promptReviewedAt: typeof review.promptReviewedAt === "string" ? review.promptReviewedAt : undefined,
     promptReviewRequestId: typeof review.promptReviewRequestId === "string" ? review.promptReviewRequestId : undefined,
     promptReviewError: typeof review.promptReviewError === "string" ? review.promptReviewError : undefined,
@@ -2891,9 +2903,9 @@ function DirectorDesk() {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
     if (promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
     if (promptReviewIsCurrent) return;
-    const matchingLiveJob = (bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.status === "running") || (bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.status === "running" ? bridge.activeJob : undefined);
+    const matchingLiveJob = (bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && job.status === "running") || (bridge.activeJob?.type === "prompt-review" && bridge.activeJob.shotId === shot.id && bridge.activeJob.sourceRevision === review.promptReviewSourceRevision && bridge.activeJob.status === "running" ? bridge.activeJob : undefined);
     if (matchingLiveJob) return;
-    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.status !== "running") || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.status !== "running" ? bridge.lastJob : undefined);
+    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && job.status !== "running") || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.sourceRevision === review.promptReviewSourceRevision && bridge.lastJob.status !== "running" ? bridge.lastJob : undefined);
     if (review.promptReviewStatus !== "reviewing" && !matchingTerminalJob) return;
     const recoveryReviewerId = review.promptReviewerId || selectedPromptReviewerId;
     const sourceRevision = buildPromptReviewRevision({
@@ -2907,43 +2919,77 @@ function DirectorDesk() {
     if (recoveringPromptReview.current === recoveryKey) return;
     recoveringPromptReview.current = recoveryKey;
     let active = true;
-    bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
-      cache: "no-store",
-      headers: { "X-Manjing-Token": bridge.pairingToken },
-    }).then(async (response) => {
-      const result = await response.json() as PromptReviewResult;
-      if (!response.ok) throw new Error(result.error || "没有可恢复的独立审查报告");
-      if (!active || result.shotId !== shot.id || result.reviewerId !== recoveryReviewerId || result.sourceRevision !== sourceRevision || !result.report) return;
-      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
-        ...previous,
-        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === review.promptReviewSourceRevision ? {
-          ...item,
-          approved: false,
-          approvedAt: undefined,
-          promptReviewerId: result.reviewerId,
-          promptReviewerModel: result.reviewerModel?.trim() || undefined,
-          promptReviewStatus: "ready" as PromptReviewStatus,
-          promptReviewReport: result.report,
-          promptReviewSourceRevision: result.sourceRevision,
-          promptReviewedAt: result.reviewedAt,
-          promptReviewRequestId: result.requestId,
-          promptReviewError: undefined,
-        } : item),
-      }));
-      setToast(`已恢复 ${result.reviewerLabel || result.reviewerId} 的独立审查报告`);
-    }).catch(() => {
-      if (!active || review.promptReviewStatus !== "reviewing") return;
-      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
-        ...previous,
-        reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision && item.promptReviewStatus === "reviewing" ? {
-          ...item,
-          promptReviewStatus: "error" as PromptReviewStatus,
-          promptReviewError: "上次独立审查已经结束，但没有找到与当前提示词匹配的报告，请重新提交。",
-        } : item),
-      }));
-    });
+    void (async () => {
+      let httpStatus = 0;
+      let result: PromptReviewRecoveryResult = {};
+      try {
+        const response = await bridgeFetch(`${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`, {
+          cache: "no-store",
+          headers: { "X-Manjing-Token": bridge.pairingToken as string },
+        });
+        httpStatus = response.status;
+        result = await response.json() as PromptReviewRecoveryResult;
+        const decision = promptReviewRecoveryDecision({
+          httpStatus,
+          resultStatus: result.status,
+          terminalJobStatus: matchingTerminalJob?.status,
+          startedAt: review.promptReviewStartedAt,
+        });
+        if (!active) return;
+        if (decision.action === "waiting") {
+          recoveringPromptReview.current = "";
+          return;
+        }
+        if (decision.action === "failed" || !response.ok) throw new Error(result.error || "独立审查任务已失败，请查看错误后手动重试");
+        if (result.shotId !== shot.id || result.reviewerId !== recoveryReviewerId || result.sourceRevision !== sourceRevision || !result.report) {
+          throw new Error("Reviewer 返回报告与当前提示词版本不一致");
+        }
+        setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+          ...previous,
+          reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === review.promptReviewSourceRevision ? {
+            ...item,
+            approved: false,
+            approvedAt: undefined,
+            promptReviewerId: result.reviewerId,
+            promptReviewerModel: result.reviewerModel?.trim() || undefined,
+            promptReviewStatus: "ready" as PromptReviewStatus,
+            promptReviewReport: result.report,
+            promptReviewSourceRevision: result.sourceRevision,
+            promptReviewStartedAt: undefined,
+            promptReviewedAt: result.reviewedAt,
+            promptReviewRequestId: result.requestId,
+            promptReviewError: undefined,
+          } : item),
+        }));
+        setToast(`已恢复 ${result.reviewerLabel || result.reviewerId} 的独立审查报告`);
+      } catch (error) {
+        if (!active || review.promptReviewStatus !== "reviewing") return;
+        const decision = promptReviewRecoveryDecision({
+          httpStatus,
+          resultStatus: result.status,
+          terminalJobStatus: matchingTerminalJob?.status,
+          startedAt: review.promptReviewStartedAt,
+        });
+        if (decision.action === "waiting") {
+          recoveringPromptReview.current = "";
+          return;
+        }
+        const message = decision.reason === "timeout"
+          ? "严格审核超过最长恢复时间，后台没有可恢复结果，请手动重试。"
+          : error instanceof Error ? error.message : "独立审查任务已失败，请手动重试。";
+        setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+          ...previous,
+          reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision && item.promptReviewStatus === "reviewing" ? {
+            ...item,
+            promptReviewStatus: "error" as PromptReviewStatus,
+            promptReviewStartedAt: undefined,
+            promptReviewError: message,
+          } : item),
+        }));
+      }
+    })();
     return () => { active = false; };
-  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
+  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewStartedAt, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -3768,6 +3814,7 @@ function DirectorDesk() {
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
       reviewerId: selectedPromptReviewer.id,
     });
+    const promptReviewStartedAt = new Date().toISOString();
     setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
       ...previous,
       reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid ? {
@@ -3780,12 +3827,15 @@ function DirectorDesk() {
         promptReviewReport: undefined,
         promptReviewerModel: undefined,
         promptReviewSourceRevision: sourceRevision,
+        promptReviewStartedAt,
         promptReviewedAt: undefined,
         promptReviewRequestId: undefined,
         promptReviewError: undefined,
       } : item),
     }));
     setToast(`已交给 ${selectedPromptReviewer.label} 的独立 Agent 审查；它不能改稿或批准`);
+    let responseStatus = 0;
+    let definitiveResponseFailure = false;
     try {
       const response = await bridgeFetch(`${bridgeBase}/review-shot-prompt`, {
         method: "POST",
@@ -3807,9 +3857,15 @@ function DirectorDesk() {
           panelAnnotations,
         }),
       });
-      const result = await response.json() as PromptReviewResult;
-      if (!response.ok) throw new Error(result.error || "独立审查失败");
-      if (result.status !== "completed" || result.shotId !== shot.id || result.reviewerId !== selectedPromptReviewer.id || result.sourceRevision !== sourceRevision) {
+      responseStatus = response.status;
+      const result = await response.json() as PromptReviewRecoveryResult;
+      if (!response.ok) {
+        definitiveResponseFailure = result.status === "failed"
+          || (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 409);
+        throw new Error(result.error || "独立审查失败");
+      }
+      if (result.status !== "completed" || result.shotId !== shot.id || result.reviewerId !== selectedPromptReviewer.id || result.sourceRevision !== sourceRevision || !result.report) {
+        definitiveResponseFailure = true;
         throw new Error("Reviewer 返回报告与当前提示词版本不一致");
       }
       setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
@@ -3821,6 +3877,7 @@ function DirectorDesk() {
           promptReviewStatus: "ready" as PromptReviewStatus,
           promptReviewReport: result.report,
           promptReviewerModel: result.reviewerModel?.trim() || undefined,
+          promptReviewStartedAt: undefined,
           promptReviewedAt: result.reviewedAt,
           promptReviewRequestId: result.requestId,
           promptReviewError: undefined,
@@ -3831,15 +3888,21 @@ function DirectorDesk() {
         : `${selectedPromptReviewer.label} 审查完成；报告只供讨论，仍需你亲自批准`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "独立审查失败";
+      const decision = promptReviewRecoveryDecision({
+        httpStatus: responseStatus,
+        resultStatus: definitiveResponseFailure ? "failed" : "",
+        startedAt: promptReviewStartedAt,
+      });
       setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
         ...previous,
         reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision ? {
           ...item,
-          promptReviewStatus: "error" as PromptReviewStatus,
-          promptReviewError: message,
+          promptReviewStatus: decision.action === "failed" ? "error" as PromptReviewStatus : "reviewing" as PromptReviewStatus,
+          promptReviewStartedAt: decision.action === "failed" ? undefined : item.promptReviewStartedAt,
+          promptReviewError: decision.action === "failed" ? message : "页面连接中断，正在查询原审核任务；不会重复调用模型。",
         } : item),
       }));
-      setToast(message);
+      setToast(decision.action === "failed" ? message : "页面连接中断，正在恢复原审核任务；不会重复调用模型");
     } finally {
       promptReviewSubmission.current.delete(submissionShotKey);
     }
@@ -6394,7 +6457,7 @@ function DirectorDesk() {
 
             {review.promptReviewStatus === "error" ? <p className="prompt-review-error">{review.promptReviewError || "严格审核失败，请重试。"}</p> : null}
             {review.promptReviewStatus === "stale" ? <p className="prompt-review-stale">Creator 内容已改变；旧报告只读保留，必须针对当前快照重新审核。</p> : null}
-            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</div> : null}
+            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running">{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || review.promptReviewError || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</div> : null}
             {review.promptReviewReport ? (
               <section className={`strict-review-report ${review.promptReviewReport.verdict}`}>
                 <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · 无修改权 · 无批准权</small></header>

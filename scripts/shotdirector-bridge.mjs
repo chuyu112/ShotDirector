@@ -3628,7 +3628,7 @@ function recoverLatestCompleteShotPrompt(identity) {
   throw new Error(`没有找到 Shot ${identity.shotId || identity.shotUid} 当前版本已保存的完整提示词`);
 }
 
-function recoverLatestPromptReview(shotId, sourceRevision = "") {
+function recoverLatestPromptReview({ shotId, sourceRevision = "", projectUid = "", shotUid = "" }) {
   const candidates = readdirSync(responseDir)
     .filter((name) => /^prompt-review-[a-f0-9-]{36}\.committed\.json$/i.test(name))
     .map((name) => ({ path: join(responseDir, name), modifiedAt: statSync(join(responseDir, name)).mtimeMs }))
@@ -3638,6 +3638,8 @@ function recoverLatestPromptReview(shotId, sourceRevision = "") {
       const result = readResult(candidate.path);
       if (result?.status !== "completed" || result?.shotId !== shotId || !result?.report) continue;
       if (sourceRevision && result.sourceRevision !== sourceRevision) continue;
+      if (projectUid && result.projectUid !== projectUid) continue;
+      if (shotUid && result.shotUid !== shotUid) continue;
       return {
         ...result,
         reviewerProvider: String(result.reviewerProvider || "legacy-unknown"),
@@ -5431,11 +5433,23 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (type === "prompt-review" && shotId) {
+      if (matches(completedJob) && completedJob?.status === "failed"
+        && (!expectedSourceRevision || completedJob.sourceRevision === expectedSourceRevision)
+        && (!jobShotUid || completedJob.shotUid === jobShotUid)
+        && (!jobProjectUid || completedJob.projectUid === jobProjectUid)) {
+        sendJson(res, 500, { status: "failed", error: completedJob.error || "独立审查任务已失败" }, origin);
+        return;
+      }
       try {
         const result = matches(completedJob) && completedJob?.status === "completed" && completedJob.result?.report
           && (!expectedSourceRevision || completedJob.result.sourceRevision === expectedSourceRevision)
           ? completedJob.result
-          : recoverLatestPromptReview(shotId, expectedSourceRevision);
+          : recoverLatestPromptReview({
+            shotId,
+            sourceRevision: expectedSourceRevision,
+            projectUid: jobProjectUid,
+            shotUid: jobShotUid,
+          });
         sendJson(res, 200, { status: "completed", ...result }, origin);
       } catch (error) {
         sendJson(res, 404, { error: error instanceof Error ? error.message : "没有可恢复的独立审查报告" }, origin);
@@ -5550,6 +5564,7 @@ const server = createServer(async (req, res) => {
       const message = error instanceof Error ? error.message : "处理失败";
       const status = Number(error?.statusCode) || (message === "写作模型正在处理另一个任务，请等待完成" ? 409 : 500);
       sendJson(res, status, {
+        ...(url.pathname === "/review-shot-prompt" ? { status: "failed" } : {}),
         error: message,
         ...(error?.code === "ANNOTATION_BATCH_LIMIT_EXCEEDED" ? {
           code: error.code,
