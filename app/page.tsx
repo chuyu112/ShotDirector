@@ -6705,7 +6705,7 @@ function DirectorDesk() {
         {!structureConfirmed && structurePanelEntries.length ? (
           <section className="panel-assembly-board" aria-label="漫画画格编组台">
             <header className="panel-assembly-heading">
-              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p><p>阅读方向：{state.sourceMangaReadingDirection === "left-to-right" ? "每行从左到右，再向下" : "日漫 · 每行从右到左，再向下"}。角标是阅读位置，画格 ID 不代表先后；旧顺序可用「按原页校正阅读顺序」修正。</p></div>
+              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p><p>原作阅读方向：{state.sourceMangaReadingDirection === "left-to-right" ? "每行从左到右，再向下" : "日漫 · 每行从右到左，再向下"}。Shot 卡片始终按阅读角标从左到右排列：左 1、右 2，再换行。画格 ID 不代表先后；旧顺序可用「按原页校正阅读顺序」修正。</p></div>
               <strong>{structurePanelEntries.length} 张图 · {state.reviews.length} 个 Shot</strong>
             </header>
             <div
@@ -6819,7 +6819,7 @@ function DirectorDesk() {
                     </button>
                     <div
                       className="panel-shot-images"
-                      dir={state.sourceMangaReadingDirection === "left-to-right" ? "ltr" : "rtl"}
+                      dir="ltr"
                       onDragOver={(event) => markStructurePanelDrop(event, { reviewIndex, position: "end" })}
                       onDrop={(event) => moveStructurePanelsByDrag(event, { reviewIndex, position: "end" })}
                     >

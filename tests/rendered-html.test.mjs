@@ -219,9 +219,11 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.doesNotMatch(page, /同名资产会在其他 Shot 自动复用/);
 });
 
-test("manga layout and prompt evidence share explicit reading order without mirroring images", async () => {
+test("manga reading semantics stay explicit while Shot cards number left to right without mirroring images", async () => {
   const [page, styles, bridge] = await Promise.all([read("../app/page.tsx"), read("../app/globals.css"), read("../scripts/shotdirector-bridge.mjs")]);
-  assert.match(page, /dir=\{state.sourceMangaReadingDirection === "left-to-right" \? "ltr" : "rtl"\}/);
+  assert.match(page, /Shot 卡片始终按阅读角标从左到右排列：左 1、右 2/);
+  assert.match(page, /className="panel-shot-images"[\s\S]*?dir="ltr"/);
+  assert.doesNotMatch(page, /dir=\{state.sourceMangaReadingDirection === "left-to-right" \? "ltr" : "rtl"\}/);
   assert.match(page, /按原页校正阅读顺序/);
   assert.match(page, /correctMangaReviewOrder\(state.reviews, order.panelIds\)/);
   assert.match(page, /sourceMangaReadingPages: result.mangaPages/);
