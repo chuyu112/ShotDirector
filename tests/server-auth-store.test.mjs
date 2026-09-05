@@ -364,6 +364,35 @@ test("caps active sessions and atomically enforces the project count", async (t)
   assert.equal(store.listProjects(user.id).length, 2);
 });
 
+test("saved project names append the Shanghai date and avoid same-day duplicates", async (t) => {
+  const now = Date.UTC(2026, 8, 5, 16, 30, 0);
+  const { store } = createFixture(t, { now: () => now });
+  const { user, defaultProject } = await register(store, "dated-projects");
+  const second = store.createProject({ userId: user.id, name: "城市猎人 第7话" });
+
+  const firstSaved = store.saveProjectName({
+    userId: user.id,
+    projectId: defaultProject.id,
+    name: "城市猎人 第7话",
+  });
+  assert.equal(firstSaved.name, "城市猎人 第7话 2026-09-06");
+
+  const repeatedSave = store.saveProjectName({
+    userId: user.id,
+    projectId: defaultProject.id,
+    name: firstSaved.name,
+  });
+  assert.equal(repeatedSave.name, "城市猎人 第7话 2026-09-06");
+
+  const duplicateSaved = store.saveProjectName({
+    userId: user.id,
+    projectId: second.id,
+    name: "城市猎人 第7话",
+  });
+  assert.equal(duplicateSaved.name, "城市猎人 第7话 2026-09-06 (2)");
+  assert.equal(new Set(store.listProjects(user.id).map((project) => project.name)).size, 2);
+});
+
 test("enforces project-scoped resource ownership across tenants", async (t) => {
   const { store } = createFixture(t);
   const alice = await register(store, "alice");

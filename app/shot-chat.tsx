@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export type ShotChatPending = { turnId: string; sourceRevision: string; basePrompt: string; startedAt: string; stage?: string };
+export type ShotChatPending = { turnId: string; sourceRevision: string; basePrompt: string; startedAt: string; writingModelId?: string; stage?: string };
 export type ShotChatMessage = { id: string; role: "user" | "assistant"; text: string; at: string };
 export type ShotChatState = { draft?: string; messages?: ShotChatMessage[]; pending?: ShotChatPending; error?: string; previousPrompt?: string; candidate?: string };
 export type ShotChatResult = { status: string; chatTurnId: string; projectUid: string; shotUid: string; sourceRevision: string; action: "reply" | "revise"; reply: string; prompt: string; generatedAt: string; generatorId: string; generatorProvider: string; stage?: string; message?: string; error?: string };

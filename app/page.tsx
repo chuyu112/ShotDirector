@@ -2634,7 +2634,7 @@ function DirectorDesk() {
   }
 
   function beginTouchWritingModelDrag(event: React.PointerEvent<HTMLSpanElement>, model: WritingModelOption) {
-    if (event.pointerType === "mouse" || !model.available || !bridge.connected || bridge.busy || switchingWritingModelId) return;
+    if (event.pointerType === "mouse" || !model.available || !bridge.connected || switchingWritingModelId) return;
     event.preventDefault();
     event.stopPropagation();
     touchWritingModelPointerRef.current = event.pointerId;
@@ -2671,7 +2671,7 @@ function DirectorDesk() {
   }
 
   async function selectWritingModelOption(model: WritingModelOption) {
-    if (!model.available || !bridge.connected || !bridge.pairingToken || bridge.busy || switchingWritingModelId) return;
+    if (!model.available || !bridge.connected || !bridge.pairingToken || switchingWritingModelId) return;
     if (model.id === activeWritingModel?.id) {
       writingModelMenuRef.current?.removeAttribute("open");
       return;
@@ -2700,7 +2700,7 @@ function DirectorDesk() {
   }
 
   async function selectReasoningEffort(effort: ReasoningEffort) {
-    if (!bridge.connected || !bridge.pairingToken || bridge.busy || switchingReasoningEffort) return;
+    if (!bridge.connected || !bridge.pairingToken || switchingReasoningEffort) return;
     setSwitchingReasoningEffort(true);
     try {
       const response = await bridgeFetch(`${bridgeBase}/reasoning-effort`, {
@@ -3466,9 +3466,9 @@ function DirectorDesk() {
     setToast(`已打开 Shot ${targetShot.id} 的完整提示词讨论稿`);
   }
 
-  function chatContext(currentState: ReviewState, target: ShotReview) {
+  function chatContext(currentState: ReviewState, target: ShotReview, writingModelId = activeWritingModelId) {
     const panelAnnotations = Object.fromEntries((target.shot.sourcePanels || []).map(id => [id, currentState.sourceMangaPanelAnnotations?.[id] || ""]));
-    const input = { projectTitle: currentState.projectTitle, modelId: currentState.generationModel || defaultGenerationModel, writingModelId: activeWritingModelId, globalSettings: currentState.globalSettings, shot: target.shot, shotAnnotations: target.annotations, panelAnnotations, sourceMangaRequestId: currentState.sourceMangaRequestId || "" };
+    const input = { projectTitle: currentState.projectTitle, modelId: currentState.generationModel || defaultGenerationModel, writingModelId, globalSettings: currentState.globalSettings, shot: target.shot, shotAnnotations: target.annotations, panelAnnotations, sourceMangaRequestId: currentState.sourceMangaRequestId || "" };
     return { ...input, generationModel: input.modelId, sourceRevision: buildCompleteShotPromptRevision(input), projectUid: currentState.projectUid, currentPrompt: target.completePrompt || "", allowRevision: !target.approved };
   }
 
@@ -3482,7 +3482,7 @@ function DirectorDesk() {
       if (previous.projectUid !== projectUid) return previous;
       return { ...previous, reviews: previous.reviews.map(item => {
         if (item.shot.shotUid !== shotUid || item.chat?.pending?.turnId !== pending.turnId) return item;
-        const apply = chatReplyCanApply({ projectUid, shotUid, currentPrompt: item.completePrompt || "", currentSourceRevision: chatContext(previous, item).sourceRevision, approved: item.approved, pending, result });
+        const apply = chatReplyCanApply({ projectUid, shotUid, currentPrompt: item.completePrompt || "", currentSourceRevision: chatContext(previous, item, pending.writingModelId || activeWritingModelId).sourceRevision, approved: item.approved, pending, result });
         const notice = result.action === "revise" ? apply ? "\n\n已更新本 Shot 提示词讨论稿，旧稿已保留；请重新严格审核。" : "\n\n本镜内容或锁定状态已经改变，未覆盖正文；候选稿已保留。" : "";
         const chat: ShotChatState = { ...item.chat, pending: undefined, error: undefined,
           messages: [...(item.chat.messages || []), { id: `${pending.turnId}-assistant`, role: "assistant", text: result.reply + notice, at: result.generatedAt }],
@@ -3521,7 +3521,7 @@ function DirectorDesk() {
     if (!mangaSourceRequestId || !shot.sourcePanels?.length) throw new Error("当前 Shot 尚未关联原作画格");
     const context = chatContext(state, review);
     const projectUid = state.projectUid, shotUid = shot.shotUid!;
-    const pending: ShotChatPending = { turnId: crypto.randomUUID(), sourceRevision: context.sourceRevision, basePrompt: review.completePrompt || "", startedAt: new Date().toISOString() };
+    const pending: ShotChatPending = { turnId: crypto.randomUUID(), sourceRevision: context.sourceRevision, basePrompt: review.completePrompt || "", startedAt: new Date().toISOString(), writingModelId: activeWritingModelId };
     const history = (review.chat?.messages || []).slice(-20).map(({ role, text }) => ({ role, text: text.slice(0, 16000) }));
     setState(previous => previous.projectUid !== projectUid ? previous : { ...previous, reviews: previous.reviews.map(item => item.shot.shotUid === shotUid ? { ...item, chat: { ...item.chat, draft: "", pending, error: undefined, messages: [...(item.chat?.messages || []), { id: pending.turnId, role: "user" as const, text: message, at: pending.startedAt }] } } : item) });
     try {
@@ -6435,8 +6435,8 @@ function DirectorDesk() {
                   role="option"
                   aria-selected={model.id === activeWritingModel?.id}
                   className={`${model.id === activeWritingModel?.id ? "active" : ""} ${dragOverWritingModelId === model.id ? "drag-over" : ""}`.trim()}
-                  disabled={!model.available || !bridge.connected || bridge.busy || Boolean(switchingWritingModelId)}
-                  draggable={model.available && bridge.connected && !bridge.busy && !switchingWritingModelId}
+                  disabled={!model.available || !bridge.connected || Boolean(switchingWritingModelId)}
+                  draggable={model.available && bridge.connected && !switchingWritingModelId}
                   title={model.available ? `使用 ${model.label}` : model.reason || "待接入"}
                   onDragStart={(event) => {
                     draggedWritingModelIdRef.current = model.id;
@@ -6495,7 +6495,7 @@ function DirectorDesk() {
             <select
               aria-label="Chat / Work 推理深度"
               value={selectedReasoningEffort}
-              disabled={!bridge.connected || bridge.busy || switchingReasoningEffort}
+              disabled={!bridge.connected || switchingReasoningEffort}
               onChange={(event) => void selectReasoningEffort(event.target.value as ReasoningEffort)}
             >
               <option value="low">LOW · 快速</option>

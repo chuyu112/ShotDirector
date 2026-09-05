@@ -103,7 +103,7 @@ test("stable recovery identity rejects ambiguous requests", () => {
   }
 });
 
-test("bridge shares the five-Shot queue across Creator and isolated Reviewer", async () => {
+test("bridge shares the five-Shot queue while binding each task to its submission-time model", async () => {
   const source = await readFile(bridgePath, "utf8");
 
   assert.match(source, /return withCompletePromptJob\(identity,/);
@@ -118,9 +118,12 @@ test("bridge shares the five-Shot queue across Creator and isolated Reviewer", a
     /function hasActiveWritingModelWork\(\)[\s\S]*?shuttingDown[\s\S]*?activeCompletePromptJobs\.size[\s\S]*?activeArtworkJobs\.size[\s\S]*?activeAssetJobs\.size[\s\S]*?activeMediaJobs\.size[\s\S]*?libtvLoginPromise/,
   );
   assert.match(source, /busy:\s*hasActiveWritingModelWork\(\)/);
-  assert.match(source, /if \(hasActiveWritingModelWork\(\)\)[\s\S]*?完成后再切换/);
+  assert.doesNotMatch(source, /if \(hasActiveWritingModelWork\(\)\)[\s\S]*?完成后再切换/);
   assert.match(source, /const shotWorkScheduler = new ShotWorkScheduler\(\)/);
-  assert.match(source, /writingModelId: aiProvider, writingModelLabel: primaryModelLabel/);
+  assert.match(source, /const writingModelTaskContext = new AsyncLocalStorage\(\)/);
+  assert.match(source, /const taskRuntime = writingRuntimeContext\(\);[\s\S]*?writingModelTaskContext\.run\(taskRuntime/);
+  assert.match(source, /shotWorkScheduler\.run\(job, \(\) => writingModelTaskContext\.run\(taskRuntime/);
+  assert.match(source, /writingModelId: taskRuntime\.selectionId, writingModelLabel: taskRuntime\.label/);
   assert.match(source, /Chat \/ Work 模型已变化，请按当前模型重新提交/);
   assert.match(source, /reviewer\.runtimeProvider\.generate\(/);
   assert.doesNotMatch(source, /CODEX_HOME|codex-cli/);

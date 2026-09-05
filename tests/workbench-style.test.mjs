@@ -10,6 +10,7 @@ test('workbench theme uses equal header controls and responsive layout without c
   assert.match(page, /className="topbar-control-group"/);
   assert.match(css, /\.topbar-control-group \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(css, /height: var\(--header-control-height\)/);
+  assert.match(css, /\.app-shell \.desk-mode-switch button\.active,[\s\S]*?background: var\(--blue\);[\s\S]*?color: #fff/);
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.topbar-control-group \{ grid-template-columns: 1fr/);
   assert.match(css, /prefers-reduced-motion/);
   assert.doesNotMatch(css, /(?:object-fit|transform:\s*scale|\.media-panel-box[^\n]*\{)/);

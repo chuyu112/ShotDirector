@@ -48,13 +48,20 @@ export async function persistProjectSnapshot({ fetcher, apiBase, snapshot, scope
     if (!response.ok || result.status === "agent-revision-required") {
       throw new Error(result.error || `${stage}失败，请检查连接或加载最新版本后重试。`);
     }
+    return result;
   }
   await post("/draft-state", { scopeId, storageKey, state: snapshot, appliedAgentRevision }, "正在保存项目内容…");
   if (!materialDraftMode) {
     await post("/source-global-settings", { projectTitle: snapshot.projectTitle, workspaceScope, settings: snapshot.globalSettings }, "正在保存项目设定…");
   }
+  let savedProjectName = snapshot.projectTitle;
   if (serverProjectId) {
-    await post("/projects/rename", { projectId: serverProjectId, name: snapshot.projectTitle }, "正在保存项目名称…");
+    const result = await post("/projects/rename", {
+      projectId: serverProjectId,
+      name: snapshot.projectTitle,
+      appendDate: true,
+    }, "正在保存项目名称…");
+    savedProjectName = result?.project?.name || savedProjectName;
   }
-  return `项目《${snapshot.projectTitle}》已保存${serverProjectId ? "到服务器" : "到本地"}`;
+  return `项目《${savedProjectName}》已保存${serverProjectId ? "到服务器" : "到本地"}`;
 }

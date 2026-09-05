@@ -592,7 +592,13 @@ export function createManjingGateway({
       }
       if (req.method === "POST" && path === "/projects/rename") {
         const payload = await readJson(req);
-        const project = store.renameProject({
+        const project = payload.appendDate
+          ? store.saveProjectName({
+            userId: session.user.id,
+            projectId: payload.projectId,
+            name: payload.name,
+          })
+          : store.renameProject({
           userId: session.user.id,
           projectId: payload.projectId,
           name: payload.name,

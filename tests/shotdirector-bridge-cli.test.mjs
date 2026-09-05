@@ -74,10 +74,10 @@ test("public text generation is API-only and keeps provider transport explicit",
 test("compatible providers force requested research supplement off and reject claimed sources", async () => {
   const source = await readFile(bridgePath, "utf8");
 
-  assert.match(source, /return primarySupportsWebSearch \? requestedMode : "off"/);
+  assert.match(source, /return currentWritingRuntimeContext\(\)\.supportsWebSearch \? requestedMode : "off"/);
   assert.match(source, /downgraded: requestedMode === "supplement" && effectiveMode === "off"/);
   assert.match(source, /不得声称已搜索，不得编造查询、来源或事实引用/);
-  assert.match(source, /if \(!primarySupportsWebSearch\) \{[\s\S]*research\.used \|\| research\.queries\.length \|\| research\.sources\.length \|\| research\.notes\.length/);
+  assert.match(source, /if \(!currentWritingRuntimeContext\(\)\.supportsWebSearch\) \{[\s\S]*research\.used \|\| research\.queries\.length \|\| research\.sources\.length \|\| research\.notes\.length/);
   assert.match(source, /committed\.researchPolicy = mediaResearchPolicy\(payload\)/);
 });
 

@@ -79,7 +79,7 @@ npm run lint
 - 必须增加跨 provider 回归验收：同一批漫画分别走 GLM、Kimi、GPT 或测试替身时，断言阅读顺序和画格覆盖不变，并验证 Kimi 截断、技术分批和重试不会额外增加 Shot 或打散原有 `sourcePanels`。
 - 漫画工作流必须先让用户审核、合并或删除 Shot。生成完整提示词只产生“讨论稿”，绝不自动批准。讨论稿必须交给一个全新、隔离的 Reviewer 任务审查；Reviewer 只返回问题、建议和“可讨论／需修改”结论，不能改写原提示词、不能自动应用修改、不能替用户批准。只有用户本人明确点击签字盖章，才批准并解锁该 Shot。
 - Reviewer 使用可扩展注册表，当前对齐翠易的 5 个审核模型：Kimi K3、GLM 5.3、JK GPT-5.6 Sol、JK Gemini 3.8 Flash、JK Claude Opus 5。Creator 与 Reviewer 的选择、会话和运行记录必须完全分开；Reviewer 下拉框绝不代表 Creator 模型。每次结果必须保存请求模型、实际响应模型、provider 和 usage；人工改稿必须使旧审查过期。
-- 顶部“Chat / Work 模型”目录对齐翠易的 10 个 API 模型：GLM-5.3-Flash、Kimi K3、DeepSeek V4 Flash、DeepSeek V4 Pro、Seed 2.1 Pro、JK GPT-5.6 Sol、JK GPT-5.6 Luna、JK Gemini 3.8 Flash、JK Claude Opus 5、JK Claude Sonnet 5。用户可按项目保存显示顺序；未配置或未验收的模型必须明确显示不可用原因，不得静默 fallback。旧项目保存的 `codex-gpt-5.6-sol`／`gpt-5.6-sol` 必须原地迁移为 `jk-gpt-5.6-sol`，`codex-gpt-5.6-luna`／`gpt-5.6-luna` 必须原地迁移为 `jk-gpt-5.6-luna`；旧标识不得继续留在项目文件中，也不能再调用 Codex CLI。任务进行中禁止切换，避免同一 Run 混用模型。
+- 顶部“Chat / Work 模型”目录对齐翠易的 10 个 API 模型：GLM-5.3-Flash、Kimi K3、DeepSeek V4 Flash、DeepSeek V4 Pro、Seed 2.1 Pro、JK GPT-5.6 Sol、JK GPT-5.6 Luna、JK Gemini 3.8 Flash、JK Claude Opus 5、JK Claude Sonnet 5。用户可按项目保存显示顺序；未配置或未验收的模型必须明确显示不可用原因，不得静默 fallback。旧项目保存的 `codex-gpt-5.6-sol`／`gpt-5.6-sol` 必须原地迁移为 `jk-gpt-5.6-sol`，`codex-gpt-5.6-luna`／`gpt-5.6-luna` 必须原地迁移为 `jk-gpt-5.6-luna`；旧标识不得继续留在项目文件中，也不能再调用 Codex CLI。多 Agent 任务执行或排队时仍允许切换顶部模型；每个任务必须绑定提交瞬间的模型、provider 与推理深度，运行中不变，新的选择只影响之后提交的任务。
 - 历史提示词稿保留实际生成时的模型身份，不随当前下拉选择改写；新生成稿必须记录实际 API provider，并在界面以目录商品名加 `API` 显示。顶部模型与推理深度控件遵循漫镜白底、黑框、蓝色选中态的视觉体系，不复用其他产品的深绿色皮肤。
 - 完整提示词任务指纹必须包含当前 Chat / Work 模型 ID；切换模型后点击重新生成必须创建新版本，不能因视频模型、画格和文本未变而复用旧任务。生成中显示目标模型与开始时间，保留上一版正文并明确标记；完成后显示实际模型与完成时间。同一任务重复点击应恢复运行状态，不得把 409 误写成生成失败。
 - Reviewer 报告必须绑定完整提示词文本、来源版本和 Reviewer ID。提示词、画格组合、时长、批注或 Reviewer 选择发生变化时，旧报告立即过期，并撤销尚未重新确认的批准状态；前端和桥接后端都必须校验版本，不能只靠界面禁用。
@@ -112,6 +112,7 @@ npm run lint
 
 - UI 维护先阅读 `docs/UI设计规范.md`。公共层 `workbench.css` 与设置层 `settings-workbench.css` 负责视觉，不能用泛化的 `header span` 等选择器误伤品牌或状态；正文 14px、辅助 12px、标签 11px，按内容分层而不是缩放整页。手机生产流程保留横向浏览，不展开七行挤走主任务；长模型名、生成时间、菜单和禁用原因必须可读。响应式验收必须包含中间宽度（900px），不能只测大屏和手机。
 - 顶部“加载项目”切换服务器项目后必须导航回根入口，由项目自己的最近工作区指针恢复具体漫画草稿；禁止保留当前页面的 `?main=1`，否则会把空白模板误显示为已加载项目。
+- 服务器“保存项目”必须把项目列表名称规范为“作品名 YYYY-MM-DD”，日期固定按 Asia/Shanghai 计算；同一项目重复保存不得反复追加日期，不同项目同日同名时依次追加 ` (2)`、` (3)`。日期只属于项目目录显示名，不得修改漫画正文中的作品标题、提示词内容或素材存储键。
 
 - 漫镜视觉定位为「漫画 → 分镜提示词 → AI 视频」的工具工作台。公共外观统一在 `app/workbench.css`：中性纸白面板、深色导航、蓝色主操作与选中态；红／黄／绿保留错误、人工选择／警告、批准等语义。顶部三组控制同宽同高，窄屏整体换行；不得缩放漫画本身或改裁框坐标来迁就 UI。LLM 测试始终仅人工点击触发，加载、刷新、切换模型及失败均不得自动调用；状态轮询只读。
 

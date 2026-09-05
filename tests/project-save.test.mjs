@@ -21,9 +21,14 @@ test("successful save acknowledges writes only, preserves snapshots and reports 
       assert.equal(body.state.reviews[0].completePrompt, "keep");
       assert.equal(body.appliedAgentRevision, "v2");
     }
+    if (url.endsWith("projects/rename")) {
+      assert.equal(body.appendDate, true);
+      return Response.json({ status: "saved", project: { name: "城市猎人 2026-09-06" } });
+    }
     return Response.json({ status: "saved" });
   } });
   assert.match(result, /已保存到服务器/);
+  assert.match(result, /城市猎人 2026-09-06/);
   assert.deepEqual(calls, ["/api/draft-state", "/api/projects/rename"]);
   assert.equal(stages.length, 2);
   assert.equal(JSON.stringify(input.snapshot), before);

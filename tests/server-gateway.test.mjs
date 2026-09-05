@@ -293,6 +293,14 @@ test("gateway stores reusable global files at user level across projects", async
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).project.name, "城市猎人 第6话");
+
+  response = await fetch(`${base}/projects/rename`, {
+    method: "POST",
+    headers: { Cookie: episode7Cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId: episode7.id, name: "城市猎人 第7话", appendDate: true }),
+  });
+  assert.equal(response.status, 200);
+  assert.match((await response.json()).project.name, /^城市猎人 第7话 \d{4}-\d{2}-\d{2}$/u);
 });
 
 test("gateway rejects cross-site state changes before reading credentials", async (t) => {

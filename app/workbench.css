@@ -34,6 +34,16 @@
 .topbar-control-group .desk-mode-switch button { min-width: 0; min-height: 0; align-content: center; padding: 6px 8px; border-radius: 2px; }
 .topbar-control-group .desk-mode-switch b { font-size: 13px; }
 .topbar-control-group .desk-mode-switch small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.4; }
+.app-shell .desk-mode-switch button.active,
+.app-shell .desk-mode-switch button[aria-selected="true"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.app-shell .desk-mode-switch button:not(.active):not([aria-selected="true"]):hover {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
 .topbar-control-group .writing-model-picker > summary {
   height: 100%; min-height: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px;
   align-content: center; padding: 8px 12px; border-color: var(--line-strong); border-radius: var(--control-radius);

@@ -269,7 +269,7 @@ test("confirmed Shot prompt inspects panels and keeps verifiable research eviden
   assert.match(bridge, /completeShotPromptAgentPrompt/);
   assert.match(bridge, /createMangaPanelCrop/);
   assert.match(bridge, /view_image/);
-  assert.match(bridge, /webSearch: primarySupportsWebSearch \? "live" : "disabled"/);
+  assert.match(bridge, /webSearch: taskRuntime\.supportsWebSearch \? "live" : "disabled"/);
   assert.match(bridge, /当前任务没有提供联网工具/);
   assert.match(bridge, /不得声称已经搜索、不得伪造来源/);
   assert.match(bridge, /"\/complete-shot-prompt": generateCompleteShotPrompt/);

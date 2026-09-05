@@ -345,6 +345,9 @@ test("server production chain covers five-shot manga workflow without paid APIs"
   const root = mkdtempSync(join(tmpdir(), "manjing-production-chain-"));
   const dataRoot = join(root, "data");
   const modelCalls = [];
+  let markPinnedModelCallStarted;
+  let releasePinnedModelResponse;
+  const pinnedModelCallStarted = new Promise((resolveStarted) => { markPinnedModelCallStarted = resolveStarted; });
   const fakeModel = createServer((req, res) => {
     let raw = "";
     req.setEncoding("utf8");
@@ -400,25 +403,33 @@ test("server production chain covers five-shot manga workflow without paid APIs"
           reasoningEffort: body.reasoning_effort,
           prompt,
         });
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          id: `chatcmpl-${modelCalls.length}`,
-          model: body.model,
-          choices: [{
-            index: 0,
-            message: {
-              role: "assistant",
-              content: null,
-              tool_calls: [{
-                id: `call-${modelCalls.length}`,
-                type: "function",
-                function: { name: tools[0].function.name, arguments: JSON.stringify(output) },
-              }],
-            },
-            finish_reason: "tool_calls",
-          }],
-          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-        }));
+        const respond = () => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            id: `chatcmpl-${modelCalls.length}`,
+            model: body.model,
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [{
+                  id: `call-${modelCalls.length}`,
+                  type: "function",
+                  function: { name: tools[0].function.name, arguments: JSON.stringify(output) },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          }));
+        };
+        if (prompt.includes("MODEL_SWITCH_SNAPSHOT")) {
+          releasePinnedModelResponse = respond;
+          markPinnedModelCallStarted();
+          return;
+        }
+        respond();
       } catch (error) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : "fake model failure" } }));
@@ -891,6 +902,19 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.deepEqual(result.payload.shotWork, { limit: 5, active: 0, queued: 0 });
 
     const callsBeforeSwitch = modelCalls.length;
+    const pinnedLoadRequest = jsonRequest(base, "/api/load-script", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: {
+        fileName: "model-snapshot-check.md",
+        content: `${analyzed.result.scriptMarkdown}\n\nMODEL_SWITCH_SNAPSHOT`,
+        sourceType: "file",
+        generationModel: "seedance-2.5",
+        defaultArtStyle: finalArtStyle,
+      },
+    });
+    await pinnedModelCallStarted;
+    assert.equal(modelCalls.at(-1).model, fakeGlmModel, "running task must start with the submission-time model");
     result = await jsonRequest(base, "/api/writing-model", {
       method: "POST",
       cookie: ownerCookie,
@@ -899,6 +923,10 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.equal(result.response.status, 200);
     assert.equal(result.payload.modelProvider.id, "kimi");
     assert.equal(result.payload.writingModels.find(({ id }) => id === "kimi-k3").selected, true);
+    assert.equal(typeof releasePinnedModelResponse, "function");
+    releasePinnedModelResponse();
+    const pinnedLoadResult = await pinnedLoadRequest;
+    assert.equal(pinnedLoadResult.response.status, 200, JSON.stringify(pinnedLoadResult.payload));
 
     result = await jsonRequest(base, "/api/load-script", {
       method: "POST",
@@ -914,11 +942,13 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.equal(result.response.status, 200);
     assert.equal(result.payload.projectTitle, projectTitle);
     const switchedCalls = modelCalls.slice(callsBeforeSwitch);
-    assert.equal(switchedCalls.length, 1);
+    assert.equal(switchedCalls.length, 2);
     assert.equal(switchedCalls[0].schemaName, "script-load");
-    assert.equal(switchedCalls[0].model, fakeKimiModel);
-    assert.equal(switchedCalls[0].maxTokens, undefined);
-    assert.equal(switchedCalls[0].maxCompletionTokens, 16_384);
+    assert.equal(switchedCalls[0].model, fakeGlmModel, "running task must remain pinned after the UI selection changes");
+    assert.equal(switchedCalls[1].schemaName, "script-load");
+    assert.equal(switchedCalls[1].model, fakeKimiModel, "new task must use the newly selected model");
+    assert.equal(switchedCalls[1].maxTokens, undefined);
+    assert.equal(switchedCalls[1].maxCompletionTokens, 16_384);
 
     result = await jsonRequest(base, "/api/health", { cookie: otherCookie });
     assert.equal(result.response.status, 200);

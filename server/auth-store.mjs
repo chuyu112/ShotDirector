@@ -33,6 +33,8 @@ const DUMMY_PASSWORD_HASH = Buffer.alloc(PASSWORD_KEY_BYTES, 0xa5);
 const DEFAULT_COOKIE_NAME = "manjing_session";
 const DEFAULT_MAX_ACTIVE_SESSIONS = 8;
 const USER_ROLES = new Set(["user", "superadmin"]);
+const PROJECT_SAVE_TIME_ZONE = "Asia/Shanghai";
+const PROJECT_SAVE_SUFFIX_RE = /\s+\d{4}-\d{2}-\d{2}(?:\s+\(\d+\))?$/u;
 
 export class AuthStoreError extends Error {
   constructor(message, { code = "AUTH_STORE_ERROR", status = 500, cause } = {}) {
@@ -118,6 +120,24 @@ function normalizeProjectName(value) {
     throw new AuthValidationError("项目名长度必须在 1–120 个字符之间");
   }
   return name;
+}
+
+function projectSaveDate(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PROJECT_SAVE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function fitProjectName(baseName, suffix) {
+  const suffixLength = Array.from(suffix).length;
+  const maximumBaseLength = Math.max(1, 120 - suffixLength);
+  const base = Array.from(baseName).slice(0, maximumBaseLength).join("").trimEnd();
+  return `${base}${suffix}`;
 }
 
 function normalizeResourceKey(value, label) {
@@ -684,6 +704,47 @@ export class ManjingAuthStore {
     `).run(projectName, this.#timestamp(), id, ownerUserId);
     if (Number(result.changes) !== 1) throw new AuthNotFoundError("项目不存在");
     return this.getProjectById(id, { userId: ownerUserId });
+  }
+
+  saveProjectName({ userId, projectId, name } = {}) {
+    this.#assertOpen();
+    const ownerUserId = normalizeId(userId, "用户 ID");
+    const id = normalizeId(projectId, "项目 ID");
+    const requestedName = normalizeProjectName(name);
+    const baseName = requestedName.replace(PROJECT_SAVE_SUFFIX_RE, "").trim() || requestedName;
+    const now = this.#timestamp();
+    const date = projectSaveDate(now);
+
+    return this.#transaction(() => {
+      const current = this.database.prepare(`
+        SELECT * FROM projects
+        WHERE id = ? AND owner_user_id = ?
+      `).get(id, ownerUserId);
+      if (!current) throw new AuthNotFoundError("项目不存在");
+
+      const occupiedNames = new Set(this.database.prepare(`
+        SELECT name FROM projects
+        WHERE owner_user_id = ? AND id <> ?
+      `).all(ownerUserId, id).map((row) => row.name));
+      let sequence = 1;
+      let suffix = ` ${date}`;
+      let projectName = fitProjectName(baseName, suffix);
+      while (occupiedNames.has(projectName)) {
+        sequence += 1;
+        suffix = ` ${date} (${sequence})`;
+        projectName = fitProjectName(baseName, suffix);
+      }
+
+      this.database.prepare(`
+        UPDATE projects
+        SET name = ?, updated_at = ?
+        WHERE id = ? AND owner_user_id = ?
+      `).run(projectName, now, id, ownerUserId);
+      return mapProject(this.database.prepare(`
+        SELECT * FROM projects
+        WHERE id = ? AND owner_user_id = ?
+      `).get(id, ownerUserId));
+    });
   }
 
   listGlobalFiles(userId) {

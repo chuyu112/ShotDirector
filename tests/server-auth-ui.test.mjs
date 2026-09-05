@@ -40,7 +40,8 @@ test("writing model picker mirrors the env-driven API-only catalog and only swit
   assert.doesNotMatch(page, /Codex · GPT-5\.6 Sol/);
   assert.match(page, /writingModels: Array\.isArray\(value\.writingModels\)/);
   assert.match(page, /bridgeBase}\/writing-model/);
-  assert.match(page, /disabled=\{!model\.available \|\| !bridge\.connected \|\| bridge\.busy/);
+  assert.match(page, /disabled=\{!model\.available \|\| !bridge\.connected \|\| Boolean\(switchingWritingModelId\)\}/);
+  assert.doesNotMatch(page, /disabled=\{!model\.available \|\| !bridge\.connected \|\| bridge\.busy/);
   assert.match(page, /draggable=\{model\.available && bridge\.connected/);
   assert.match(page, /manjing-writing-model-order:v1/);
   assert.match(page, /moveWritingModelBefore/);
