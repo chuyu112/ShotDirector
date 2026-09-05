@@ -14,7 +14,7 @@ export function safeUsage(value) {
 
 export function providerFailure(label, { status, payload, limit, code } = {}) {
   const finishReason = payload?.stop_reason || payload?.choices?.[0]?.finish_reason;
-  const truncated = code === 'output_limit' || finishReason === 'length' || finishReason === 'max_tokens';
+  const truncated = code === 'output_limit' || (!code && (finishReason === 'length' || finishReason === 'max_tokens'));
   const reason = truncated ? `输出达到 Token 上限（本次预算 ${limit}），未接受截断报告`
     : status === 504 ? '上游 API 返回 HTTP 504（网关超时）'
       : status ? `API 返回 HTTP ${status}` : '响应流中断或未返回完整结束标记';
@@ -115,7 +115,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
     }
   }
   const finish = anthropic ? payload.stop_reason : payload.choices[0].finish_reason;
-  if (!ended || !finish) throw providerFailure(label, { payload });
+  if (!ended || !finish) throw providerFailure(label, { payload, code: 'incomplete_stream' });
   if (anthropic && finish !== 'max_tokens') {
     payload.content = [...blocks.values()].map(block => {
       if (block.type === 'text') return block;

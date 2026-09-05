@@ -42,6 +42,9 @@ test('Anthropic stream assembles tool JSON and requires message_stop', async () 
 });
 
 test('truncation and HTTP failures retain safe diagnosis without accepting partial JSON', async () => {
+  await assert.rejects(readProviderResponse(sse([
+    { choices: [{ finish_reason: 'length', delta: {} }] },
+  ]), { protocol: 'chat', label: 'GLM' }), e => e.code === 'incomplete_stream');
   const result = await readProviderResponse(sse([
     { type: 'message_start', message: { id: 'msg_x' } },
     { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', name: 'result' } },
