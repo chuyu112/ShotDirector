@@ -32,7 +32,7 @@ export function providerFailure(label, { status, payload, limit, code } = {}) {
   return error;
 }
 
-async function* events(response) {
+async function* events(response, label, payload) {
   if (!response.body) throw providerFailure('模型');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -40,7 +40,9 @@ async function* events(response) {
   let total = 0;
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await reader.read().catch(() => {
+        throw providerFailure(label, { code: 'incomplete_stream', payload });
+      });
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       total += value?.byteLength || 0;
       if (total > 16 * 1024 * 1024) throw providerFailure('模型', { code: 'response_too_large' });
@@ -71,7 +73,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
   const blocks = new Map();
   let ended = false;
   let lastProgress = 0;
-  for await (const data of events(response)) {
+  for await (const data of events(response, label, payload)) {
     if (data === '[DONE]') { ended = !anthropic; break; }
     let event;
     try { event = JSON.parse(data); } catch { throw providerFailure(label); }

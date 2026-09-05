@@ -42,6 +42,8 @@ test('Anthropic stream assembles tool JSON and requires message_stop', async () 
 });
 
 test('truncation and HTTP failures retain safe diagnosis without accepting partial JSON', async () => {
+  const brokenStream = new Response(new ReadableStream({ start(controller) { controller.error(new Error('terminated')); } }), { headers: { 'content-type': 'text/event-stream' } });
+  await assert.rejects(readProviderResponse(brokenStream, { protocol: 'anthropic', label: 'Claude' }), e => e.code === 'incomplete_stream' && /响应流中断/.test(e.message));
   await assert.rejects(readProviderResponse(sse([
     { choices: [{ finish_reason: 'length', delta: {} }] },
   ]), { protocol: 'chat', label: 'GLM' }), e => e.code === 'incomplete_stream');
