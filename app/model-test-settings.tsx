@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
+import { modelTestStatusLabel } from './model-test-status.mjs';
+import { MODEL_TEST_CASE_ID, MODEL_TEST_EXPECTED, MODEL_TEST_RULES } from './model-test-contract.mjs';
 
 type TestRow = { id: string; label: string; model: string; provider: string; available: boolean; reason?: string; result?: { status: string; requestedModel: string; actualModel?: string; startedAt?: string; finishedAt?: string; durationMs?: number; error?: string } };
 type TestState = { round?: { id: string; status: string }; models: TestRow[] };
-const labels: Record<string, string> = { queued: '排队中', running: '测试中', succeeded: '通过', failed: '失败', skipped: '跳过', interrupted: '已中断' };
 
 export function ModelTestSettings({ base, request, pairingToken }: { base: string; request: (url: string, init?: RequestInit) => Promise<Response>; pairingToken?: string }) {
   const [state, setState] = useState<TestState>({ models: [] });
@@ -44,9 +45,10 @@ export function ModelTestSettings({ base, request, pairingToken }: { base: strin
   return <section className="model-test-settings" aria-label="LLM 模型测试">
     <header><div><span>API DIAGNOSTICS</span><h2>LLM 模型测试</h2></div><button type="button" className="button primary" disabled={submitting || running || !state.models.some(m => m.available)} onClick={() => void start(state.models.filter(m => m.available).map(m => m.id))}>{running ? '本轮测试中…' : submitting ? '提交中…' : '测试全部模型'}</button></header>
     <p>手动发起真实 API 小请求，会产生少量 Token 用量。LOW 推理 · 每模型一次 · 最多两个并发 · 单模型最长 90 秒。不修改项目、Shot 或当前模型选择，不自动重试。</p>
-    <p>通过仅表示本次文字连通性与格式校验正常，不代表图片能力、长任务或 MAX 严格审核已通过。</p>
+    <p>接口正常　格式正常✅ · 接口正常　格式错误⚠️ · 接口错误　格式错误❌。接口正常只表示收到本次完整响应；格式错误不会禁用模型。接口报错时无法完成格式校验。结果不代表图片能力、长任务或 MAX 严格审核已通过。</p>
     {error && <p role="alert" className="model-test-error">{error}</p>}
     {readError && <p role="alert" className="model-test-error">{readError}</p>}
-    <div className="model-test-table"><table><thead><tr><th>模型</th><th>测试状态</th><th>请求 / 实际模型</th><th>耗时</th><th>测试时间</th><th>失败原因</th><th>操作</th></tr></thead><tbody>{state.models.map(model => { const r = model.result; return <tr key={model.id}><td>{model.label}<small>{model.provider}</small></td><td>{r ? labels[r.status] || r.status : model.available ? '未测试' : '未配置'}</td><td>{r?.requestedModel || model.model}<small>{r?.actualModel || '尚无实际响应模型'}</small></td><td>{typeof r?.durationMs === 'number' ? `${(r.durationMs / 1000).toFixed(1)} 秒` : '—'}</td><td>{r?.finishedAt || r?.startedAt ? new Date(r.finishedAt || r.startedAt!).toLocaleString('zh-CN') : '—'}</td><td>{r?.error || (!model.available ? model.reason : '') || '—'}</td><td><button type="button" className="button secondary" disabled={submitting || running || !model.available} onClick={() => void start([model.id])}>重测</button></td></tr>; })}</tbody></table></div>
+    <details><summary>测试题与回答要求（{MODEL_TEST_CASE_ID}）</summary><p>{MODEL_TEST_RULES}</p><pre>{MODEL_TEST_EXPECTED}</pre><p>仅判断本次响应；历史测试使用的规则可能不同，不会自动重发测试。</p></details>
+    <div className="model-test-table"><table><thead><tr><th>模型</th><th>测试状态</th><th>请求 / 实际模型</th><th>耗时</th><th>测试时间</th><th>结果说明</th><th>操作</th></tr></thead><tbody>{state.models.map(model => { const r = model.result; return <tr key={model.id}><td>{model.label}<small>{model.provider}</small></td><td>{modelTestStatusLabel(r, model.available)}</td><td>{r?.requestedModel || model.model}<small>{r?.actualModel || '尚无实际响应模型'}</small></td><td>{typeof r?.durationMs === 'number' ? `${(r.durationMs / 1000).toFixed(1)} 秒` : '—'}</td><td>{r?.finishedAt || r?.startedAt ? new Date(r.finishedAt || r.startedAt!).toLocaleString('zh-CN') : '—'}</td><td>{r?.error || (!model.available ? model.reason : '') || '—'}</td><td><button type="button" className="button secondary" disabled={submitting || running || !model.available} onClick={() => void start([model.id])}>重测</button></td></tr>; })}</tbody></table></div>
   </section>;
 }

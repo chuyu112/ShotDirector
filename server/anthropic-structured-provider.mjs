@@ -1,6 +1,6 @@
-import { readProviderResponse, providerFailure, safeUsage } from './provider-response.mjs';
+import { readProviderResponse, providerFailure, providerFormatFailure, safeUsage } from './provider-response.mjs';
 
-const DEFAULT_BASE_URL = "https://api.highwayapi.ai/openai";
+const DEFAULT_BASE_URL = "https://api.highwayapi.ai/anthropic/v1";
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const MAX_OUTPUT_TOKENS = 65_536;
@@ -23,7 +23,12 @@ function normalizedMessagesUrl(value, allowedHosts) {
   if (local && base.protocol !== "http:" && base.protocol !== "https:") throw new Error("本地测试 API 只支持 HTTP 或 HTTPS");
   if (!local && !allowedHosts.includes(base.hostname)) throw new Error("JK Claude API 必须使用受信域名");
   if (base.username || base.password) throw new Error("JK Claude API 地址不能包含账号或密码");
-  return `${base.origin}/anthropic/v1/messages`;
+  if (base.search || base.hash) throw new Error("JK Claude API 地址不能包含查询参数或片段");
+  const path = base.pathname.replace(/\/+$/, "");
+  if (!["/anthropic", "/anthropic/v1", "/anthropic/v1/messages"].includes(path)) {
+    throw new Error("JK Claude 必须配置独立的 Anthropic Base URL（/anthropic/v1），不能使用 OpenAI 地址");
+  }
+  return `${base.origin}${path === "/anthropic" ? `${path}/v1/messages` : path.endsWith("/messages") ? path : `${path}/messages`}`;
 }
 
 function safeSchemaName(value) {
@@ -58,11 +63,13 @@ function parsedJsonText(value) {
   }
 }
 
-function structuredResult(payload, toolName) {
+function structuredResult(payload, toolName, diagnosticRawText = false) {
   const toolBlocks = (Array.isArray(payload?.content) ? payload.content : []).filter((item) => (
     item?.type === "tool_use" && item?.name === toolName
   ));
   if (toolBlocks.length > 1) throw new Error("JK Claude 返回了多个结构化工具结果");
+  if (diagnosticRawText) return toolBlocks.length === 1 ? JSON.stringify(toolBlocks[0].input)
+    : (payload?.content || []).filter((item) => item?.type === 'text').map((item) => item.text || '').join('');
   const value = toolBlocks.length === 1
     ? toolBlocks[0].input
     : parsedJsonText((payload?.content || []).filter((item) => item?.type === "text").map((item) => item.text || "").join(""));
@@ -95,6 +102,7 @@ export class AnthropicStructuredProvider {
 
   async generate({
     prompt,
+    diagnosticRawText = false,
     instructions,
     systemPrompt,
     model,
@@ -150,8 +158,12 @@ export class AnthropicStructuredProvider {
     }
     const payload = await readProviderResponse(response, { protocol: 'anthropic', label: this.label, onProgress });
     if (payload?.stop_reason === "max_tokens") throw providerFailure(this.label, { payload, limit: body.max_tokens });
+    if (diagnosticRawText && (!payload?.stop_reason || !Array.isArray(payload.content))) throw providerFailure(this.label, { payload });
+    let text;
+    try { text = structuredResult(payload, toolName, diagnosticRawText); }
+    catch { throw providerFormatFailure(payload); }
     return {
-      text: structuredResult(payload, toolName),
+      text,
       responseId: payload.id,
       reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: String(payload.model || body.model),

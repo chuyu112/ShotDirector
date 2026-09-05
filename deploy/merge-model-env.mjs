@@ -44,6 +44,19 @@ function normalizedJiekouOpenAiBase(value) {
   return `${url.origin}/openai`;
 }
 
+function jiekouAnthropicBase(sources) {
+  const value = sources.flatMap((source) => [source.get("MANJING_JIEKOU_ANTHROPIC_BASE_URL"), source.get("JIEKOU_ANTHROPIC_BASE_URL")])
+    .find((item) => String(item || "").trim());
+  const url = new URL(String(value || "https://api.highwayapi.ai/anthropic/v1").trim());
+  const path = url.pathname.replace(/\/+$/, "");
+  if (url.protocol !== "https:" || !["api.jiekou.ai", "api.highwayapi.ai"].includes(url.hostname)
+    || url.username || url.password || url.search || url.hash
+    || !["/anthropic", "/anthropic/v1", "/anthropic/v1/messages"].includes(path)) {
+    throw new Error("JK Claude 必须配置受信的独立 Anthropic Base URL（/anthropic/v1）");
+  }
+  return `${url.origin}/anthropic/v1`;
+}
+
 function mergeLines(baseText, updates) {
   const emitted = new Set();
   const lines = String(baseText || "").split(/\r?\n/u).flatMap((line) => {
@@ -117,6 +130,7 @@ if (jiekouApiKey && !koOnly) {
   updates.set("MANJING_JIEKOU_API_KEY", jiekouApiKey);
   updates.set("MANJING_JIEKOU_BASE_URL", jiekouOpenAiBase);
   updates.set("MANJING_JIEKOU_RESPONSES_BASE_URL", `${jiekouOpenAiBase}/v1`);
+  updates.set("MANJING_JIEKOU_ANTHROPIC_BASE_URL", jiekouAnthropicBase([jiekouEnv, deployEnv, runner, base]));
 }
 
 if (allowedOrigin && !koOnly) {

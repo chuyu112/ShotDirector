@@ -1,8 +1,7 @@
 import { runPersistentManjingAgentTurn } from '../runner/manjing-harness-store.mjs';
 import { modelTestFailureMessage } from './model-tests.mjs';
+import { MODEL_TEST_PROMPT as prompt, MODEL_TEST_SCHEMA as schema, MODEL_TEST_RULES, modelTestFormatMatches } from '../app/model-test-contract.mjs';
 
-const prompt = '这是独立 API 文字连通性测试，不是项目或 Shot 创作任务。不访问文件或网络，不调用其他工具。仅按结构化输出要求返回 {"ok":true}。';
-const schema = { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean', const: true } } };
 
 export async function runModelProbe(store, model, { signal, requestId, timeoutMs }) {
   let metadata;
@@ -14,14 +13,18 @@ export async function runModelProbe(store, model, { signal, requestId, timeoutMs
       try {
         if (called) throw new Error('Probe cannot repeat');
         called = true;
-        const response = await model.runtimeProvider.generate({ prompt, instructions: systemPrompt, model: model.model, schema, schemaName: 'model_connectivity_test', reasoningEffort: 'low', maxOutputTokens: 2048, stream: true, signal, timeoutMs });
-        let value;
-        try { value = JSON.parse(response.text); } catch { /* Reject free text. */ }
-        if (value?.ok !== true || Object.keys(value).length !== 1) throw Object.assign(new Error('Invalid probe'), { code: 'invalid_probe' });
+        const response = await model.runtimeProvider.generate({ prompt, instructions: `${systemPrompt}\n本轮仅执行诊断，不输出创作报告。${MODEL_TEST_RULES}`, model: model.model, schema, schemaName: 'model_connectivity_test', diagnosticRawText: true, reasoningEffort: 'low', maxOutputTokens: 2048, stream: true, signal, timeoutMs });
+        const formatStatus = modelTestFormatMatches(response.text) ? 'passed' : 'failed';
         // Keep only upstream-reported lineage; never pretend the requested model is an actual response.
-        metadata = { model: response.reportedModel || null, responseId: response.responseId };
+        metadata = { model: response.reportedModel || null, responseId: response.responseId, connectionStatus: 'passed', formatStatus };
+        // The Harness records a completed diagnostic, not a successful format check.
+        if (formatStatus === 'failed') return '{"connectionStatus":"passed","formatStatus":"failed"}';
         return '{"ok":true}';
       } catch (error) {
+        if (!signal.aborted && error?.code === 'invalid_output_format') {
+          metadata = { model: error.reportedModel || null, responseId: error.responseId, connectionStatus: 'passed', formatStatus: 'failed' };
+          return '{"connectionStatus":"passed","formatStatus":"failed"}';
+        }
         // Sanitize before the Harness records a failure, not just before sending to the browser.
         const message = modelTestFailureMessage(signal.aborted ? signal.reason : error);
         throw Object.assign(new Error(message), { safeProbeMessage: message });

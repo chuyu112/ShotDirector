@@ -95,6 +95,16 @@ test("an empty env never fabricates an available provider", () => {
   assert.equal(textModelConfigs({}).some(({ configured }) => configured), false);
 });
 
+test("Claude never inherits OpenAI base URL, and dedicated alias is respected", () => {
+  for (const id of ["jk-claude-opus-5", "jk-claude-sonnet-5"]) {
+    const defaults = textModelConfig(id, cuiyiEnv);
+    assert.equal(defaults.baseUrl, "https://api.highwayapi.ai/anthropic/v1");
+    assert.equal(defaults.resolvedFrom.baseUrl, "default");
+    const dedicated = textModelConfig(id, { ...cuiyiEnv, JIEKOU_ANTHROPIC_BASE_URL: "https://api.jiekou.ai/anthropic/v1" });
+    assert.equal(dedicated.baseUrl, "https://api.jiekou.ai/anthropic/v1");
+  }
+});
+
 test('KO uses dedicated credentials and GLM 5.3 never selects Responses transport', () => {
   const absent = textModelConfig('ko-gpt-5.6-luna', cuiyiEnv);
   assert.equal(absent.configured, false, 'old MY and JK keys cannot enable KO');

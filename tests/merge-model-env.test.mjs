@@ -77,6 +77,7 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
     assert.equal(merged.MANJING_JIEKOU_API_KEY, "separate-jk-secret");
     assert.equal(merged.MANJING_JIEKOU_BASE_URL, "https://api.jiekou.ai/openai");
     assert.equal(merged.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.jiekou.ai/openai/v1");
+    assert.equal(merged.MANJING_JIEKOU_ANTHROPIC_BASE_URL, "https://api.highwayapi.ai/anthropic/v1", "Claude default must not derive from OpenAI host");
     assert.equal(merged.MANJING_OPENAI_API_KEY, undefined);
     assert.equal(merged.MANJING_DOUBAO_MODEL, "seed-from-env");
     assert.equal(merged.MANJING_GLM_REVIEW_MODEL, "glm-review-from-env");
@@ -88,6 +89,12 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
     assert.equal(merged.MANJING_COOKIE_SECURE, "true");
     assert.equal(merged.MANJING_DAILY_AI_REQUESTS, "10");
     assert.equal(merged.MANJING_KONJAC_API_KEY, undefined, 'MY key must not become a KO credential');
+    const mergeAgain = () => spawnSync(process.execPath, [resolve("deploy/merge-model-env.mjs"), basePath, runnerPath, examplePath, outputPath, deployPath, "https://kakayiduo.cloud", jiekouPath], { encoding: "utf8" });
+    writeFileSync(jiekouPath, 'JIEKOU_API_KEY=test-key\nMANJING_JIEKOU_ANTHROPIC_BASE_URL=https://api.jiekou.ai/anthropic/v1\n');
+    assert.equal(mergeAgain().status, 0);
+    assert.equal(values(readFileSync(outputPath, "utf8")).MANJING_JIEKOU_ANTHROPIC_BASE_URL, "https://api.jiekou.ai/anthropic/v1");
+    writeFileSync(jiekouPath, 'JIEKOU_API_KEY=test-key\nJIEKOU_ANTHROPIC_BASE_URL=https://api.jiekou.ai/openai\n');
+    assert.notEqual(mergeAgain().status, 0, "deployment must reject OpenAI paths for Claude");
     writeFileSync(runnerPath, 'KONJAC_API_KEY=dedicated-ko-secret\nKONJAC_API_URL=https://www.konjac.ai/v1\nKONJAC_LUNA_MODEL=gpt-5.6-luna\n');
     const focused = spawnSync(process.execPath, [resolve('deploy/merge-model-env.mjs'), basePath, runnerPath, examplePath, outputPath, '--ko-only'], { encoding: 'utf8' });
     assert.equal(focused.status, 0, focused.stderr);

@@ -45,6 +45,8 @@ npm run lint
 
 ## 必须维护的业务约束
 
+- Claude Opus／Sonnet 只读取独立 `MANJING_JIEKOU_ANTHROPIC_BASE_URL`／`JIEKOU_ANTHROPIC_BASE_URL`，默认 `https://api.highwayapi.ai/anthropic/v1`。不得回退到 OpenAI Base URL 或暗改错误路径；误配须在请求前拒绝。模型目录、Worker 白名单、部署合并与测试必须一起维护；实际请求为 Anthropic Messages，保留 adaptive thinking 与固定 MAX 约束。
+
 - 2026-09-05 中转同步：KO GPT-5.6 Luna 使用 `konjac-responses` 和独立 `KONJAC_API_KEY`，仅允许 konjac.ai 受信域名。不得把旧 MY／OPENAI／JK 密钥发往 KO，不改已有 JK 选择或历史稿模型。GLM-5.3／Flash 固定 Chat Completions，误配置的 `/responses` 端点须归一为 `/chat/completions`；推理 enabled 和单 Shot MAX 约束不变。模型测试必须显式传递被测模型，不能落到 provider 的默认 Sol。
 
 - 2026-09-05 严格审核使用独立输出预算（GLM/Claude MAX 默认 65536）；不得继承旧的通用 16384 限制。确认模型以 length/max_tokens 结束后，才允许在同一隔离 Run、同一完整证据快照内做最多两个分项补审；六项检查必须全部覆盖后才能提交报告。网络错误、504 和缺少结束标记不得自动重复付费请求。
@@ -107,6 +109,10 @@ npm run lint
 - 修改业务代码后至少运行与改动相关的测试；触及主流程时运行 `npm test` 和 `npm run lint`。
 
 ## 当前结构性注意事项
+
+- LLM 测试必须区分连接与格式，展示「接口正常 格式正常✅／接口正常 格式错误⚠️／接口错误 格式错误❌」。仅完整响应可算连接通过；格式失败不禁用模型，传输失败时格式实际未检测。测试用例、提示词、Schema 与页面规则使用同一版本化契约；只接受唯一 ok=true 布尔字段，允许合法空白，不能偷偷去掉 Markdown／额外文字后冒充格式通过。诊断的原始文本不得进入日志、Harness 或页面；不放宽正式 Shot 审核校验。
+
+- 接入模型必须验证 Gateway → 项目 Worker → 模型目录／实际请求的配置链路；新增密钥、Base URL 和模型名变量须逐项加入 Worker 白名单。不可以 Gateway 持有密钥或本地直连成功代替项目 Worker 验收。
 
 - 全局设定中的 LLM 连通性测试必须人工触发；每模型最多一次真实小请求、LOW 推理、2048 输出预算、90 秒超时，单轮最多两个并发。测试仍经独立 Pi Harness Session 和 Gateway 持久额度控制；不能更改模型选择、项目内容或 Shot 状态。连通性通过不等于 MAX 审核／图片能力通过；响应实际模型缺失必须明示，不得拿请求模型冒充。重启中断的测试只恢复状态，不自动重发。
 

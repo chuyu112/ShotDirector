@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
-import { readProviderResponse, providerFailure, safeUsage } from './provider-response.mjs';
+import { readProviderResponse, providerFailure, providerFormatFailure, safeUsage } from './provider-response.mjs';
 
 const MiB = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -184,15 +184,15 @@ function messageContentText(content) {
   }).join("").trim();
 }
 
-function responseStructuredText(payload, toolName) {
+function responseStructuredText(payload, toolName, diagnosticRawText = false) {
   const message = payload?.choices?.[0]?.message;
   const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls.filter((call) => (
     (!call?.type || call.type === "function") && call?.function?.name === toolName
   )) : [];
   if (toolCalls.length > 1) throw new Error("兼容文字模型返回了多个结构化工具结果");
-  if (toolCalls.length === 1) return structuredText(toolCalls[0].function.arguments);
-  if (message?.function_call?.name === toolName) return structuredText(message.function_call.arguments);
-  return structuredText(messageContentText(message?.content));
+  const content = toolCalls.length === 1 ? toolCalls[0].function.arguments
+    : message?.function_call?.name === toolName ? message.function_call.arguments : messageContentText(message?.content);
+  return diagnosticRawText ? (typeof content === 'string' ? content : JSON.stringify(content)) : structuredText(content);
 }
 
 function normalizedReasoningEffort(kind, value) {
@@ -276,6 +276,7 @@ export class CompatibleChatStructuredProvider {
 
   async generate({
     prompt,
+    diagnosticRawText = false,
     instructions,
     systemPrompt,
     schema,
@@ -354,8 +355,12 @@ export class CompatibleChatStructuredProvider {
     if (payload?.choices?.[0]?.finish_reason === "length") {
       throw providerFailure(this.label, { payload, limit: outputTokenLimit });
     }
+    if (diagnosticRawText && (!payload?.choices?.[0]?.finish_reason || !payload.choices[0].message)) throw providerFailure(this.label, { payload });
+    let text;
+    try { text = responseStructuredText(payload, toolName, diagnosticRawText); }
+    catch { throw providerFormatFailure(payload); }
     return {
-      text: responseStructuredText(payload, toolName),
+      text,
       responseId: payload.id,
       reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: String(payload.model || this.model),

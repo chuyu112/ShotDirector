@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { ModelTests, modelTestIds } from '../server/model-tests.mjs';
 import { runModelProbe } from '../server/model-probe.mjs';
 import { ManjingHarnessStore } from '../runner/manjing-harness-store.mjs';
+import { CompatibleChatStructuredProvider } from '../server/compatible-chat-structured-provider.mjs';
+import { MODEL_TEST_CASE_ID, MODEL_TEST_SCHEMA, modelTestFormatMatches } from '../app/model-test-contract.mjs';
+import { modelTestStatusLabel } from '../app/model-test-status.mjs';
 
 const catalog = () => ['a', 'b', 'c', 'd'].map(id => ({ id, label: id, model: `request-${id}`, provider: 'fake', available: id !== 'd' }));
 const payload = ids => ({ ids, requestId: randomUUID() });
@@ -81,7 +84,7 @@ test('probe runs once through isolated Harness, uses LOW small request, and hide
     return { text: '{"ok":true}', model: 'requested-model', reportedModel: 'actual-model', reasoning_content: 'secret-reasoning', responseId: 'resp-1' };
   } } };
   const options = () => ({ signal: new AbortController().signal, timeoutMs: 1000, requestId: randomUUID() });
-  assert.deepEqual(await runModelProbe(store, model, options()), { model: 'actual-model', responseId: 'resp-1' });
+  assert.deepEqual(await runModelProbe(store, model, options()), { model: 'actual-model', responseId: 'resp-1', connectionStatus: 'passed', formatStatus: 'passed' });
   assert.equal(calls, 1);
   model.runtimeProvider.generate = async () => ({ text: '{"ok":true}', model: 'requested-model' });
   assert.equal((await runModelProbe(store, model, options())).model, null);
@@ -89,4 +92,61 @@ test('probe runs once through isolated Harness, uses LOW small request, and hide
   await assert.rejects(runModelProbe(store, model, options()));
   const files = await readdir(dir, { recursive: true });
   for (const file of files.filter(name => /\.(json|jsonl)$/.test(name))) assert.doesNotMatch(await readFile(join(dir, file), 'utf8'), /secret-api-key|secret-reasoning/);
+});
+
+test('versioned test case enforces explicit JSON conditions while allowing whitespace', () => {
+  assert.equal(MODEL_TEST_CASE_ID, 'connectivity-json-v1');
+  assert.equal(MODEL_TEST_SCHEMA.additionalProperties, false);
+  assert.deepEqual(MODEL_TEST_SCHEMA.required, ['ok']);
+  for (const text of ['{"ok":true}', ' \n{ "ok" : true }\n']) assert.equal(modelTestFormatMatches(text), true);
+  for (const text of ['{"ok":"true"}', '{"ok":false}', '{"ok":true,"q1":1}', '{"OK":true}', '{}', 'null', '[]', 'true', '好的 {"ok":true}', '```json\n{"ok":true}\n```']) assert.equal(modelTestFormatMatches(text), false, text);
+});
+
+test('test labels distinguish format warning from interface failure and keep legacy evidence honest', () => {
+  assert.equal(modelTestStatusLabel({ status: 'succeeded' }, true), '接口正常　格式正常✅');
+  assert.equal(modelTestStatusLabel({ status: 'format_warning' }, true), '接口正常　格式错误⚠️');
+  assert.equal(modelTestStatusLabel({ status: 'failed', error: '返回内容未通过测试格式校验' }, true), '接口正常　格式错误⚠️');
+  assert.equal(modelTestStatusLabel({ status: 'failed', error: '上游网关超时' }, true), '接口错误　格式错误❌');
+  assert.equal(modelTestStatusLabel(null, false), '未配置');
+  assert.equal(modelTestStatusLabel({ status: 'interrupted' }, true), '已中断，结果未知');
+});
+
+test('complete DeepSeek response with bad format warns, HTTP error fails, and neither is retried or leaks text', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-format-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ManjingHarnessStore(join(dir, 'harness'));
+  let calls = 0;
+  const models = ['valid', 'extra', 'fenced', 'unauthorized', 'interrupted'].map(id => ({ id, label: id, available: true, provider: 'deepseek', model: 'deepseek-v4-flash', runtimeProvider: new CompatibleChatStructuredProvider({
+    kind: 'deepseek', model: 'deepseek-v4-flash', apiKey: 'secret-key', fetchImpl: async (_, options) => {
+      calls++;
+      const body = JSON.parse(options.body);
+      assert.match(body.messages[1].content, /connectivity-json-v1/);
+      assert.match(body.messages[0].content, /唯一|仅允许 ok/);
+      assert.deepEqual(body.tools[0].function.parameters, MODEL_TEST_SCHEMA);
+      assert.equal(body.diagnosticRawText, undefined);
+      if (id === 'unauthorized') return new Response('{"error":{"message":"secret-provider-error"}}', { status: 401 });
+      if (id === 'interrupted') return new Response('data: {"choices":[{"delta":{"content":"secret-incomplete"}}]}\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+      const content = id === 'valid' ? '{"ok":true}' : id === 'extra' ? '{"ok":true,"extra":"secret-text"}' : '```json\n{"ok":true}\n```';
+      return new Response(JSON.stringify({ id: 'resp-test', model: 'deepseek-v4-flash', choices: [{ finish_reason: 'stop', message: { content } }] }), { headers: { 'Content-Type': 'application/json' } });
+    },
+  }) }));
+  const tests = new ModelTests({ filename: join(dir, 'state.json'), catalog: () => models, invoke: (model, options) => runModelProbe(store, model, options) });
+  tests.start(payload(models.map(m => m.id))); await tests.pending;
+  assert.equal(calls, 5);
+  const rows = tests.snapshot().models;
+  assert.deepEqual(rows.map(r => r.result.status), ['succeeded', 'format_warning', 'format_warning', 'failed', 'failed']);
+  for (const row of rows.slice(0, 3)) {
+    assert.equal(row.result.connectionStatus, 'passed');
+    assert.equal(row.result.actualModel, 'deepseek-v4-flash');
+    assert.equal(row.available, true);
+    assert.equal(row.result.testCaseId, MODEL_TEST_CASE_ID);
+  }
+  assert.equal(rows[3].result.formatStatus, 'not_checked');
+  assert.match(rows[3].result.error, /认证/);
+  assert.match(rows[4].result.error, /中断|未收到/);
+  const restored = new ModelTests({ filename: join(dir, 'state.json'), catalog: () => models, invoke: () => assert.fail('no automatic repeat') });
+  assert.equal(restored.snapshot().models[1].result.status, 'format_warning');
+  for (const file of (await readdir(dir, { recursive: true })).filter(name => /\.(json|jsonl)$/.test(name))) {
+    assert.doesNotMatch(await readFile(join(dir, file), 'utf8'), /secret-key|secret-text|secret-provider-error|secret-incomplete/);
+  }
 });

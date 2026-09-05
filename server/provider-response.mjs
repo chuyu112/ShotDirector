@@ -12,6 +12,16 @@ export function safeUsage(value) {
   return Object.keys(result).length ? result : null;
 }
 
+// A complete API response can still fail application-format validation.
+// Keep this distinct from transport errors; never attach response text or hidden reasoning.
+export function providerFormatFailure(payload) {
+  return Object.assign(new Error('模型已完整响应，但回复格式不符合要求'), {
+    code: 'invalid_output_format',
+    reportedModel: typeof payload?.model === 'string' && /^[\w./:@-]{1,160}$/.test(payload.model) ? payload.model : null,
+    responseId: typeof payload?.id === 'string' && /^[\w-]{1,160}$/.test(payload.id) ? payload.id : null,
+  });
+}
+
 export function providerFailure(label, { status, payload, limit, code } = {}) {
   const finishReason = payload?.stop_reason || payload?.choices?.[0]?.finish_reason;
   const truncated = code === 'output_limit' || (!code && (finishReason === 'length' || finishReason === 'max_tokens'));
@@ -122,7 +132,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
     payload.content = [...blocks.values()].map(block => {
       if (block.type === 'text') return block;
       let input;
-      try { input = block.json ? JSON.parse(block.json) : block.input; } catch { throw providerFailure(label, { code: 'invalid_json' }); }
+      try { input = block.json ? JSON.parse(block.json) : block.input; } catch { throw providerFormatFailure(payload); }
       return { type: block.type, id: block.id, name: block.name, input };
     });
   }

@@ -1,5 +1,19 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-05 LLM 测试结果分层
+
+- 用户确认三种展示：接口正常 格式正常✅；接口正常 格式错误⚠️；接口错误 格式错误❌。接口失败时说明格式未能完成校验；格式警告不等于模型不可用。
+- `connectivity-json-v1` 共用页面规则、测试提示与 Schema，只接受一个包含布尔 ok=true 的 JSON 对象，允许空白，拒绝额外字段、解释与代码块。诊断绕过适配器的文本清洗，仅内部校验，不公开或持久化原始返回；正式创作／审核规则不放宽。
+
+## 2026-09-05 KO Worker 配置遗漏
+
+- 线上网关已有 KO 密钥，但项目 Worker 白名单漏掉 KONJAC 变量，导致模型测试显示未配置。已补六个专用配置变量（MANJING 与兼容别名），测试须在实际 spawn 环境中解析模型并确认可用，不能只检查 Gateway 或本地直连。
+
+## 2026-09-05 Claude 独立协议配置
+
+- Opus／Sonnet 不再共用 OpenAI Base URL；使用 `MANJING_JIEKOU_ANTHROPIC_BASE_URL`（兼容别名 `JIEKOU_ANTHROPIC_BASE_URL`），默认 `/anthropic/v1`，请求 `/anthropic/v1/messages`。
+- 旧代码实际已发送 Anthropic 请求，但借用 `/openai` 配置再替换路径，造成误解与误配风险；现改为独立配置和严格路径校验，拒绝 OpenAI 路径，不更改历史提示词或模型身份。Worker 与部署脚本同步支持新变量。
+
 ## 2026-09-05 严格审核调用修复
 
 - 线上复现：Shot 01 的 JK Claude Opus 5 非流式请求约 61 秒返回上游 504；GLM 5.3 在旧 16384 输出预算下约 238 秒返回 length。

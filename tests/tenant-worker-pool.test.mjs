@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { TenantWorkerPool } from "../server/tenant-worker-pool.mjs";
+import { textModelConfig } from "../server/text-model-catalog.mjs";
 
 class FakeChild extends EventEmitter {
   constructor({ ignoreSigterm = false } = {}) {
@@ -82,7 +83,15 @@ test("worker pool forwards only an environment allowlist and caps active project
       MANJING_KIMI_REASONING_EFFORT: "high",
       MANJING_KIMI_REASONING_EFFORT_REASONING: "max",
       MANJING_JIEKOU_API_KEY: "jk-server-key",
+      MANJING_KONJAC_API_KEY: "ko-server-key",
+      MANJING_KONJAC_BASE_URL: "https://konjac.ai/v1",
+      MANJING_KONJAC_LUNA_MODEL: "gpt-5.6-luna",
+      KONJAC_API_KEY: "ko-alias-key",
+      KONJAC_API_URL: "https://www.konjac.ai/v1",
+      KONJAC_LUNA_MODEL: "gpt-5.6-luna",
       MANJING_JIEKOU_BASE_URL: "https://api.highwayapi.ai/openai",
+      MANJING_JIEKOU_ANTHROPIC_BASE_URL: "https://api.jiekou.ai/anthropic/v1",
+      JIEKOU_ANTHROPIC_BASE_URL: "https://api.highwayapi.ai/anthropic/v1",
       MANJING_JIEKOU_RESPONSES_BASE_URL: "https://api.highwayapi.ai/openai/v1",
       MANJING_JIEKOU_MAX_OUTPUT_TOKENS: "16384",
       MANJING_CODEX_ENABLED: "true",
@@ -158,7 +167,17 @@ test("worker pool forwards only an environment allowlist and caps active project
   assert.equal(spawns[0].options.env.MANJING_CODEX_ALLOWED_TENANT_IDS, undefined);
   assert.equal(spawns[0].options.env.MANJING_MANGA_CROP_MODEL, "glm-5.3-flash");
   assert.equal(spawns[0].options.env.MANJING_JIEKOU_API_KEY, "jk-server-key");
+  for (const [key, value] of Object.entries({
+    MANJING_KONJAC_API_KEY: "ko-server-key", MANJING_KONJAC_BASE_URL: "https://konjac.ai/v1", MANJING_KONJAC_LUNA_MODEL: "gpt-5.6-luna",
+    KONJAC_API_KEY: "ko-alias-key", KONJAC_API_URL: "https://www.konjac.ai/v1", KONJAC_LUNA_MODEL: "gpt-5.6-luna",
+  })) assert.equal(spawns[0].options.env[key], value);
+  const workerKo = textModelConfig("ko-gpt-5.6-luna", spawns[0].options.env);
+  assert.equal(workerKo.configured, true, "KO must be available inside project Worker, not just Gateway");
+  assert.equal(workerKo.apiKey, "ko-server-key");
+  assert.equal(workerKo.baseUrl, "https://konjac.ai/v1");
   assert.equal(spawns[0].options.env.MANJING_JIEKOU_BASE_URL, "https://api.highwayapi.ai/openai");
+  assert.equal(spawns[0].options.env.MANJING_JIEKOU_ANTHROPIC_BASE_URL, "https://api.jiekou.ai/anthropic/v1");
+  assert.equal(spawns[0].options.env.JIEKOU_ANTHROPIC_BASE_URL, "https://api.highwayapi.ai/anthropic/v1");
   assert.equal(spawns[0].options.env.MANJING_JIEKOU_RESPONSES_BASE_URL, "https://api.highwayapi.ai/openai/v1");
   assert.equal(spawns[0].options.env.KIMI_API_KEY, "legacy-kimi-key");
   assert.equal(spawns[0].options.env.KIMI_API_URL, "https://api.kimi.com/coding/v1");

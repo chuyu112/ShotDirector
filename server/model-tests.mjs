@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { MODEL_TEST_CASE_ID } from '../app/model-test-contract.mjs';
 
 export function modelTestIds(payload) {
   const ids = payload?.ids;
@@ -60,7 +61,7 @@ export class ModelTests {
     const startedAt = new Date().toISOString();
     this.state.round = { id: payload.requestId, status: 'running', ids, startedAt };
     this.state.seenIds = [...this.state.seenIds, payload.requestId].slice(-100);
-    for (const id of ids) this.state.results[id] = { status: 'queued', requestedModel: catalog.get(id).model, provider: catalog.get(id).provider, startedAt: null, finishedAt: null, durationMs: null };
+    for (const id of ids) this.state.results[id] = { status: 'queued', testCaseId: MODEL_TEST_CASE_ID, requestedModel: catalog.get(id).model, provider: catalog.get(id).provider, startedAt: null, finishedAt: null, durationMs: null };
     this.save();
     this.pending = this.run(ids, catalog).catch(() => {
       this.state.round.status = 'interrupted';
@@ -84,8 +85,11 @@ export class ModelTests {
           const result = await this.invoke(model, { signal: controller.signal, requestId: randomUUID(), timeoutMs: this.timeoutMs });
           if (controller.signal.aborted) throw controller.signal.reason;
           const actualModel = typeof result.model === 'string' && /^[\w./:@-]{1,160}$/.test(result.model) ? result.model : '';
-          Object.assign(row, { status: 'succeeded', actualModel: actualModel || null, responseId: typeof result.responseId === 'string' && /^[\w-]{1,160}$/.test(result.responseId) ? result.responseId : null });
-        } catch (error) { Object.assign(row, { status: 'failed', error: error?.safeProbeMessage || modelTestFailureMessage(controller.signal.aborted ? controller.signal.reason : error) }); }
+          const formatFailed = result.formatStatus === 'failed';
+          Object.assign(row, { status: formatFailed ? 'format_warning' : 'succeeded', connectionStatus: 'passed', formatStatus: formatFailed ? 'failed' : 'passed',
+            ...(formatFailed ? { error: '接口已完整响应，但回复未符合测试要求；不代表模型不可用' } : {}),
+            actualModel: actualModel || null, responseId: typeof result.responseId === 'string' && /^[\w-]{1,160}$/.test(result.responseId) ? result.responseId : null });
+        } catch (error) { Object.assign(row, { status: 'failed', connectionStatus: 'failed', formatStatus: 'not_checked', error: error?.safeProbeMessage || modelTestFailureMessage(controller.signal.aborted ? controller.signal.reason : error) }); }
         finally { clearTimeout(timer); row.finishedAt = new Date().toISOString(); row.durationMs = Date.now() - start; this.save(); }
       }
     };
