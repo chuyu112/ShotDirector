@@ -14,6 +14,8 @@ test("clean package starts from a neutral project", async () => {
 
   assert.match(layout, /漫镜 Manjing｜AI 导演工作台/);
   assert.match(layout, /NEXT_PUBLIC_MANJING_SITE_URL/);
+  assert.match(layout, /https:\/\/kakayiduo\.cloud/);
+  assert.doesNotMatch(layout, /manjing\.jadecircle\.cn/);
   assert.match(layout, /metadataBase: new URL\(publicSiteUrl\)/);
   assert.doesNotMatch(layout, /localhost:3000/);
   assert.match(page, /const defaultProjectTitle = "未命名项目"/);

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const apiBase = String(process.env.NEXT_PUBLIC_MANJING_API_BASE || "/api").trim();
-const siteUrl = String(process.env.NEXT_PUBLIC_MANJING_SITE_URL || "https://manjing.jadecircle.cn").trim();
+const siteUrl = String(process.env.NEXT_PUBLIC_MANJING_SITE_URL || "https://kakayiduo.cloud").trim();
 
 if (apiBase !== "/api") {
   throw new Error("Server builds must use the same-origin /api gateway");
