@@ -83,10 +83,28 @@ test("GLM sends one schema function with thinking, reasoning and checked image i
   assert.deepEqual(result, {
     text: '{"ok":true}',
     responseId: "glm-response-1",
+    reportedModel: 'glm-5.3-flash',
     model: "glm-5.3-flash",
     usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
     provider: "glm",
   });
+});
+
+for (const glmModel of ['glm-5.3', 'glm-5.3-flash']) test(`${glmModel} normalizes migrated Responses URL to Chat Completions and keeps enabled MAX thinking`, async () => {
+  let calls = 0;
+  const provider = new CompatibleChatStructuredProvider({ kind: 'glm', apiKey: 'test-secret', model: glmModel, baseUrl: 'https://open.bigmodel.cn/api/paas/v4/responses', fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://open.bigmodel.cn/api/paas/v4/chat/completions');
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, glmModel);
+    assert.deepEqual(body.thinking, { type: 'enabled' });
+    assert.equal(body.reasoning_effort, 'max');
+    assert.equal(body.input, undefined);
+    assert.ok(body.messages.length);
+    return new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }), { headers: { 'Content-Type': 'application/json' } });
+  } });
+  await provider.generate({ prompt: 'check', schema, reasoningEffort: 'max' });
+  assert.equal(calls, 1);
 });
 
 test("Kimi accepts localhost tests and parses fenced ordinary content", async () => {

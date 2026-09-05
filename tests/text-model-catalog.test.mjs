@@ -62,6 +62,7 @@ test("public and strict-review catalogs include every requested model", () => {
     "seed-2.1-pro",
     "glm-5.3",
     "deepseek-v4-pro",
+    'ko-gpt-5.6-luna',
     "jk-gpt-5.6-sol",
     "jk-gpt-5.6-luna",
     "jk-gemini-3.8-flash",
@@ -74,6 +75,7 @@ test("public and strict-review catalogs include every requested model", () => {
     "deepseek-v4-flash",
     "seed-2.1-pro",
     "deepseek-v4-pro",
+    'ko-gpt-5.6-luna',
     "jk-gpt-5.6-sol",
     "jk-gpt-5.6-luna",
     "jk-gemini-3.8-flash",
@@ -91,6 +93,22 @@ test("public and strict-review catalogs include every requested model", () => {
 
 test("an empty env never fabricates an available provider", () => {
   assert.equal(textModelConfigs({}).some(({ configured }) => configured), false);
+});
+
+test('KO uses dedicated credentials and GLM 5.3 never selects Responses transport', () => {
+  const absent = textModelConfig('ko-gpt-5.6-luna', cuiyiEnv);
+  assert.equal(absent.configured, false, 'old MY and JK keys cannot enable KO');
+  assert.equal(absent.apiKey, '');
+  const ko = textModelConfig('ko-gpt-5.6-luna', { ...cuiyiEnv, KONJAC_API_KEY: 'ko-secret' });
+  assert.equal(ko.apiKey, 'ko-secret');
+  assert.equal(ko.baseUrl, 'https://www.konjac.ai/v1');
+  assert.equal(ko.transport, 'responses');
+  assert.equal(ko.model, 'gpt-5.6-luna');
+  for (const id of ['glm-5.3', 'glm-5.3-flash']) {
+    const glm = textModelConfig(id, cuiyiEnv);
+    assert.equal(glm.transport, 'chat-completions');
+    assert.equal(glm.compatibleKind, 'glm');
+  }
 });
 
 test("JK models stay unavailable without a server-side API key", () => {

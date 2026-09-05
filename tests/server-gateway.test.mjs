@@ -5,6 +5,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { ManjingAuthStore } from "../server/auth-store.mjs";
 import { createManjingGateway } from "../server/manjing-gateway.mjs";
+import { randomUUID } from 'node:crypto';
 import {
   MAX_ANNOTATION_BATCH_SHOTS,
   MAX_MANGA_BATCH_PAGES,
@@ -17,6 +18,32 @@ async function listen(server) {
   await once(server, "listening");
   return server.address().port;
 }
+
+test('model tests require authentication and reserve one paid call per requested model', async t => {
+  let calls = 0;
+  const backend = createServer((req, res) => { calls++; req.resume(); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}'); });
+  const backendPort = await listen(backend);
+  const store = new ManjingAuthStore({ filename: ':memory:' });
+  const workerPool = {
+    async get(input) { return { ...input, port: backendPort, token: 'test-worker-token' }; },
+    status() { return { active: 0, starting: 0, maximum: 8 }; }, async stopAll() {},
+  };
+  const gateway = createManjingGateway({ store, workerPool, cookieSecure: false, dailyLimits: { ai: 2, globalAi: 100 } });
+  const base = `http://127.0.0.1:${await listen(gateway.server)}`;
+  t.after(async () => { await close(gateway.server); await gateway.close(); await close(backend); });
+  assert.equal((await fetch(`${base}/model-tests`)).status, 401);
+  const registration = await fetch(`${base}/auth/register`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'probe@example.com', displayName: 'Probe', password: 'model-test-password' }) });
+  assert.equal(registration.status, 201);
+  const cookie = sessionCookies(registration);
+  const send = ids => fetch(`${base}/model-tests`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ ids, requestId: randomUUID() }) });
+  assert.equal((await send(['a', 'a'])).status, 400);
+  assert.equal(calls, 0);
+  assert.equal((await send(['a', 'b'])).status, 200);
+  assert.equal(calls, 1);
+  const denied = await send(['a']);
+  assert.equal(denied.status, 429); assert.equal((await denied.json()).quota.requested, 1);
+  assert.equal(calls, 1);
+});
 
 async function close(server) {
   if (!server.listening) return;

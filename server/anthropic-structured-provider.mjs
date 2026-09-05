@@ -153,6 +153,7 @@ export class AnthropicStructuredProvider {
     return {
       text: structuredResult(payload, toolName),
       responseId: payload.id,
+      reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: String(payload.model || body.model),
       usage: safeUsage(payload.usage),
       provider: this.id,

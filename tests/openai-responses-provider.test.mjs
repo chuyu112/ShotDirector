@@ -4,6 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { OpenAIResponsesProvider, openAIResponsesInternals } from "../server/openai-responses-provider.mjs";
+import { textModelConfig } from '../server/text-model-catalog.mjs';
+
+test('KO Luna stays on Konjac with dedicated key and no OpenAI-only extension fields', async () => {
+  const config = textModelConfig('ko-gpt-5.6-luna', { KONJAC_API_KEY: 'ko-secret', OPENAI_API_KEY: 'MY-secret' });
+  const provider = new OpenAIResponsesProvider({ apiKey: config.apiKey, baseUrl: config.baseUrl, providerId: config.provider, allowedHosts: config.allowedHosts, includeOpenAIExtensions: false, fetchImpl: async (url, options) => {
+    assert.equal(url, 'https://www.konjac.ai/v1/responses');
+    assert.equal(options.headers.Authorization, 'Bearer ko-secret');
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, 'gpt-5.6-luna');
+    assert.equal(body.service_tier, undefined); assert.equal(body.text.verbosity, undefined);
+    return new Response(JSON.stringify({ status: 'completed', model: body.model, output_text: '{"ok":true}' }), { headers: { 'Content-Type': 'application/json' } });
+  } });
+  await provider.generate({ prompt: 'check', model: config.model, schema: { type: 'object' } });
+  assert.throws(() => new OpenAIResponsesProvider({ apiKey: config.apiKey, baseUrl: 'https://www.moyu.info/v1', allowedHosts: config.allowedHosts }), /受信域名/);
+});
 
 test("Responses provider sends server-side structured image input without leaking the key", async () => {
   const root = await mkdtemp(join(tmpdir(), "manjing-openai-"));

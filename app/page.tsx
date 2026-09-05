@@ -19,6 +19,7 @@ import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-con
 import { persistProjectSnapshot } from "./project-save.mjs";
 import { LineListField, LineListTextarea } from "./line-list-field";
 import { TextInputDialog } from "./text-input-dialog";
+import { ModelTestSettings } from './model-test-settings';
 import { createWhiteboxScene, ensureWhiteboxScenes, type WhiteboxScene } from "./whitebox-data";
 import {
   browserAgentRevision,
@@ -47,7 +48,7 @@ type PanelDropTarget = {
   position: "end";
   createShotAt?: number;
 };
-type WritingModelId = "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
+type WritingModelId = "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "ko-gpt-5.6-luna" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
 type AssetImageRatio = "16:9" | "9:16" | "1:1" | "3:4" | "4:3" | "3:2" | "2:3" | "4:5" | "5:4" | "21:9";
@@ -234,6 +235,7 @@ const writingModelCatalog: WritingModelOption[] = [
   { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "复杂文字创作", provider: "deepseek", model: "deepseek-v4-pro", available: false, reason: "正在读取服务器 env" },
   { id: "seed-2.1-pro", label: "Seed 2.1 Pro", hint: "长篇文字与创意写作", provider: "doubao-responses", model: "doubao-seed-2-1-pro-260628", available: false, reason: "正在读取服务器 env" },
   { id: "jk-gpt-5.6-sol", label: "JK GPT-5.6 Sol", hint: "API · 复杂推理与正式交付", provider: "jiekou-responses", model: "gpt-5.6-sol", available: false, reason: "正在读取服务器 env" },
+  { id: 'ko-gpt-5.6-luna', label: 'KO GPT-5.6 Luna', hint: 'API · 通用问答与长文创作', provider: 'konjac-responses', model: 'gpt-5.6-luna', available: false, reason: '正在读取服务器 env' },
   { id: "jk-gpt-5.6-luna", label: "JK GPT-5.6 Luna", hint: "API · 通用问答与长文创作", provider: "jiekou-responses", model: "gpt-5.6-luna", available: false, reason: "正在读取服务器 env" },
   { id: "jk-gemini-3.8-flash", label: "JK Gemini 3.8 Flash", hint: "API · 快速推理与多模态", provider: "jiekou-chat", model: "gemini-3.8-flash", available: false, reason: "正在读取服务器 env" },
   { id: "jk-claude-opus-5", label: "JK Claude Opus 5", hint: "API · 复杂分析与高质量创作", provider: "jiekou-anthropic", model: "claude-opus-5", available: false, reason: "正在读取服务器 env" },
@@ -5877,6 +5879,7 @@ function DirectorDesk() {
           <button className="button primary" type="button" disabled={locked || tenantScope.mode !== "server"} onClick={() => void saveGlobalFile()}>{globalFileBusy ? "保存中…" : "保存全局文件"}</button>
         </section>
         {renderGlobalTaskProgress()}
+        <ModelTestSettings key={projectScopeId} base={bridgeBase} request={bridgeFetch} pairingToken={bridge.pairingToken} />
         <fieldset className="global-settings-fields" disabled={locked} aria-busy={locked}>
           <section className="global-setting-card project-background-canon">
             <div className="global-setting-heading"><span>00 · WORLD</span><h2>项目故事背景</h2><p>整套漫画只写一次。它负责时代、世界观和改编边界；每格漫画仍是剧情、台词、动作和站位的最高证据。</p></div>

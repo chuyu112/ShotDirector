@@ -131,6 +131,7 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
       "deepseek-v4-flash",
       "seed-2.1-pro",
       "deepseek-v4-pro",
+      'ko-gpt-5.6-luna',
       "jk-gpt-5.6-sol",
       "jk-gpt-5.6-luna",
       "jk-gemini-3.8-flash",
@@ -147,6 +148,13 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
     });
     assert.equal(health.pairingToken, undefined);
     assert.equal(health.tenantId, registered.user.id);
+    const diagnostics = await fetch(`${base}/api/model-tests`, { headers: { Cookie: cookie } });
+    assert.equal(diagnostics.status, 200);
+    const diagnosticState = await diagnostics.json();
+    assert.equal(diagnosticState.round, null);
+    assert.ok(diagnosticState.models.some(model => model.id === 'glm-5.3-flash'));
+    assert.ok(diagnosticState.models.some(model => model.id === 'glm-5.3'));
+    assert.doesNotMatch(JSON.stringify(diagnosticState), /smoke-test-placeholder|apiKey|runtimeProvider/);
 
     const projectRoot = join(dataRoot, "tenants", registered.user.id, "projects", registered.activeProject.id);
     assert.equal(existsSync(join(projectRoot, "work")), true);

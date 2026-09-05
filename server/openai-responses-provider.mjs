@@ -207,6 +207,7 @@ export class OpenAIResponsesProvider {
     return {
       text,
       responseId: payload.id,
+      reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: payload.model || model,
       serviceTier: payload.service_tier,
       usage: payload.usage || null,

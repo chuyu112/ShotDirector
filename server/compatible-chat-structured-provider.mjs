@@ -102,7 +102,9 @@ function normalizedChatCompletionsUrl(value, definition) {
   }
   url.hash = "";
   url.search = "";
-  const path = url.pathname.replace(/\/+$/, "");
+  // GLM uses Chat Completions even if a migrated config retained a Responses endpoint.
+  let path = url.pathname.replace(/\/+$/, '');
+  if (definition.kind === 'glm') path = path.replace(/\/responses$/, '');
   url.pathname = path.endsWith("/chat/completions") ? path : `${path}/chat/completions`;
   return url.toString();
 }
@@ -355,6 +357,7 @@ export class CompatibleChatStructuredProvider {
     return {
       text: responseStructuredText(payload, toolName),
       responseId: payload.id,
+      reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: String(payload.model || this.model),
       usage: safeUsage(payload.usage),
       provider: this.id,

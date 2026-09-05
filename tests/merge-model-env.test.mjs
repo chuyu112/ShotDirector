@@ -87,6 +87,20 @@ test("deployment model env merge maps only the Cuiyi allowlist and preserves ser
     assert.equal(merged.MANJING_ALLOWED_ORIGINS, "https://manjing.jadecircle.cn");
     assert.equal(merged.MANJING_COOKIE_SECURE, "true");
     assert.equal(merged.MANJING_DAILY_AI_REQUESTS, "10");
+    assert.equal(merged.MANJING_KONJAC_API_KEY, undefined, 'MY key must not become a KO credential');
+    writeFileSync(runnerPath, 'KONJAC_API_KEY=dedicated-ko-secret\nKONJAC_API_URL=https://www.konjac.ai/v1\nKONJAC_LUNA_MODEL=gpt-5.6-luna\n');
+    const focused = spawnSync(process.execPath, [resolve('deploy/merge-model-env.mjs'), basePath, runnerPath, examplePath, outputPath, '--ko-only'], { encoding: 'utf8' });
+    assert.equal(focused.status, 0, focused.stderr);
+    assert.doesNotMatch(focused.stdout + focused.stderr, /dedicated-ko-secret/);
+    const ko = values(readFileSync(outputPath, 'utf8'));
+    assert.equal(ko.MANJING_KONJAC_API_KEY, 'dedicated-ko-secret');
+    assert.equal(ko.MANJING_KONJAC_BASE_URL, 'https://www.konjac.ai/v1');
+    assert.equal(ko.OPENAI_API_KEY, 'existing-image-secret');
+    assert.equal(ko.MANJING_AI_PROVIDER, 'kimi');
+    assert.equal(ko.MANJING_COOKIE_SECURE, 'false');
+    writeFileSync(runnerPath, 'KONJAC_API_KEY=dedicated-ko-secret\nKONJAC_API_URL=https://konjac.ai.evil.example/v1\n');
+    const rejected = spawnSync(process.execPath, [resolve('deploy/merge-model-env.mjs'), basePath, runnerPath, examplePath, outputPath, '--ko-only'], { encoding: 'utf8' });
+    assert.notEqual(rejected.status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

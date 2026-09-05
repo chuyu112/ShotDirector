@@ -5,6 +5,8 @@ import { basename, extname, join, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { ShotWorkScheduler } from "../server/shot-work-scheduler.mjs";
+import { ModelTests } from '../server/model-tests.mjs';
+import { runModelProbe } from '../server/model-probe.mjs';
 import { validateShotChatRequest, shotChatPrompt, validateShotChatResult } from "./shot-chat.mjs";
 import { repairKnownMangaPanelCoverage } from "../app/manga-panel-mapping.mjs";
 import { normalizeMangaAnalysisReadingOrder } from "../app/manga-reading-order.mjs";
@@ -160,7 +162,7 @@ function runtimeProvider(config) {
         providerId: config.provider,
         label: config.label,
         allowedHosts: config.allowedHosts || [],
-        includeOpenAIExtensions: config.provider !== "jiekou-responses",
+        includeOpenAIExtensions: !['jiekou-responses', 'konjac-responses'].includes(config.provider),
         allowedRoots: [dataRoot],
       });
     }
@@ -198,6 +200,11 @@ const writingModelRuntimes = new Map(textModelConfigs(process.env).map((config) 
 }));
 
 const requestedAiProviderValue = String(process.env.MANJING_AI_PROVIDER || "").trim();
+const modelTests = new ModelTests({
+  filename: join(workRoot, 'model-tests.json'),
+  catalog: () => [...writingModelRuntimes.values()],
+  invoke: (model, options) => runModelProbe(harnessStore, model, options),
+});
 const requestedServerProvider = selectableProviderId(requestedAiProviderValue);
 const explicitlyRequestedAiProvider = serverWorker && requestedAiProviderValue && !requestedServerProvider
   ? "server-disabled"
@@ -477,6 +484,7 @@ function publicReasoningPolicy() {
 
 function hasActiveWritingModelWork() {
   return Boolean(shuttingDown
+    || modelTests.active
     || activeJob
     || activeCompletePromptJobs.size
     || activeArtworkJobs.size
@@ -4963,6 +4971,18 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/model-tests' && ['GET', 'POST'].includes(req.method)) {
+    if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: '只接受漫镜页面请求' }, origin); return; }
+    if (!hasPairingToken(req)) { sendJson(res, 401, { error: '页面尚未配对' }, origin); return; }
+    try {
+      const snapshot = req.method === 'POST' ? modelTests.start(await readBody(req)) : modelTests.snapshot();
+      sendJson(res, req.method === 'POST' ? 202 : 200, snapshot, origin);
+    } catch (error) {
+      sendJson(res, Number(error?.statusCode) || 500, { error: error?.statusCode ? error.message : '模型测试服务暂不可用' }, origin);
+    }
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/writing-model") {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
@@ -5458,6 +5478,7 @@ const server = createServer(async (req, res) => {
 
 function bridgeHasActiveWork() {
   return Boolean(
+    modelTests.active ||
     activeJob ||
     activeCompletePromptJobs.size ||
     activeArtworkJobs.size ||

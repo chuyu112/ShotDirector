@@ -5336,3 +5336,15 @@ input:focus-visible {
   border-left: 4px solid #f4c84a;
 }
 .whitebox-empty-state p { margin: 8px 0 0; line-height: 1.6; }
+.model-test-settings { margin: 24px 0; padding: 24px; border: 1px solid #bcb6aa; background: #fffdf8; color: #171717; }
+.model-test-settings header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.model-test-settings header span { color: #1956ff; font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+.model-test-settings h2 { margin: 8px 0; font-size: 24px; }
+.model-test-settings p { font-size: 13px; line-height: 1.7; color: #6e6a62; }
+.model-test-table { overflow-x: auto; }
+.model-test-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.model-test-table th, .model-test-table td { padding: 12px; border-bottom: 1px solid #d9d3c8; vertical-align: top; }
+.model-test-table th { background: #eeeae2; white-space: nowrap; }
+.model-test-table small { display: block; margin-top: 5px; color: #6e6a62; overflow-wrap: anywhere; }
+.model-test-table td:nth-child(3) { overflow-wrap: anywhere; min-width: 150px; }
+.model-test-settings .model-test-error { background: #fff0eb; border-left: 3px solid #b44223; padding: 12px; color: #94351d; }

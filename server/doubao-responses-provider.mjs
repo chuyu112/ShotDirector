@@ -131,6 +131,7 @@ export class DoubaoResponsesProvider {
     return {
       text,
       responseId: payload.id,
+      reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: String(payload.model || this.model),
       usage: payload.usage || null,
       provider: this.id,

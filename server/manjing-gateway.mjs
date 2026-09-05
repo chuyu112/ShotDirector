@@ -11,6 +11,7 @@ import {
   createAuthApiAdapter,
 } from "./auth-store.mjs";
 import { TenantWorkerPool } from "./tenant-worker-pool.mjs";
+import { modelTestIds } from './model-tests.mjs';
 import {
   assertAnnotationBatchShotLimit,
   dynamicAiModelCallBudget,
@@ -28,7 +29,7 @@ const AI_MODEL_CALL_BUDGET_BY_ROUTE = new Map([
   ["/global-annotations", 2],
   ["/load-script", 2],
 ]);
-const BUFFERED_AI_ROUTES = new Set(["/media-analyze", "/manga-recut-boxes", "/annotations-batch"]);
+const BUFFERED_AI_ROUTES = new Set(["/media-analyze", "/manga-recut-boxes", "/annotations-batch", "/model-tests"]);
 const OPENAI_IMAGE_ROUTES = new Set(["/generate-asset-gpt"]);
 const LIBTV_PAID_ROUTES = new Set(["/generate", "/generate-asset"]);
 const HOP_BY_HOP = new Set([
@@ -224,7 +225,7 @@ function credentialRateKey(credentials) {
 }
 
 function usageRules(path, limits, req, payload = null) {
-  const dynamicBudget = dynamicAiModelCallBudget(path, payload);
+  const dynamicBudget = path === '/model-tests' ? modelTestIds(payload).length : dynamicAiModelCallBudget(path, payload);
   const aiModelCallBudget = dynamicBudget ?? AI_MODEL_CALL_BUDGET_BY_ROUTE.get(path);
   if (aiModelCallBudget !== undefined) return [{
     counterType: "ai-model-call-budget",

@@ -235,6 +235,7 @@ function requestedShotId(prompt) {
 
 function fakeStructuredResult(schemaName, prompt) {
   schemaName = String(schemaName || "").replace(/_schema$/, "");
+  if (schemaName === 'model_connectivity_test') return { ok: true };
   if (schemaName === "manga-panel-boxes") {
     return {
       status: "completed",
@@ -922,6 +923,28 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     result = await jsonRequest(base, "/api/health", { cookie: otherCookie });
     assert.equal(result.response.status, 200);
     assert.equal(result.payload.modelProvider.id, "glm", "another user's project must keep its own writing-model selection");
+
+    // Manual diagnostic uses the selected catalog entries, not the project's current Kimi selection.
+    result = await jsonRequest(base, '/api/model-tests', { method: 'POST', cookie: ownerCookie, body: { ids: ['glm-5.3-flash'], requestId: '11111111-2222-4333-8444-777777777777' } });
+    assert.equal(result.response.status, 202, JSON.stringify(result.payload));
+    for (let attempt = 0; attempt < 100; attempt++) {
+      result = await jsonRequest(base, '/api/model-tests', { cookie: ownerCookie });
+      if (result.payload.round.status !== 'running') break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    const probe = result.payload.models.find(model => model.id === 'glm-5.3-flash').result;
+    assert.equal(probe.status, 'succeeded', JSON.stringify(probe));
+    assert.equal(probe.actualModel, fakeGlmModel);
+    assert.ok(probe.finishedAt);
+    const probeCalls = modelCalls.filter(call => call.schemaName === 'model_connectivity_test');
+    assert.equal(probeCalls.length, 1);
+    assert.equal(probeCalls[0].reasoningEffort, 'low');
+    assert.equal(probeCalls[0].maxTokens, 2048);
+    assert.equal(probeCalls[0].imageCount, 0);
+    result = await jsonRequest(base, '/api/health', { cookie: ownerCookie });
+    assert.equal(result.payload.modelProvider.id, 'kimi');
+    result = await jsonRequest(base, '/api/model-tests', { cookie: otherCookie });
+    assert.equal(result.payload.round, null, 'diagnostic results must remain tenant-isolated');
 
     result = await jsonRequest(base, "/api/auth/logout", { method: "POST", cookie: otherCookie });
     assert.equal(result.response.status, 200);

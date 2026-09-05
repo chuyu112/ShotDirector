@@ -52,6 +52,7 @@ test("JK Claude sends streaming adaptive MAX and a compatible schema tool", asyn
   assert.deepEqual(result, {
     text: '{"ok":true}',
     responseId: "msg_test",
+    reportedModel: 'claude-opus-5',
     model: "claude-opus-5",
     usage: { input_tokens: 10, output_tokens: 4 },
     provider: "jiekou-anthropic",

@@ -45,6 +45,8 @@ npm run lint
 
 ## 必须维护的业务约束
 
+- 2026-09-05 中转同步：KO GPT-5.6 Luna 使用 `konjac-responses` 和独立 `KONJAC_API_KEY`，仅允许 konjac.ai 受信域名。不得把旧 MY／OPENAI／JK 密钥发往 KO，不改已有 JK 选择或历史稿模型。GLM-5.3／Flash 固定 Chat Completions，误配置的 `/responses` 端点须归一为 `/chat/completions`；推理 enabled 和单 Shot MAX 约束不变。模型测试必须显式传递被测模型，不能落到 provider 的默认 Sol。
+
 - 2026-09-05 严格审核使用独立输出预算（GLM/Claude MAX 默认 65536）；不得继承旧的通用 16384 限制。确认模型以 length/max_tokens 结束后，才允许在同一隔离 Run、同一完整证据快照内做最多两个分项补审；六项检查必须全部覆盖后才能提交报告。网络错误、504 和缺少结束标记不得自动重复付费请求。
 - Claude 请求必须实际传递 adaptive thinking 与 output_config.effort；审核流只公开阶段、耗时、数值 Token 用量与响应编号，禁止将隐藏推理、签名或原始错误响应写到页面或日志。配置就绪与真实调用成功必须分别展示。
 - Reviewer 身份属于服务端路由元数据：模型仅遗漏 reviewerId 时由当前请求绑定；显式返回错误身份仍拒绝。禁止借此补写、删改或放宽审核结论、问题、证据与批准字段。
@@ -105,6 +107,8 @@ npm run lint
 - 修改业务代码后至少运行与改动相关的测试；触及主流程时运行 `npm test` 和 `npm run lint`。
 
 ## 当前结构性注意事项
+
+- 全局设定中的 LLM 连通性测试必须人工触发；每模型最多一次真实小请求、LOW 推理、2048 输出预算、90 秒超时，单轮最多两个并发。测试仍经独立 Pi Harness Session 和 Gateway 持久额度控制；不能更改模型选择、项目内容或 Shot 状态。连通性通过不等于 MAX 审核／图片能力通过；响应实际模型缺失必须明示，不得拿请求模型冒充。重启中断的测试只恢复状态，不自动重发。
 
 - `app/page.tsx` 和 `scripts/shotdirector-bridge.mjs` 体积较大，改动时优先抽离边界清晰的模块，避免继续堆叠状态与路由。
 - 浏览器、源 TS 文件和 `work/` 目录仍是分散的数据源；引入 Project Manifest 前不要假设它们具有事务一致性。

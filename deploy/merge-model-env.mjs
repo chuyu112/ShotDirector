@@ -60,7 +60,8 @@ function mergeLines(baseText, updates) {
   return `${lines.join("\n").replace(/\n+$/u, "")}\n\n# 漫镜文字模型：从翠易 runner env 白名单映射。\n${additions.join("\n")}\n`;
 }
 
-const [, , basePath, runnerPath, runnerExamplePath, outputPath, deployEnvPath, allowedOrigin, jiekouEnvPath] = process.argv;
+const koOnly = process.argv.includes('--ko-only');
+const [, , basePath, runnerPath, runnerExamplePath, outputPath, deployEnvPath, allowedOrigin, jiekouEnvPath] = process.argv.filter(arg => arg !== '--ko-only');
 if (!basePath || !runnerPath || !runnerExamplePath || !outputPath) usage();
 
 const baseText = readFileSync(resolve(basePath), "utf8");
@@ -73,7 +74,7 @@ if (!base.get("MANJING_ALLOWED_ORIGINS") || !base.has("MANJING_COOKIE_SECURE")) 
   throw new Error("基础 env 不是已部署的漫镜服务器配置");
 }
 
-const updates = new Map([
+const updates = new Map(koOnly ? [] : [
   ["MANJING_AI_PROVIDER", "glm-5.3-flash"],
   ["MANJING_MANGA_CROP_MODEL", "glm-5.3-flash"],
   ["MANJING_KIMI_BASE_URL", requiredValue(runner, "KIMI_API_URL", "翠易 .env.runner")],
@@ -91,6 +92,16 @@ const updates = new Map([
   ["MANJING_DEEPSEEK_PRO_MODEL", requiredValue(runnerExample, "DEEPSEEK_PRO_MODEL", "翠易 .env.runner.example")],
 ]);
 
+// KO has its own credentials. Never reuse OPENAI_API_KEY from the former MY relay.
+const koKey = String(runner.get('KONJAC_API_KEY') || base.get('MANJING_KONJAC_API_KEY') || base.get('KONJAC_API_KEY') || '').trim();
+if (koKey) {
+  const url = new URL(runner.get('KONJAC_API_URL') || base.get('MANJING_KONJAC_BASE_URL') || base.get('KONJAC_API_URL') || 'https://www.konjac.ai/v1');
+  if (url.protocol !== 'https:' || !['www.konjac.ai', 'konjac.ai'].includes(url.hostname) || url.username || url.password || url.search || url.hash) throw new Error('KO 服务地址必须使用受信的 HTTPS 域名');
+  updates.set('MANJING_KONJAC_API_KEY', koKey);
+  updates.set('MANJING_KONJAC_BASE_URL', url.toString().replace(/\/$/, ''));
+  updates.set('MANJING_KONJAC_LUNA_MODEL', runner.get('KONJAC_LUNA_MODEL') || base.get('MANJING_KONJAC_LUNA_MODEL') || 'gpt-5.6-luna');
+}
+
 const jiekouApiKey = String(
   jiekouEnv.get("MANJING_JIEKOU_API_KEY")
   || jiekouEnv.get("JIEKOU_API_KEY")
@@ -101,14 +112,14 @@ const jiekouApiKey = String(
   || base.get("JIEKOU_API_KEY")
   || "",
 ).trim();
-if (jiekouApiKey) {
+if (jiekouApiKey && !koOnly) {
   const jiekouOpenAiBase = normalizedJiekouOpenAiBase(jiekouEnv.get("JIEKOU_BASE_URL") || deployEnv.get("JIEKOU_BASE_URL") || runner.get("JIEKOU_BASE_URL") || base.get("JIEKOU_BASE_URL"));
   updates.set("MANJING_JIEKOU_API_KEY", jiekouApiKey);
   updates.set("MANJING_JIEKOU_BASE_URL", jiekouOpenAiBase);
   updates.set("MANJING_JIEKOU_RESPONSES_BASE_URL", `${jiekouOpenAiBase}/v1`);
 }
 
-if (allowedOrigin) {
+if (allowedOrigin && !koOnly) {
   const origin = new URL(allowedOrigin);
   if (origin.protocol !== "https:" || origin.pathname !== "/" || origin.search || origin.hash) {
     throw new Error("生产 MANJING_ALLOWED_ORIGINS 必须是 HTTPS Origin");
@@ -118,9 +129,9 @@ if (allowedOrigin) {
 }
 
 const imageApiKey = String(deployEnv.get("MANJING_OPENAI_API_KEY") || "").trim();
-if (imageApiKey) updates.set("OPENAI_API_KEY", imageApiKey);
+if (imageApiKey && !koOnly) updates.set("OPENAI_API_KEY", imageApiKey);
 
-for (const [sourceKey, targetKey] of [
+for (const [sourceKey, targetKey] of koOnly ? [] : [
   ["GLM_API_KEY", "MANJING_GLM_API_KEY"],
   ["DEEPSEEK_API_KEY", "MANJING_DEEPSEEK_API_KEY"],
 ]) {
@@ -144,6 +155,7 @@ chmodSync(resolve(outputPath), 0o600);
 
 const mergedValues = parseEnv(merged);
 const statusKeys = [
+  'MANJING_KONJAC_API_KEY',
   "MANJING_KIMI_API_KEY",
   "MANJING_GLM_API_KEY",
   "MANJING_OPENAI_API_KEY",
