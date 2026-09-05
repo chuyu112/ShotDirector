@@ -1,0 +1,182 @@
+/* Account, project settings and diagnostics share the director workbench palette.
+   Presentation only: no request, crop, image or canvas behavior belongs here. */
+.manjing-server-shell > .manjing-server-session {
+  min-height: 60px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line, #deddd6);
+  background: var(--surface, #fffefb);
+  color: var(--ink, #20211f);
+}
+.manjing-server-session .manjing-server-project { min-width: 0; flex-wrap: wrap; gap: 8px; }
+.manjing-server-session .manjing-server-project label { min-width: 0; gap: 10px; }
+.manjing-server-session .manjing-server-project label > span { color: var(--muted, #6d716a); font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.manjing-server-session .manjing-server-project select,
+.manjing-server-shell > .manjing-server-session button {
+  min-height: 40px;
+  border: 1px solid var(--line-strong, #b9bcb2);
+  border-radius: var(--control-radius, 6px);
+  background: var(--surface, #fffefb);
+  color: var(--ink, #20211f);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.manjing-server-session .manjing-server-project select { width: clamp(180px, 20vw, 280px); min-width: 0; max-width: 100%; padding: 9px 28px 9px 12px; }
+.manjing-server-shell > .manjing-server-session button:not(:disabled):hover { color: var(--blue, #175cff); border-color: var(--blue, #175cff); background: var(--blue-soft, #edf2ff); }
+.manjing-server-shell > .manjing-server-session button:disabled { opacity: 1; color: #777b72; border-color: var(--line, #deddd6); background: var(--surface-muted, #f4f3ef); cursor: not-allowed; }
+.manjing-server-session .manjing-server-account { flex-wrap: wrap; max-width: 100%; gap: 5px 8px; }
+.manjing-server-session .manjing-server-account strong { max-width: 200px; font-size: 12px; font-weight: 600; }
+.manjing-server-session .manjing-server-account small { max-width: 230px; font-size: 12px; }
+.manjing-server-session .manjing-server-account > span { color: var(--muted, #6d716a); font-size: 10px; font-weight: 600; letter-spacing: .04em; }
+.manjing-server-session .manjing-server-account .superadmin-badge { border-radius: 4px; background: var(--blue-soft, #edf2ff); color: var(--blue, #175cff); }
+.manjing-server-shell > .manjing-server-session p { flex-basis: 100%; order: 1; padding: 10px 12px; border-radius: var(--control-radius, 6px); background: #fff1ef; color: #a0382c; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.manjing-server-shell > .manjing-server-session p.project-notice { background: #edf6ef; color: #28663f; }
+
+/* Login is the same application, not a separate visual theme. */
+.manjing-auth-page { grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr); background: var(--surface-muted, #f4f3ef); color: var(--ink, #20211f); }
+.manjing-auth-page .manjing-auth-brand { padding: clamp(32px, 6vw, 88px); background: #20211f; }
+.manjing-auth-page .manjing-auth-mark { width: 72px; height: 72px; border: 0; border-radius: 8px; background: var(--blue, #175cff); font-size: 26px; font-weight: 750; letter-spacing: -.04em; box-shadow: none; }
+.manjing-auth-page .manjing-auth-brand h1 { max-width: 580px; font-size: clamp(32px, 3.6vw, 54px); font-weight: 650; line-height: 1.2; letter-spacing: -.04em; }
+.manjing-auth-page .manjing-auth-brand > p:first-of-type { font-size: 11px; font-weight: 600; letter-spacing: .08em; }
+.manjing-auth-page .manjing-auth-brand > p:last-of-type { color: #c2c7bd; font-size: 14px; line-height: 1.8; }
+.manjing-auth-page .manjing-auth-brand ol { gap: 12px; padding: 0; background: transparent; }
+.manjing-auth-page .manjing-auth-brand li { min-height: 96px; border: 1px solid #464940; border-radius: 8px; background: transparent; }
+.manjing-auth-page .manjing-auth-brand li b { font-size: 12px; }
+.manjing-auth-page .manjing-auth-brand li span { font-size: 12px; font-weight: 600; line-height: 1.6; }
+.manjing-auth-page .manjing-auth-panel { padding: clamp(32px, 6vw, 88px); background: var(--surface, #fffefb); }
+.manjing-auth-page .manjing-auth-heading > span { font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+.manjing-auth-page .manjing-auth-heading h2 { font-size: 30px; font-weight: 650; line-height: 1.3; letter-spacing: -.03em; }
+.manjing-auth-page .manjing-auth-heading p { font-size: 14px; }
+.manjing-auth-page .manjing-auth-tabs { gap: 4px; padding: 4px; border: 1px solid var(--line, #deddd6); border-radius: 8px; background: var(--surface-muted, #f4f3ef); }
+.manjing-auth-page .manjing-auth-tabs button { min-height: 40px; border: 0; border-radius: 5px; font-size: 14px; font-weight: 600; }
+.manjing-auth-page .manjing-auth-tabs button.active { background: var(--surface, #fffefb); color: var(--blue, #175cff); box-shadow: 0 1px 3px rgb(32 33 31 / 8%); }
+.manjing-auth-page .manjing-auth-form { gap: 20px; margin-top: 24px; }
+.manjing-auth-page .manjing-auth-form label > span { font-size: 14px; font-weight: 600; }
+.manjing-auth-page .manjing-auth-form label > small { font-size: 12px; line-height: 1.6; }
+.manjing-auth-page .manjing-auth-form input { min-height: 44px; padding: 10px 12px; border-color: var(--line-strong, #b9bcb2); border-radius: var(--control-radius, 6px); font-size: 16px; }
+.manjing-auth-page .manjing-auth-submit,
+.manjing-auth-page .manjing-auth-state button { min-height: 44px; border-color: var(--blue, #175cff); border-radius: var(--control-radius, 6px); background: var(--blue, #175cff); font-size: 14px; font-weight: 600; }
+.manjing-auth-page .manjing-auth-error { border-radius: 6px; font-size: 12px; }
+.manjing-auth-page .manjing-auth-state small { font-size: 12px; overflow-wrap: anywhere; }
+.manjing-auth-page :where(button, input):focus-visible,
+.manjing-server-session :where(button, select):focus-visible { outline: 2px solid var(--blue, #175cff); outline-offset: 3px; }
+
+/* Reusable global file settings: calm cards, readable forms, independent project layer. */
+.app-shell .global-settings-page { max-width: 1440px; }
+.app-shell .global-page-heading { align-items: center; padding: 24px; border: 1px solid var(--line, #deddd6); border-radius: 8px 8px 0 0; background: var(--surface, #fffefb); color: var(--ink, #20211f); }
+.app-shell .global-page-heading h1 { margin: 6px 0 8px; font-size: 26px; font-weight: 650; }
+.app-shell .global-page-heading p { color: var(--muted, #6d716a); font-size: 14px; line-height: 1.7; }
+.app-shell .global-file-toolbar { grid-template-columns: minmax(220px, 1fr) minmax(170px, 240px) repeat(3, auto); padding: 16px 24px; border-color: var(--line, #deddd6); border-radius: 0 0 8px 8px; background: var(--surface-muted, #f4f3ef); }
+.app-shell .global-file-toolbar > div span { font-size: 11px; font-weight: 650; }
+.app-shell .global-file-toolbar > div b { font-size: 14px; font-weight: 650; }
+.app-shell .global-file-toolbar > div small { font-size: 12px; }
+.app-shell .global-file-toolbar select { min-width: 0; width: 100%; min-height: 40px; border-color: var(--line-strong, #b9bcb2); border-radius: var(--control-radius, 6px); background: var(--surface, #fffefb); color: var(--ink, #20211f); font-size: 12px; font-weight: 600; }
+.app-shell .global-file-toolbar .button { min-height: 40px; }
+.app-shell .global-settings-fields { gap: 16px; margin-top: 24px; padding: 0; background: transparent; }
+.app-shell .global-setting-card { padding: 24px; border: 1px solid var(--line, #deddd6); border-radius: 8px; background: var(--surface, #fffefb); }
+.app-shell .global-setting-card.project-background-canon { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.app-shell .project-background-canon > .global-setting-heading { grid-column: 1 / -1; margin-bottom: 0; }
+.app-shell .project-background-canon > .text-field { margin-top: 0; }
+.app-shell .global-setting-card.character-canon { border-top: 1px solid var(--line, #deddd6); }
+.app-shell .global-setting-heading { min-height: 0; margin-bottom: 20px; }
+.app-shell .global-setting-heading > span,
+.app-shell .global-setting-heading > div > span { font-size: 11px; font-weight: 650; letter-spacing: .07em; }
+.app-shell .global-setting-heading h2 { margin: 6px 0 8px; font-size: 20px; font-weight: 650; }
+.app-shell .global-setting-heading p { font-size: 14px; line-height: 1.7; }
+.app-shell .global-setting-card .text-field > span { font-size: 12px; font-weight: 600; }
+.app-shell .global-setting-card :where(input, textarea) { font-size: 14px; line-height: 1.7; border-color: var(--line-strong, #b9bcb2); border-radius: var(--control-radius, 6px); }
+.app-shell .global-setting-card textarea { min-height: 160px; resize: vertical; }
+.app-shell .character-profile-list { gap: 16px; }
+.app-shell .character-profile-card { padding: 20px; border: 1px solid var(--line, #deddd6); border-radius: 8px; background: var(--surface-muted, #f4f3ef); }
+.app-shell .character-profile-card > header { border-color: var(--line, #deddd6); }
+.app-shell .character-profile-card > header span { font-size: 11px; font-weight: 650; }
+.app-shell .character-profile-card > header h3 { font-size: 18px; font-weight: 650; }
+.app-shell .character-profile-field > span { font-size: 12px; font-weight: 600; }
+.app-shell .character-profile-field.compact input { min-height: 40px; }
+.app-shell .character-profile-empty { border-color: var(--line-strong, #b9bcb2); border-radius: 8px; background: var(--surface-muted, #f4f3ef); font-size: 14px; line-height: 1.7; }
+.app-shell .global-settings-page .global-save-panel { grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 20px; }
+.app-shell .global-settings-page .global-setting-status { grid-column: auto; grid-template-columns: auto minmax(0, 1fr); border-radius: 8px; background: var(--surface, #fffefb); }
+.app-shell .global-settings-page .global-setting-status b { font-size: 14px; font-weight: 600; }
+.app-shell .global-settings-page .global-setting-status small { grid-column: 2; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+
+/* Diagnostics are a manual tool, never a loading gate for the application. */
+.app-shell .model-test-settings { padding: 24px; border-radius: 8px; color: var(--ink, #20211f); }
+.app-shell .model-test-settings > header { gap: 16px; }
+.app-shell .model-test-settings h2 { margin: 6px 0 0; font-size: 22px; font-weight: 650; }
+.app-shell .model-test-settings header span { font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+.app-shell .model-test-settings > p { max-width: 1100px; margin: 16px 0; font-size: 14px; line-height: 1.7; }
+.app-shell .model-test-settings details { margin: 20px 0; padding: 14px 16px; background: var(--surface-muted, #f4f3ef); }
+.app-shell .model-test-settings summary { font-size: 12px; line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; }
+.app-shell .model-test-settings details p { font-size: 12px; }
+.app-shell .model-test-settings details pre { border: 1px solid var(--line, #deddd6); border-radius: 6px; background: var(--surface, #fffefb); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.app-shell .model-test-table { max-width: 100%; border: 1px solid var(--line, #deddd6); border-radius: 8px; overscroll-behavior-x: contain; }
+.app-shell .model-test-table table { min-width: 1020px; font-size: 14px; line-height: 1.55; }
+.app-shell .model-test-table th,
+.app-shell .model-test-table td { padding: 14px 16px; border-color: var(--line, #deddd6); vertical-align: middle; }
+.app-shell .model-test-table thead th { padding-block: 11px; color: var(--muted, #6d716a); background: var(--surface-muted, #f4f3ef); font-size: 12px; font-weight: 600; }
+.app-shell .model-test-table tbody th { min-width: 180px; background: transparent; font-weight: 600; white-space: normal; }
+.app-shell .model-test-table tbody tr:last-child > * { border-bottom: 0; }
+.app-shell .model-test-table tbody tr:hover { background: #f8faf5; }
+.app-shell .model-test-table td:nth-child(4),
+.app-shell .model-test-table td:nth-child(5) { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+.app-shell .model-test-table td:nth-child(6) { min-width: 220px; max-width: 340px; overflow-wrap: anywhere; font-size: 12px; }
+.app-shell .model-test-table small { font-size: 12px; font-weight: 400; }
+.app-shell .model-test-table .button { padding-inline: 14px; white-space: nowrap; }
+.app-shell .model-test-status { display: inline-block; padding: 5px 8px; border-radius: 6px; background: var(--surface-muted, #f4f3ef); color: #656a60; font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.app-shell .model-test-status[data-label="接口正常　格式正常✅"] { background: #edf6ef; color: #28663f; }
+.app-shell .model-test-status[data-label="接口正常　格式错误⚠️"] { background: #fff5dc; color: #805c0b; }
+.app-shell .model-test-status[data-label="接口错误　格式错误❌"] { background: #fff1ef; color: #a0382c; }
+.app-shell .model-test-status[data-label="测试中"] { background: var(--blue-soft, #edf2ff); color: var(--blue, #175cff); }
+.app-shell .model-test-settings .model-test-error { border-radius: 6px; font-size: 12px; }
+.app-shell .model-test-settings .model-test-empty { padding: 32px 24px; border: 1px dashed var(--line-strong, #b9bcb2); border-radius: 8px; background: var(--surface-muted, #f4f3ef); text-align: center; color: var(--muted, #6d716a); font-size: 14px; line-height: 1.7; }
+.app-shell .model-test-settings :where(summary, button, .model-test-table):focus-visible { outline: 2px solid var(--blue, #175cff); outline-offset: 3px; }
+.model-test-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+@media (max-width: 1100px) {
+  .app-shell .global-file-toolbar { grid-template-columns: minmax(0, 1fr) repeat(3, auto); }
+  .app-shell .global-file-toolbar > div { grid-column: 1 / -1; }
+  .app-shell .character-profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+  .manjing-auth-page { grid-template-columns: 1fr; }
+  .manjing-auth-page .manjing-auth-brand { padding: 28px 24px; }
+  .manjing-auth-page .manjing-auth-brand h1 { font-size: 32px; }
+  .manjing-auth-page .manjing-auth-brand > p:first-of-type { margin-top: 20px; }
+  .manjing-auth-page .manjing-auth-panel { padding: 32px 24px max(32px, env(safe-area-inset-bottom)); }
+  .manjing-server-shell > .manjing-server-session { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 16px; }
+  .manjing-server-session .manjing-server-project { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .manjing-server-session .manjing-server-project label { grid-column: 1 / -1; width: 100%; }
+  .manjing-server-session .manjing-server-project select { width: 100%; flex: 1; }
+  .manjing-server-session .manjing-server-project button { padding-inline: 6px; }
+  .manjing-server-session .manjing-server-account { display: flex; align-items: center; }
+  .manjing-server-session .manjing-server-account small { width: 100%; max-width: 100%; }
+  .manjing-server-shell > .manjing-server-session p { grid-row: auto; }
+  .app-shell .global-settings-page { width: calc(100% - 32px); }
+  .app-shell .global-page-heading { flex-wrap: wrap; gap: 16px; padding: 20px; }
+  .app-shell .global-page-heading h1 { font-size: 24px; }
+  .app-shell .global-page-heading .button { width: 100%; }
+  .app-shell .global-file-toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 16px; gap: 10px; }
+  .app-shell .global-file-toolbar select { grid-column: 1 / -1; }
+  .app-shell .global-file-toolbar .button { padding-inline: 8px; white-space: normal; }
+  .app-shell .global-settings-fields { grid-template-columns: 1fr; }
+  .app-shell .global-setting-card.project-background-canon { grid-template-columns: 1fr; }
+  .app-shell .global-setting-card { padding: 20px; }
+  .app-shell .global-settings-page .global-save-panel { grid-template-columns: 1fr; }
+  .app-shell .character-profile-list { grid-template-columns: 1fr; }
+  .app-shell .character-heading { flex-wrap: wrap; }
+  .app-shell .model-test-settings { padding: 20px 16px; }
+  .app-shell .model-test-settings > header { align-items: stretch; }
+  .app-shell .model-test-settings > header > button { width: 100%; }
+}
+@media (max-width: 420px) {
+  .app-shell .character-profile-name-row { grid-template-columns: 1fr; }
+  .manjing-auth-page .manjing-auth-brand { padding: 24px 20px; }
+  .manjing-auth-page .manjing-auth-panel { padding-inline: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .manjing-auth-page .manjing-auth-state i { animation-duration: 2s; }
+  .manjing-auth-page :where(button, input),
+  .manjing-server-session :where(button, select) { transition: none; }
+}

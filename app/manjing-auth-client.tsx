@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { requestProjectSave, type SaveProjectDetail } from "./project-save.mjs";
 import { TextInputDialog } from "./text-input-dialog";
 
@@ -146,6 +147,7 @@ export function ManjingAuthGate({
   serverConfigured: boolean;
   children: ReactNode;
 }) {
+  const router = useRouter();
   const [gate, setGate] = useState<GateState>({ status: "checking" });
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -398,7 +400,10 @@ export function ManjingAuthGate({
       const payload = await readPayload(response);
       if (!response.ok) throw new Error(responseMessage(payload, "切换项目失败，请重试。"));
       publishAuthSignal("session-changed");
-      window.location.reload();
+      // A project load must resolve that project's most recent server snapshot.
+      // Reloading the current URL can preserve `?main=1` from an empty shell
+      // and make a healthy manga draft appear to have disappeared.
+      router.push("/?load=1");
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : "切换项目失败，请重试。");
       setProjectBusy(false);
@@ -483,9 +488,9 @@ export function ManjingAuthGate({
           <section className="manjing-server-session" aria-label="当前服务器账户">
             <div className="manjing-server-project">
               <label>
-                <span>当前项目</span>
+                <span>选择项目</span>
                 <select
-                  aria-label="切换项目"
+                  aria-label="选择要加载的项目"
                   value={selectedProjectId || gate.activeProject.id}
                   disabled={projectBusy}
                   onChange={(event) => setSelectedProjectId(event.target.value)}

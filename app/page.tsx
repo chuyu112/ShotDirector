@@ -2484,7 +2484,11 @@ function DirectorDesk() {
     if (!hydrated || tenantScope.mode !== "server" || !bridge.connected || !bridge.pairingToken) return;
     let active = true;
     setProjectArchiveLoaded(false);
-    bridgeFetch(`${bridgeBase}/draft-state?scopeId=${encodeURIComponent(projectScopeId || "main")}`, {
+    const loadMostRecentProject = new URLSearchParams(window.location.search).get("load") === "1";
+    const archiveUrl = loadMostRecentProject
+      ? `${bridgeBase}/draft-state-recent`
+      : `${bridgeBase}/draft-state?scopeId=${encodeURIComponent(projectScopeId || "main")}`;
+    bridgeFetch(archiveUrl, {
       cache: "no-store",
       headers: { "X-Manjing-Token": bridge.pairingToken },
     }).then(async (response) => {
@@ -2494,6 +2498,13 @@ function DirectorDesk() {
       return snapshot;
     }).then((snapshot) => {
       if (!active) return;
+      if (loadMostRecentProject) {
+        const recentScopeId = typeof snapshot?.scopeId === "string" ? snapshot.scopeId : "main";
+        window.location.replace(recentScopeId === "main"
+          ? "/?main=1"
+          : `/?draft=${encodeURIComponent(recentScopeId)}`);
+        return;
+      }
       if (!snapshot) {
         setProjectArchiveLoaded(true);
         return;
@@ -6374,7 +6385,7 @@ function DirectorDesk() {
               <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>每次都是隔离的新 Agent Session，只输出问题、证据与建议。</p></div>
               <label><span>Reviewer 审核模型（不影响 Creator）</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
               <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
-              {selectedPromptReviewer?.available ? <p className="prompt-review-config" role="status">{selectedPromptReviewer.lastCall?.status === 'succeeded' ? '最近一次审核调用成功' : selectedPromptReviewer.lastCall?.status === 'failed' ? selectedPromptReviewer.lastCall.message : '配置已就绪，本次服务启动后尚未完成真实审核验证'}{selectedPromptReviewer.lastCall?.checkedAt ? ` · ${new Date(selectedPromptReviewer.lastCall.checkedAt).toLocaleString('zh-CN')}` : ''}</p> : null}
+              {selectedPromptReviewer?.available ? <p className="prompt-review-config" data-call-status={selectedPromptReviewer.lastCall?.status || "configured"} role="status">{selectedPromptReviewer.lastCall?.status === 'succeeded' ? '最近一次审核调用成功' : selectedPromptReviewer.lastCall?.status === 'failed' ? selectedPromptReviewer.lastCall.message : '配置已就绪，本次服务启动后尚未完成真实审核验证'}{selectedPromptReviewer.lastCall?.checkedAt ? ` · ${new Date(selectedPromptReviewer.lastCall.checkedAt).toLocaleString('zh-CN')}` : ''}</p> : null}
               {!selectedPromptReviewer?.available ? <p className="prompt-review-config">{selectedPromptReviewer?.reason || "当前 Reviewer 的 env 尚未配置完整"}</p> : null}
               {reviewControls.reason ? <div id="strict-review-blocked-reason" className="strict-review-blocked" role="status"><p>{reviewControls.reason}</p>{reviewControls.action === "creator" ? <button type="button" className="button secondary" onClick={() => { switchDeskMode("creator"); openCompleteShotPrompt(state.currentShot); }}>到创作台处理当前提示词</button> : null}</div> : <p className="strict-review-ready" role="status">{review.completePromptStatus === "ready" ? "当前 Shot 已可审核，无需等待其他 Shot 生成完成。" : "将按当前提示词文本与当前原作画格创建新的只读审核快照。"}</p>}
               <button type="button" className="button primary" disabled={reviewControls.submitDisabled} aria-describedby={reviewControls.reason ? "strict-review-blocked-reason" : undefined} onClick={() => void reviewCompletePrompt()}>{review.promptReviewStatus === "reviewing" ? "严格审核中…" : promptReviewArtifactIsCurrent ? "重新审核当前只读快照" : "提交严格审核"}</button>

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./workbench.css";
+import "./settings-workbench.css";
 
 const publicSiteUrl = process.env.NEXT_PUBLIC_MANJING_SITE_URL?.trim() || "https://manjing.jadecircle.cn";
 

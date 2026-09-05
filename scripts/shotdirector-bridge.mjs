@@ -5007,6 +5007,44 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/draft-state-recent") {
+    if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
+    if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
+    try {
+      const candidates = readdirSync(draftStateDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /^(?:main|[a-f0-9-]{36})\.json$/i.test(entry.name))
+        .flatMap((entry) => {
+          try {
+            const path = join(draftStateDir, entry.name);
+            const snapshot = JSON.parse(readFileSync(path, "utf8"));
+            const state = snapshot?.state;
+            if (!Array.isArray(state?.reviews) || !state.reviews.length) return [];
+            const panelRecords = state.sourceMangaPanels && typeof state.sourceMangaPanels === "object"
+              ? Object.keys(state.sourceMangaPanels).length
+              : 0;
+            const referencedPanels = state.reviews.reduce((total, item) => total + (Array.isArray(item?.shot?.sourcePanels) ? item.shot.sourcePanels.length : 0), 0);
+            const promptCount = state.reviews.filter((item) => typeof item?.completePrompt === "string" && item.completePrompt.trim()).length;
+            const meaningful = Boolean(state.sourceMangaRequestId || panelRecords || referencedPanels || promptCount || String(state.sourceDocument || "").trim() || state.reviews.length > 1);
+            const savedAt = Date.parse(snapshot.savedAt || "") || statSync(path).mtimeMs;
+            return [{ scopeId: entry.name.replace(/\.json$/i, ""), savedAt, meaningful, projectTitle: String(state.projectTitle || "") }];
+          } catch {
+            return [];
+          }
+        });
+      const meaningful = candidates.filter((item) => item.meaningful);
+      const selected = (meaningful.length ? meaningful : candidates).sort((left, right) => right.savedAt - left.savedAt)[0];
+      if (!selected) { sendJson(res, 404, { error: "所选项目尚无可加载存档" }, origin); return; }
+      sendJson(res, 200, {
+        scopeId: selected.scopeId,
+        projectTitle: selected.projectTitle,
+        savedAt: new Date(selected.savedAt).toISOString(),
+      }, origin);
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "无法定位项目最近存档" }, origin);
+    }
+    return;
+  }
+
   if (url.pathname === "/draft-state" && (req.method === "GET" || req.method === "POST")) {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }

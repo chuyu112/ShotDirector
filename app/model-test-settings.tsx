@@ -49,6 +49,24 @@ export function ModelTestSettings({ base, request, pairingToken }: { base: strin
     {error && <p role="alert" className="model-test-error">{error}</p>}
     {readError && <p role="alert" className="model-test-error">{readError}</p>}
     <details><summary>测试题与回答要求（{MODEL_TEST_CASE_ID}）</summary><p>{MODEL_TEST_RULES}</p><pre>{MODEL_TEST_EXPECTED}</pre><p>仅判断本次响应；历史测试使用的规则可能不同，不会自动重发测试。</p></details>
-    <div className="model-test-table"><table><thead><tr><th>模型</th><th>测试状态</th><th>请求 / 实际模型</th><th>耗时</th><th>测试时间</th><th>结果说明</th><th>操作</th></tr></thead><tbody>{state.models.map(model => { const r = model.result; return <tr key={model.id}><td>{model.label}<small>{model.provider}</small></td><td>{modelTestStatusLabel(r, model.available)}</td><td>{r?.requestedModel || model.model}<small>{r?.actualModel || '尚无实际响应模型'}</small></td><td>{typeof r?.durationMs === 'number' ? `${(r.durationMs / 1000).toFixed(1)} 秒` : '—'}</td><td>{r?.finishedAt || r?.startedAt ? new Date(r.finishedAt || r.startedAt!).toLocaleString('zh-CN') : '—'}</td><td>{r?.error || (!model.available ? model.reason : '') || '—'}</td><td><button type="button" className="button secondary" disabled={submitting || running || !model.available} onClick={() => void start([model.id])}>重测</button></td></tr>; })}</tbody></table></div>
+    {state.models.length ? <div className="model-test-table" role="region" aria-label="模型测试结果，可横向滚动" tabIndex={0}>
+      <table>
+        <caption className="model-test-visually-hidden">各模型最近一次手动测试的接口、格式、耗时和响应模型。</caption>
+        <thead><tr><th scope="col">模型</th><th scope="col">测试状态</th><th scope="col">请求 / 实际模型</th><th scope="col">耗时</th><th scope="col">测试时间</th><th scope="col">结果说明</th><th scope="col">操作</th></tr></thead>
+        <tbody>{state.models.map(model => {
+          const r = model.result;
+          const statusLabel = modelTestStatusLabel(r, model.available);
+          return <tr key={model.id}>
+            <th scope="row">{model.label}<small>{model.provider}</small></th>
+            <td><span className="model-test-status" data-label={statusLabel}>{statusLabel}</span></td>
+            <td>{r?.requestedModel || model.model}<small>{r?.actualModel || '尚无实际响应模型'}</small></td>
+            <td>{typeof r?.durationMs === 'number' ? `${(r.durationMs / 1000).toFixed(1)} 秒` : '—'}</td>
+            <td>{r?.finishedAt || r?.startedAt ? new Date(r.finishedAt || r.startedAt!).toLocaleString('zh-CN') : '—'}</td>
+            <td>{r?.error || (!model.available ? model.reason : '') || '—'}</td>
+            <td><button type="button" className="button secondary" aria-label={`重测 ${model.label}`} disabled={submitting || running || !model.available} onClick={() => void start([model.id])}>重测</button></td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div> : <div className="model-test-empty" role="status">暂未读取到模型目录。目录读取后会显示在这里，不会自动发起测试。</div>}
   </section>;
 }

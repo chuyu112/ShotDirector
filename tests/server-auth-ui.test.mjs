@@ -130,6 +130,23 @@ test("project archive hydration precedes writes and the global file library is e
   assert.match(page, /\/global-files\/load/);
 });
 
+test("loading a selected server project returns to its recoverable workspace instead of preserving an empty main URL", async () => {
+  const [auth, page, bridge] = await Promise.all([
+    readFile(authPath, "utf8"),
+    readFile(pagePath, "utf8"),
+    readFile(new URL("../scripts/shotdirector-bridge.mjs", import.meta.url), "utf8"),
+  ]);
+  const activateProject = auth.slice(auth.indexOf("async function activateProject"), auth.indexOf("function openCreateProjectDialog"));
+  assert.match(activateProject, /router\.push\("\/\?load=1"\)/);
+  assert.doesNotMatch(activateProject, /window\.location\.reload\(\)/);
+  assert.match(auth, /aria-label="选择要加载的项目"/);
+  assert.match(auth, />加载项目<\/button>/);
+  assert.match(page, /loadMostRecentProject[\s\S]*?\/draft-state-recent/);
+  assert.match(page, /window\.location\.replace\(recentScopeId === "main"/);
+  assert.match(bridge, /url\.pathname === "\/draft-state-recent"/);
+  assert.match(bridge, /const meaningful = candidates\.filter/);
+});
+
 test("browser caches and IndexedDB keys are partitioned by authenticated user and project", async () => {
   const [page, auth, mediaLab] = await Promise.all([
     readFile(pagePath, "utf8"),
