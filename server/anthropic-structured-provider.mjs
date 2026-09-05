@@ -1,3 +1,5 @@
+import { readProviderResponse, providerFailure, safeUsage } from './provider-response.mjs';
+
 const DEFAULT_BASE_URL = "https://api.highwayapi.ai/openai";
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
@@ -100,6 +102,9 @@ export class AnthropicStructuredProvider {
     schemaName,
     imagePaths = [],
     maxOutputTokens,
+    reasoningEffort = 'max',
+    stream = true,
+    onProgress,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal,
   } = {}) {
@@ -109,18 +114,23 @@ export class AnthropicStructuredProvider {
     if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("结构化输出 Schema 无效");
     if (imagePaths.length) throw new Error(`${this.label} 当前接口未声明图片输入能力`);
     const toolName = safeSchemaName(schemaName);
+    if (!['low', 'high', 'max'].includes(reasoningEffort)) throw new Error('Claude 推理强度只支持 low、high 或 max');
     const system = [String(instructions || systemPrompt || "").trim(), UNTRUSTED_INPUT_POLICY].filter(Boolean).join("\n\n");
     const body = {
       model: String(model || this.model).trim(),
       system,
       messages: [{ role: "user", content: prompt.trim() }],
       max_tokens: normalizedMaxOutputTokens(maxOutputTokens),
+      stream,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: reasoningEffort },
       tools: [{
         name: toolName,
         description: "Return the complete final result matching this JSON Schema.",
         input_schema: schema,
       }],
-      tool_choice: { type: "tool", name: toolName, disable_parallel_tool_use: true },
+      // Thinking requests must allow the model to select the schema tool.
+      tool_choice: { type: "auto", disable_parallel_tool_use: true },
     };
     let response;
     try {
@@ -138,19 +148,13 @@ export class AnthropicStructuredProvider {
       if (error?.name === "TimeoutError" || error?.name === "AbortError") throw new Error(`${this.label} API 请求超时或已取消`);
       throw new Error(`${this.label} API 连接失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = String(payload?.error?.message || `HTTP ${response.status}`).slice(0, 500);
-      const error = new Error(`${this.label} API 失败：${message}`);
-      error.statusCode = response.status;
-      throw error;
-    }
-    if (payload?.stop_reason === "max_tokens") throw new Error(`${this.label} 输出达到 Token 上限，未接受可能截断的结果`);
+    const payload = await readProviderResponse(response, { protocol: 'anthropic', label: this.label, onProgress });
+    if (payload?.stop_reason === "max_tokens") throw providerFailure(this.label, { payload, limit: body.max_tokens });
     return {
       text: structuredResult(payload, toolName),
       responseId: payload.id,
       model: String(payload.model || body.model),
-      usage: payload.usage || null,
+      usage: safeUsage(payload.usage),
       provider: this.id,
     };
   }

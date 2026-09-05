@@ -819,7 +819,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     assert.ok(creatorCalls.every((call) => call.model === fakeGlmModel && call.toolCount === 1));
     assert.ok(reviewerCalls.every((call) => call.model === fakeKimiModel && call.toolCount === 1));
     assert.ok(creatorCalls.every((call) => call.maxTokens === 16_384 && call.maxCompletionTokens === undefined));
-    assert.ok(reviewerCalls.every((call) => call.maxCompletionTokens === 16_384 && call.maxTokens === undefined));
+    assert.ok(reviewerCalls.every((call) => call.maxCompletionTokens === 32_768 && call.maxTokens === undefined));
     assert.ok(modelCalls.every((call) => /\u4e0d\u53ef\u4fe1\u4efb\u52a1\u6570\u636e/.test(call.systemText)));
     assert.ok(modelCalls.filter((call) => call.schemaName !== "script-load").every((call) => call.imageCount >= 1));
     const attachmentOnlyCalls = modelCalls.filter((call) => [

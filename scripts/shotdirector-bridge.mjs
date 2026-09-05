@@ -27,6 +27,7 @@ import { DoubaoResponsesProvider } from "../server/doubao-responses-provider.mjs
 import { reviewModelConfigs, textModelConfigs } from "../server/text-model-catalog.mjs";
 import { migratedWritingModelSelection } from "../server/writing-model-selection.mjs";
 import { prepareModelImageInputs } from "../server/model-image-atlas.mjs";
+import { generateStrictReview, strictReviewTokenBudget } from '../server/strict-review-generation.mjs';
 import { OpenAIImageProvider } from "../server/openai-image-provider.mjs";
 import { LibtvServerWorker } from "../server/libtv-worker.mjs";
 import { assertAnnotationBatchShotLimit } from "../server/request-limits.mjs";
@@ -418,6 +419,8 @@ function reviewerRegistry() {
   return [...merged.values()];
 }
 
+const reviewerCallHealth = new Map();
+
 function publicReviewerOptions() {
   return reviewerRegistry().map(({ id, label, provider, model, available, reason, evidenceMode }) => ({
     id,
@@ -427,6 +430,7 @@ function publicReviewerOptions() {
     available,
     reason,
     evidenceMode,
+    lastCall: reviewerCallHealth.get(id) || { status: 'untested' },
   }));
 }
 
@@ -3024,7 +3028,7 @@ function reviewerImageDataUrl(filePath) {
   return `data:${mime};base64,${readFileSync(filePath).toString("base64")}`;
 }
 
-async function callCompatibleReviewer(prompt, evidence, reviewer, report, systemPrompt = "") {
+async function callCompatibleReviewer(prompt, evidence, reviewer, report, systemPrompt = "", options = {}) {
   report("reviewing", `${reviewer.label} 正在独立核对提示词与 ${evidence.panelIds.length} 张画格证据`);
   const reviewerInstructions = [
     String(systemPrompt || "").trim(),
@@ -3048,11 +3052,11 @@ async function callCompatibleReviewer(prompt, evidence, reviewer, report, system
         prompt: mappedPrompt,
         instructions: reviewerInstructions,
         model: reviewer.model,
-        schema: JSON.parse(readFileSync(promptReviewSchema, "utf8")),
+        schema: options.schema || JSON.parse(readFileSync(promptReviewSchema, "utf8")),
         schemaName: basename(promptReviewSchema, extname(promptReviewSchema)),
         imagePaths: preparedImages.imagePaths,
         reasoningEffort: strictReviewReasoningEffort,
-        maxOutputTokens: Number(reviewer.provider === "glm"
+        maxOutputTokens: strictReviewTokenBudget(reviewer.provider, Number(reviewer.provider === "glm"
           ? process.env.MANJING_GLM_MAX_OUTPUT_TOKENS
           : reviewer.provider === "kimi"
             ? process.env.MANJING_KIMI_MAX_OUTPUT_TOKENS
@@ -3062,11 +3066,13 @@ async function callCompatibleReviewer(prompt, evidence, reviewer, report, system
                 ? process.env.MANJING_DOUBAO_MAX_OUTPUT_TOKENS
                 : reviewer.provider.startsWith("jiekou-")
                   ? process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS
-                  : process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS),
+                  : process.env.MANJING_OPENAI_MAX_OUTPUT_TOKENS)),
+        stream: true,
+        onProgress: () => report('receiving-review', `${reviewer.label} 正在返回审核数据${options.phase && options.phase !== 'full' ? `（${options.phase === 'part-1' ? '分项 1/2' : '分项 2/2'}）` : ''}；耗时 ${Math.round((Date.now() - (options.startedAt || Date.now())) / 1000)} 秒`),
         metadata: { application: "manjing", tenant: tenantId, task: "strict-review" },
         safetyIdentifier: tenantId,
         promptCacheKey: `manjing-${tenantId}-strict-review`,
-        timeoutMs: 20 * 60 * 1000,
+        timeoutMs: options.timeoutMs || 20 * 60 * 1000,
       });
       return attachStructuredModelLineage(parseJsonResponseText(result.text), {
         provider: result.provider || reviewer.provider,
@@ -4227,6 +4233,8 @@ async function reviewCompleteShotPrompt(payload) {
   return withCompletePromptJob(completePromptIdentityFromPayload(payload), payload.projectTitle, async (requestId, report) => {
     const outputPath = join(responseDir, `prompt-review-${requestId}.json`);
     const prompt = promptReviewerAgentPrompt(payload, evidence, reviewer);
+    const reviewStartedAt = Date.now();
+    const attempts = [];
     report("preparing-review", `已创建独立 Reviewer 任务 ${requestId.slice(0, 8)}，不会复用生成 Agent 会话`);
     let result;
     let compatibleReviewerLineage;
@@ -4257,8 +4265,29 @@ async function reviewCompleteShotPrompt(payload) {
         },
         prompt,
         runModel: async ({ prompt: providerPrompt, systemPrompt }) => {
-          const candidate = await callCompatibleReviewer(providerPrompt, evidence, reviewer, report, systemPrompt);
-          compatibleReviewerLineage = structuredModelLineage(candidate, reviewer.model, reviewer.provider);
+          const candidate = await generateStrictReview({
+            prompt: providerPrompt,
+            schema: JSON.parse(readFileSync(promptReviewSchema, 'utf8')),
+            validate: value => validatePromptReviewCandidate(value, payload, evidence, reviewer),
+            onProgress: report,
+            generate: async (stagePrompt, schema, phase) => {
+              const startedAt = new Date().toISOString();
+              try {
+                const remaining = 20 * 60 * 1000 - (Date.now() - reviewStartedAt);
+                if (remaining <= 0) throw new Error('严格审核总时限已到，已完成分项仍保留，请稍后重试');
+                const value = await callCompatibleReviewer(stagePrompt, evidence, reviewer, report, systemPrompt, { schema, phase, startedAt: reviewStartedAt, timeoutMs: remaining });
+                compatibleReviewerLineage = structuredModelLineage(value, reviewer.model, reviewer.provider);
+                attempts.push({ phase, startedAt, finishedAt: new Date().toISOString(), status: 'completed', ...compatibleReviewerLineage });
+                writeFileSync(join(responseDir, `prompt-review-${requestId}.${phase}.json`), JSON.stringify(value));
+                return value;
+              } catch (error) {
+                attempts.push({ phase, startedAt, finishedAt: new Date().toISOString(), status: 'failed', diagnostics: error.diagnostics || { code: 'request_failed' } });
+                throw error;
+              } finally {
+                writeFileSync(join(responseDir, `prompt-review-${requestId}.attempts.json`), JSON.stringify(attempts));
+              }
+            },
+          });
           return JSON.stringify(candidate);
         },
       });
@@ -4280,6 +4309,7 @@ async function reviewCompleteShotPrompt(payload) {
       reviewerModel: reviewerLineage.effectiveModelId,
       reviewerResponseId: reviewerLineage.responseId,
       reviewerUsage: reviewerLineage.usage || null,
+      reviewerAttempts: attempts,
       completePromptGeneratorId: String(payload.completePromptGeneratorId).trim(),
       sourceRevision: payload.sourceRevision,
       completePromptSourceRevision: payload.completePromptSourceRevision,
@@ -4292,7 +4322,13 @@ async function reviewCompleteShotPrompt(payload) {
     };
     writeFileSync(join(responseDir, `prompt-review-${requestId}.committed.json`), `${JSON.stringify(committed, null, 2)}\n`, "utf8");
     return committed;
-  }, "prompt-review");
+  }, "prompt-review").then(result => {
+    reviewerCallHealth.set(reviewer.id, { status: 'succeeded', checkedAt: new Date().toISOString() });
+    return result;
+  }, error => {
+    reviewerCallHealth.set(reviewer.id, { status: 'failed', checkedAt: new Date().toISOString(), message: error.diagnostics?.httpStatus === 504 ? '上次调用：上游网关超时，可手动重试或选择其他模型' : error.code === 'output_limit' ? '上次调用：输出超限，未产生完整报告' : '上次调用未完成，可查看错误后手动重试' });
+    throw error;
+  });
 }
 
 async function reviseShots(payload) {

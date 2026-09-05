@@ -1,5 +1,12 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-05 严格审核调用修复
+
+- 线上复现：Shot 01 的 JK Claude Opus 5 非流式请求约 61 秒返回上游 504；GLM 5.3 在旧 16384 输出预算下约 238 秒返回 length。
+- 修复为审核专用预算、GLM/Claude 流式响应、Claude adaptive + output_config.effort=max。只接收具有完整结束标记的报告，失败记录仅保留安全的协议元数据和数值用量。
+- 已确认的截断允许在同一 Run 内分两组检查补审，始终携带整个 Shot 和全部画格，不修改 Shot 分组、顺序或时长；阶段完成前不提交最终报告。网络结果不明确时仍要求人工重试，避免重复调用。
+- 审核模型状态明确区分配置就绪、近期成功和近期失败。测试通过与线上真实模型成功必须分开汇报。
+
 ## 2026-09-05 API 模型链路
 
 - 文字模型改为 API-only：顶部是独立的 Chat / Work（Creator）模型，严格审核页是独立 Reviewer 模型，两者选择不互相覆盖。旧项目的 `writing-model-selection.json` 若保存 `codex-gpt-5.6-sol`／`gpt-5.6-sol`，载入时原地改写为 `jk-gpt-5.6-sol`；旧 Luna 同理改写为 `jk-gpt-5.6-luna`。公开目录与项目文件不再保留旧标识，也不再调用 Codex CLI。

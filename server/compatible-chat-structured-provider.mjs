@@ -1,5 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
+import { readProviderResponse, providerFailure, safeUsage } from './provider-response.mjs';
 
 const MiB = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -280,6 +281,8 @@ export class CompatibleChatStructuredProvider {
     imagePaths = [],
     reasoningEffort,
     maxOutputTokens,
+    stream = false,
+    onProgress,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal,
   } = {}) {
@@ -299,6 +302,7 @@ export class CompatibleChatStructuredProvider {
     const outputTokenLimit = normalizedMaxOutputTokens(maxOutputTokens);
     const body = {
       model: this.model,
+      ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
       messages: [
         ...(trustedInstructions ? [{ role: "system", content: trustedInstructions }] : []),
         { role: "user", content },
@@ -344,21 +348,15 @@ export class CompatibleChatStructuredProvider {
       }
       throw new Error(`${this.label} API 连接失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = String(payload?.error?.message || `HTTP ${response.status}`).slice(0, 500);
-      const error = new Error(`${this.label} API 失败：${message}`);
-      error.statusCode = response.status;
-      throw error;
-    }
+    const payload = await readProviderResponse(response, { protocol: 'chat', label: this.label, onProgress });
     if (payload?.choices?.[0]?.finish_reason === "length") {
-      throw new Error(`${this.label} 输出达到 Token 上限，未接受可能截断的结果`);
+      throw providerFailure(this.label, { payload, limit: outputTokenLimit });
     }
     return {
       text: responseStructuredText(payload, toolName),
       responseId: payload.id,
       model: String(payload.model || this.model),
-      usage: payload.usage || null,
+      usage: safeUsage(payload.usage),
       provider: this.id,
     };
   }

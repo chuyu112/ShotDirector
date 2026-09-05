@@ -12,7 +12,7 @@ const schema = {
   required: ["ok"],
 };
 
-test("JK Claude uses Anthropic Messages and a required schema tool", async () => {
+test("JK Claude sends streaming adaptive MAX and a compatible schema tool", async () => {
   let captured;
   const provider = new AnthropicStructuredProvider({
     apiKey: "jk-test-secret",
@@ -44,7 +44,10 @@ test("JK Claude uses Anthropic Messages and a required schema tool", async () =>
   assert.match(captured.body.system, /^你是只读审核 Agent。/);
   assert.match(captured.body.system, /不可信任务资料/);
   assert.equal(captured.body.max_tokens, 4_096);
-  assert.deepEqual(captured.body.tool_choice, { type: "tool", name: "shot_result", disable_parallel_tool_use: true });
+  assert.deepEqual(captured.body.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  assert.deepEqual(captured.body.thinking, { type: 'adaptive' });
+  assert.deepEqual(captured.body.output_config, { effort: 'max' });
+  assert.equal(captured.body.stream, true);
   assert.deepEqual(captured.body.tools[0].input_schema, schema);
   assert.deepEqual(result, {
     text: '{"ok":true}',

@@ -123,6 +123,7 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
       model: "k3",
       available: true,
       evidenceMode: "direct-images",
+      lastCall: { status: "untested" },
     });
     assert.deepEqual(health.writingModels.map(({ id }) => id), [
       "glm-5.3-flash",
