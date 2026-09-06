@@ -2801,7 +2801,7 @@ function DirectorDesk() {
   }, [activeStorageKey, bridge.connected, bridge.pairingToken, hydrated, projectArchiveLoaded, projectScopeId, state]);
 
   useEffect(() => {
-    if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length || (review.completePrompt && review.completePromptStatus !== "generating")) return;
+    if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length) return;
     if (review.completePromptSummary === "最终美术风格已改为写实真人电影，请按新风格重新生成。") return;
     const recoveryShotIdentity = stableShotIdentity(shot);
     const matchingLiveJob = (bridge.promptJobs || []).find((job) => (
@@ -2815,14 +2815,6 @@ function DirectorDesk() {
       && job.status !== "running"
       && bridgeJobMatchesStableShot(job, state.projectUid, recoveryShotIdentity)
     ));
-    if (review.completePromptStatus === "generating" && !matchingTerminalJob) return;
-    const recoveryShotKey = recoveryShotIdentity.shotUid || recoveryShotIdentity.fallbackId;
-    const terminalJobStamp = matchingTerminalJob
-      ? matchingTerminalJob.finishedAt || matchingTerminalJob.updatedAt || "latest"
-      : "disk";
-    const recoveryKey = `${activeStorageKey}:${recoveryShotKey}:${terminalJobStamp}`;
-    if (recoveringCompletePrompt.current === recoveryKey) return;
-    recoveringCompletePrompt.current = recoveryKey;
     const recoveryGlobalSettings = completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings);
     const recoveryPanelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [
       panelId,
@@ -2841,6 +2833,24 @@ function DirectorDesk() {
     const recoverySourceRevision = review.completePromptStatus === "generating" && review.completePromptSourceRevision
       ? review.completePromptSourceRevision
       : currentSourceRevision;
+    const terminalFinishedAt = Date.parse(matchingTerminalJob?.finishedAt || matchingTerminalJob?.updatedAt || "") || 0;
+    const promptGeneratedAt = Date.parse(review.completePromptGeneratedAt || "") || 0;
+    const terminalHasNewerResult = matchingTerminalJob?.status === "completed"
+      && matchingTerminalJob.sourceRevision === currentSourceRevision
+      && terminalFinishedAt - promptGeneratedAt > 1000;
+    const promptNeedsRecovery = !review.completePrompt?.trim()
+      || review.completePromptStatus === "generating"
+      || review.completePromptSourceRevision !== currentSourceRevision
+      || terminalHasNewerResult;
+    if (!promptNeedsRecovery) return;
+    if (review.completePromptStatus === "generating" && !matchingTerminalJob) return;
+    const recoveryShotKey = recoveryShotIdentity.shotUid || recoveryShotIdentity.fallbackId;
+    const terminalJobStamp = matchingTerminalJob
+      ? matchingTerminalJob.finishedAt || matchingTerminalJob.updatedAt || "latest"
+      : "disk";
+    const recoveryKey = `${activeStorageKey}:${recoveryShotKey}:${recoverySourceRevision}:${terminalJobStamp}`;
+    if (recoveringCompletePrompt.current === recoveryKey) return;
+    recoveringCompletePrompt.current = recoveryKey;
     let active = true;
     let recovered = false;
     const recoveryQuery = new URLSearchParams({
@@ -2889,9 +2899,12 @@ function DirectorDesk() {
       });
       setToast(`已从本地恢复 Shot ${shot.id} 的完整提示词讨论稿；仍需独立审查`);
     }).catch(() => {
-      if (recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
       if (!active) return;
+      // A ready/stale browser draft may legitimately have no committed result
+      // for its newly calculated revision. Keep this recovery key memoized so
+      // the 1.2 s health poll does not hammer the durable-result endpoint.
       if (review.completePromptStatus !== "generating") return;
+      if (recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
       setState((previous) => ({
         ...previous,
         reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity) && item.completePromptStatus === "generating" ? {
@@ -2904,9 +2917,9 @@ function DirectorDesk() {
     });
     return () => {
       active = false;
-      if (!recovered && recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
+      if (!recovered && review.completePromptStatus === "generating" && recoveringCompletePrompt.current === recoveryKey) recoveringCompletePrompt.current = "";
     };
-  }, [activeStorageKey, activeWritingModelId, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, generationModel, hydrated, mangaSourceRequestId, review.annotations, review.completePrompt, review.completePromptSourceRevision, review.completePromptStatus, review.completePromptSummary, shot, state.globalSettings, state.projectTitle, state.projectUid, state.reviews, state.sourceMangaPanelAnnotations]);
+  }, [activeStorageKey, activeWritingModelId, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, generationModel, hydrated, mangaSourceRequestId, review.annotations, review.completePrompt, review.completePromptGeneratedAt, review.completePromptSourceRevision, review.completePromptStatus, review.completePromptSummary, shot, state.globalSettings, state.projectTitle, state.projectUid, state.reviews, state.sourceMangaPanelAnnotations]);
 
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;

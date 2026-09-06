@@ -209,6 +209,10 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(page, /completePromptConfirmedAt/);
   assert.match(page, /complete-shot-prompt/);
   assert.match(page, /review\.completePromptStatus === "generating" && !matchingTerminalJob/);
+  assert.match(page, /review\.completePromptSourceRevision !== currentSourceRevision/);
+  assert.match(page, /terminalHasNewerResult/);
+  assert.match(page, /recoverySourceRevision}:\$\{terminalJobStamp/);
+  assert.match(page, /review\.completePromptStatus === "generating" && recoveringCompletePrompt\.current === recoveryKey/);
   assert.match(page, /updateCurrentShotDuration/);
   assert.match(page, /\[6, 8, 10, 12, 15, 20, 25, 30\]/);
   assert.match(page, /id: "seedance-2\.5"[\s\S]*maxDuration: 30/);
