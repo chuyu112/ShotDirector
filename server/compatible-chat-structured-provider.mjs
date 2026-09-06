@@ -231,6 +231,7 @@ export class CompatibleChatStructuredProvider {
     maxImageBytes = DEFAULT_MAX_IMAGE_BYTES,
     maxTotalImageBytes = MAX_TOTAL_IMAGE_BYTES,
     supportsImages = true,
+    forceStream,
   } = {}) {
     const definition = providerDefinition(kind);
     this.kind = definition.kind;
@@ -245,6 +246,7 @@ export class CompatibleChatStructuredProvider {
     this.maxImages = Math.min(MAX_IMAGES, Math.max(1, Number(maxImages) || MAX_IMAGES));
     this.maxImageBytes = Math.min(MAX_TOTAL_IMAGE_BYTES, Math.max(1, Number(maxImageBytes) || DEFAULT_MAX_IMAGE_BYTES));
     this.maxTotalImageBytes = Math.min(MAX_TOTAL_IMAGE_BYTES, Math.max(1, Number(maxTotalImageBytes) || MAX_TOTAL_IMAGE_BYTES));
+    this.forceStream = forceStream === undefined ? this.kind === "jiekou" : forceStream === true;
   }
 
   get configured() {
@@ -303,9 +305,10 @@ export class CompatibleChatStructuredProvider {
       .join("\n\n");
     const effort = normalizedReasoningEffort(this.kind, reasoningEffort);
     const outputTokenLimit = normalizedMaxOutputTokens(maxOutputTokens);
+    const useStream = this.forceStream || stream === true;
     const body = {
       model: this.model,
-      ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
+      ...(useStream ? { stream: true, stream_options: { include_usage: true } } : {}),
       messages: [
         ...(trustedInstructions ? [{ role: "system", content: trustedInstructions }] : []),
         { role: "user", content },

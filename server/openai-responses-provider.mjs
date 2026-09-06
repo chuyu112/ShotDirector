@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
+import { readProviderResponse, safeUsage } from "./provider-response.mjs";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 35 * 60 * 1000;
@@ -94,6 +95,7 @@ export class OpenAIResponsesProvider {
     fetchImpl = globalThis.fetch,
     allowedRoots = [],
     maxImageBytes = DEFAULT_MAX_IMAGE_BYTES,
+    forceStream,
   } = {}) {
     this.apiKey = String(apiKey || "").trim();
     this.id = String(providerId || "openai-compatible-responses").trim();
@@ -105,6 +107,7 @@ export class OpenAIResponsesProvider {
     this.fetchImpl = fetchImpl;
     this.allowedRoots = allowedRoots.map((root) => resolve(root));
     this.maxImageBytes = Math.max(1, Number(maxImageBytes) || DEFAULT_MAX_IMAGE_BYTES);
+    this.forceStream = forceStream === undefined ? this.id.startsWith("jiekou-") : forceStream === true;
   }
 
   get configured() {
@@ -144,6 +147,8 @@ export class OpenAIResponsesProvider {
     promptCacheKey,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    stream = false,
+    onProgress,
   }) {
     if (!this.configured) throw new Error(`服务器尚未配置 ${this.label} API Key`);
     if (typeof this.fetchImpl !== "function") throw new Error("当前运行时不支持 fetch");
@@ -151,8 +156,10 @@ export class OpenAIResponsesProvider {
     if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("结构化输出 Schema 无效");
 
     const images = await this.imageContent(imagePaths, imageDetail);
+    const useStream = this.forceStream || stream === true;
     const body = {
       model,
+      ...(useStream ? { stream: true } : {}),
       instructions: String(instructions || "").trim() || undefined,
       input: [{ role: "user", content: [{ type: "input_text", text: prompt.trim() }, ...images] }],
       reasoning: { effort: reasoningEffort },
@@ -192,13 +199,7 @@ export class OpenAIResponsesProvider {
       if (error?.name === "TimeoutError" || error?.name === "AbortError") throw new Error(`${this.label} API 请求超时或已取消`);
       throw new Error(`${this.label} API 连接失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = String(payload?.error?.message || `HTTP ${response.status}`).slice(0, 500);
-      const error = new Error(`${this.label} API 失败：${message}`);
-      error.statusCode = response.status;
-      throw error;
-    }
+    const payload = await readProviderResponse(response, { protocol: "responses", label: this.label, onProgress });
     if (payload.status === "failed" || payload.status === "cancelled" || payload.status === "incomplete") {
       throw new Error(`${this.label} API 未完成：${payload?.error?.message || payload?.incomplete_details?.reason || payload.status}`);
     }
@@ -210,7 +211,7 @@ export class OpenAIResponsesProvider {
       reportedModel: typeof payload.model === 'string' ? payload.model : null,
       model: payload.model || model,
       serviceTier: payload.service_tier,
-      usage: payload.usage || null,
+      usage: safeUsage(payload.usage),
       provider: this.id,
     };
   }

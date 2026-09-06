@@ -168,6 +168,8 @@ test("JK Gemini uses the trusted API route without provider-specific reasoning f
   assert.equal(captured.url, "https://api.highwayapi.ai/openai/chat/completions");
   assert.equal(captured.body.model, "gemini-3.8-flash");
   assert.equal(captured.body.temperature, 0.7);
+  assert.equal(captured.body.stream, true);
+  assert.deepEqual(captured.body.stream_options, { include_usage: true });
   assert.equal("reasoning_effort" in captured.body, false);
   assert.equal("thinking" in captured.body, false);
   assert.equal(result.provider, "jiekou");

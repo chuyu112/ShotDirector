@@ -41,6 +41,24 @@ test('Anthropic stream assembles tool JSON and requires message_stop', async () 
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|thinking/);
 });
 
+test('Responses stream assembles visible text and requires a terminal response event', async () => {
+  const result = await readProviderResponse(sse([
+    { type: 'response.created', response: { id: 'resp_1', model: 'gpt-5.6-sol', status: 'in_progress' } },
+    { type: 'response.reasoning_summary_text.delta', delta: 'PRIVATE_REASON' },
+    { type: 'response.output_text.delta', delta: '{"ok":' },
+    { type: 'response.output_text.delta', delta: 'true}' },
+    { type: 'response.completed', response: { id: 'resp_1', model: 'gpt-5.6-sol', status: 'completed', usage: { input_tokens: 12, output_tokens: 5 } } },
+  ]), { protocol: 'responses', label: 'JK GPT' });
+  assert.equal(result.output_text, '{"ok":true}');
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.usage, { input_tokens: 12, output_tokens: 5 });
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_REASON/);
+  await assert.rejects(readProviderResponse(sse([
+    { type: 'response.output_text.delta', delta: '{"ok":true}' },
+    '[DONE]',
+  ]), { protocol: 'responses', label: 'JK GPT' }), error => error.code === 'incomplete_stream');
+});
+
 test('truncation and HTTP failures retain safe diagnosis without accepting partial JSON', async () => {
   const brokenStream = new Response(new ReadableStream({ start(controller) { controller.error(new Error('terminated')); } }), { headers: { 'content-type': 'text/event-stream' } });
   await assert.rejects(readProviderResponse(brokenStream, { protocol: 'anthropic', label: 'Claude' }), e => e.code === 'incomplete_stream' && /响应流中断/.test(e.message));

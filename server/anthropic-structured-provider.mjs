@@ -111,7 +111,6 @@ export class AnthropicStructuredProvider {
     imagePaths = [],
     maxOutputTokens,
     reasoningEffort = 'max',
-    stream = true,
     onProgress,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal,
@@ -129,7 +128,8 @@ export class AnthropicStructuredProvider {
       system,
       messages: [{ role: "user", content: prompt.trim() }],
       max_tokens: normalizedMaxOutputTokens(maxOutputTokens),
-      stream,
+      // Every JK Claude request is streamed so long reasoning does not hit a short idle proxy timeout.
+      stream: true,
       thinking: { type: 'adaptive' },
       output_config: { effort: reasoningEffort },
       tools: [{

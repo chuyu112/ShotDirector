@@ -46,6 +46,7 @@ npm run lint
 ## 必须维护的业务约束
 
 - Claude Opus／Sonnet 只读取独立 `MANJING_JIEKOU_ANTHROPIC_BASE_URL`／`JIEKOU_ANTHROPIC_BASE_URL`，默认 `https://api.highwayapi.ai/anthropic/v1`。不得回退到 OpenAI Base URL 或暗改错误路径；误配须在请求前拒绝。模型目录、Worker 白名单、部署合并与测试必须一起维护；实际请求为 Anthropic Messages，保留 adaptive thinking 与固定 MAX 约束。
+- 所有 JK 模型调用必须在 provider 层强制流式：GPT Sol／Luna 使用 Responses SSE，Gemini 使用 Chat Completions SSE，Claude Opus／Sonnet 使用 Anthropic Messages SSE。调用方不得通过 `stream=false` 降级；只接受各协议的完整终止事件，中途断流或缺失终止标记不得保存半截结果。
 
 - 2026-09-05 中转同步：KO GPT-5.6 Luna 使用 `konjac-responses` 和独立 `KONJAC_API_KEY`，仅允许 konjac.ai 受信域名。不得把旧 MY／OPENAI／JK 密钥发往 KO，不改已有 JK 选择或历史稿模型。GLM-5.3／Flash 固定 Chat Completions，误配置的 `/responses` 端点须归一为 `/chat/completions`；推理 enabled 和单 Shot MAX 约束不变。模型测试必须显式传递被测模型，不能落到 provider 的默认 Sol。
 

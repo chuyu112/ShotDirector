@@ -71,6 +71,34 @@ async function* events(response, label, payload) {
   }
 }
 
+function responsesOutputText(response) {
+  if (typeof response?.output_text === 'string') return response.output_text;
+  const chunks = [];
+  for (const item of Array.isArray(response?.output) ? response.output : []) {
+    if (item?.type !== 'message') continue;
+    for (const content of Array.isArray(item.content) ? item.content : []) {
+      if ((content?.type === 'output_text' || content?.type === 'text') && typeof content.text === 'string') chunks.push(content.text);
+    }
+  }
+  return chunks.join('');
+}
+
+function mergeResponsesMetadata(target, response) {
+  if (!response || typeof response !== 'object') return;
+  if (typeof response.id === 'string') target.id = response.id;
+  if (typeof response.model === 'string') target.model = response.model;
+  if (typeof response.status === 'string') target.status = response.status;
+  if (typeof response.service_tier === 'string') target.service_tier = response.service_tier;
+  const usage = safeUsage(response.usage);
+  if (usage) target.usage = usage;
+  const text = responsesOutputText(response);
+  if (text) target.output_text = text;
+  if (typeof response?.error?.message === 'string') target.error = { message: response.error.message.slice(0, 500) };
+  if (typeof response?.incomplete_details?.reason === 'string') {
+    target.incomplete_details = { reason: response.incomplete_details.reason.slice(0, 160) };
+  }
+}
+
 export async function readProviderResponse(response, { protocol, label, onProgress } = {}) {
   if (!response.ok) {
     // Read only JSON metadata for diagnostics, never forward the raw error body.
@@ -79,12 +107,20 @@ export async function readProviderResponse(response, { protocol, label, onProgre
   }
   if (!response.headers.get('content-type')?.includes('text/event-stream')) return response.json();
   const anthropic = protocol === 'anthropic';
-  const payload = anthropic ? { content: [], usage: {} } : { choices: [{ message: { content: '', tool_calls: [] } }] };
+  const responses = protocol === 'responses';
+  const payload = anthropic
+    ? { content: [], usage: {} }
+    : responses
+      ? { status: 'in_progress', output_text: '', usage: {} }
+      : { choices: [{ message: { content: '', tool_calls: [] } }] };
   const blocks = new Map();
   let ended = false;
   let lastProgress = 0;
   for await (const data of events(response, label, payload)) {
-    if (data === '[DONE]') { ended = !anthropic; break; }
+    if (data === '[DONE]') {
+      if (!anthropic && !responses) ended = true;
+      break;
+    }
     let event;
     try { event = JSON.parse(data); } catch { throw providerFailure(label); }
     if (event.type === 'error' || event.error) throw providerFailure(label, { code: 'stream_error' });
@@ -92,7 +128,15 @@ export async function readProviderResponse(response, { protocol, label, onProgre
       onProgress?.({ phase: 'receiving' });
       lastProgress = Date.now();
     }
-    if (anthropic) {
+    if (responses) {
+      mergeResponsesMetadata(payload, event.response);
+      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') payload.output_text += event.delta;
+      if (event.type === 'response.output_text.done' && typeof event.text === 'string') payload.output_text = event.text;
+      if (event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete') {
+        ended = true;
+        break;
+      }
+    } else if (anthropic) {
       if (event.type === 'message_start') {
         payload.id = event.message?.id;
         payload.model = event.message?.model;
@@ -125,6 +169,10 @@ export async function readProviderResponse(response, { protocol, label, onProgre
         if (call.function?.arguments) target.function.arguments += call.function.arguments;
       }
     }
+  }
+  if (responses) {
+    if (!ended) throw providerFailure(label, { payload, code: 'incomplete_stream' });
+    return payload;
   }
   const finish = anthropic ? payload.stop_reason : payload.choices[0].finish_reason;
   if (!ended || !finish) throw providerFailure(label, { payload, code: 'incomplete_stream' });

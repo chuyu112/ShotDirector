@@ -934,6 +934,8 @@ async function runCodexResponses(prompt, {
     metadata: { application: "manjing", tenant: tenantId, task: basename(schemaPath) },
     safetyIdentifier: tenantId,
     promptCacheKey: `manjing-${tenantId}-${basename(schemaPath, extname(schemaPath))}`,
+    stream: writingRuntime.providerId.startsWith("jiekou-"),
+    onProgress: () => onProgress("receiving", `${writingRuntime.label} 正在流式返回生成数据`),
     timeoutMs,
   });
   let structured;
@@ -1050,6 +1052,8 @@ async function runCompatibleChatStructured(prompt, {
           : writingRuntime.modelRuntime?.provider === "jiekou-chat"
             ? process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS
             : process.env.MANJING_DEEPSEEK_MAX_OUTPUT_TOKENS),
+      stream: writingRuntime.providerId.startsWith("jiekou-"),
+      onProgress: () => onProgress("receiving", `${writingRuntime.label} 正在流式返回生成数据`),
       timeoutMs,
     });
   } finally {
@@ -1101,6 +1105,8 @@ async function runAnthropicStructured(prompt, {
     imagePaths,
     reasoningEffort,
     maxOutputTokens: Number(process.env.MANJING_JIEKOU_MAX_OUTPUT_TOKENS),
+    stream: true,
+    onProgress: () => onProgress("receiving", `${writingRuntime.label} 正在流式返回生成数据`),
     timeoutMs,
   });
   const structured = parseJsonResponseText(result.text);

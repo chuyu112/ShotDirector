@@ -57,6 +57,29 @@ test("Responses provider sends server-side structured image input without leakin
   assert.doesNotMatch(JSON.stringify(captured.body), /test-secret-key/);
 });
 
+test("JK Responses requests are always streamed and accept a complete SSE response", async () => {
+  let captured;
+  const provider = new OpenAIResponsesProvider({
+    apiKey: "jk-secret",
+    baseUrl: "https://api.highwayapi.ai/openai/v1",
+    providerId: "jiekou-responses",
+    allowedHosts: ["api.highwayapi.ai"],
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      const frames = [
+        { type: "response.created", response: { id: "resp_jk", model: "gpt-5.6-sol", status: "in_progress" } },
+        { type: "response.output_text.delta", delta: "{\"ok\":true}" },
+        { type: "response.completed", response: { id: "resp_jk", model: "gpt-5.6-sol", status: "completed", usage: { input_tokens: 8, output_tokens: 4 } } },
+      ];
+      return new Response(frames.map((item) => `data: ${JSON.stringify(item)}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const result = await provider.generate({ prompt: "check", model: "gpt-5.6-sol", schema: { type: "object" }, stream: false });
+  assert.equal(captured.stream, true, "JK cannot be downgraded to a non-streaming request");
+  assert.equal(result.text, '{"ok":true}');
+  assert.deepEqual(result.usage, { input_tokens: 8, output_tokens: 4 });
+});
+
 test("Responses provider rejects images outside the tenant roots", async () => {
   const root = await mkdtemp(join(tmpdir(), "manjing-openai-root-"));
   const outside = await mkdtemp(join(tmpdir(), "manjing-openai-outside-"));
