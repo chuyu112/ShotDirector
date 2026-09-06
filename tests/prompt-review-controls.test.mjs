@@ -30,6 +30,33 @@ test("a running current review cannot be switched or submitted twice", () => {
   }
 });
 
+test("queued server work is authoritative and isolated by stable project and Shot identity", () => {
+  const queued = {
+    ...ready,
+    projectUid: "project-a",
+    review: { ...ready.review, shot: { id: "01", shotUid: "shot-a" } },
+    bridge: {
+      ...ready.bridge,
+      promptJobs: [{ type: "complete-shot-prompt", status: "queued", projectUid: "project-a", shotUid: "shot-a", shotId: "01" }],
+    },
+  };
+  assert.equal(promptReviewControls(queued).submitDisabled, true);
+  assert.match(promptReviewControls(queued).reason, /排队/);
+  assert.equal(promptReviewControls({
+    ...queued,
+    projectUid: "project-b",
+  }).submitDisabled, false);
+});
+
+test("an obsolete local reviewing flag cannot permanently lock a newer prompt", () => {
+  const controls = promptReviewControls({
+    ...ready,
+    review: { ...ready.review, promptReviewStatus: "reviewing", promptReviewSourceRevision: "old-review" },
+    currentReviewSourceRevision: "current-review",
+  });
+  assert.deepEqual(controls, { selectingDisabled: false, submitDisabled: false, reason: "", action: "" });
+});
+
 test("every unsupported state has a visible reason without marking drafts ready", () => {
   for (const input of [
     { ...ready, bridge: { ...ready.bridge, connected: false } },

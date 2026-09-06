@@ -17,6 +17,7 @@ import { buildMangaReadingOrder, correctMangaReviewOrder, normalizeMangaAnalysis
 import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs";
 import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
 import { promptReviewRecoveryDecision } from "./prompt-review-recovery.mjs";
+import { activeShotWorkJob, latestTerminalShotWorkJob, matchesShotWorkJob } from "./shot-work-reconciliation.mjs";
 import { persistProjectSnapshot } from "./project-save.mjs";
 import { LineListField, LineListTextarea } from "./line-list-field";
 import { TextInputDialog } from "./text-input-dialog";
@@ -532,6 +533,9 @@ type BridgeJob = {
   projectUid?: string;
   shotUid?: string;
   sourceRevision?: string;
+  completePromptSourceRevision?: string;
+  reviewerId?: string;
+  reviewerModel?: string;
   writingModelId?: string;
   writingModelLabel?: string;
   projectTitle?: string;
@@ -543,6 +547,7 @@ type BridgeJob = {
   sessionId?: string;
   protocolVersion?: number;
   status?: "queued" | "running" | "completed" | "failed" | "aborted" | "interrupted";
+  queuedAt?: string;
   stage?: string;
   message?: string;
   startedAt?: string;
@@ -1183,11 +1188,11 @@ function matchesStableShotIdentity(shot: StoryboardShot, identity: StableShotIde
 }
 
 function bridgeJobMatchesStableShot(job: BridgeJob | undefined, projectUid: string, identity: StableShotIdentity) {
-  if (!job) return false;
-  if (job.projectUid && job.projectUid !== projectUid) return false;
-  const jobShotUid = String(job.shotUid || "").trim();
-  if (identity.shotUid && jobShotUid) return identity.shotUid === jobShotUid;
-  return job.shotId === identity.fallbackId;
+  return matchesShotWorkJob(job, {
+    projectUid,
+    shotUid: identity.shotUid,
+    shotId: identity.fallbackId,
+  });
 }
 
 function completePromptResultMatchesStableShot(result: CompleteShotPromptResult, projectUid: string, identity: StableShotIdentity) {
@@ -2173,6 +2178,8 @@ function DirectorDesk() {
   const reviewControls = promptReviewControls({
     review, reviewer: selectedPromptReviewer, bridge,
     hasSource: Boolean(mangaSourceRequestId && shot.sourcePanels?.length),
+    projectUid: state.projectUid,
+    currentReviewSourceRevision: currentPromptReviewRevision,
   });
   const zoomedStructurePanelUrl = zoomedStructurePanelId && mangaSourceRequestId
     ? mangaPanelCropUrl(mangaSourceRequestId, zoomedStructurePanelId, bridge.pairingToken)
@@ -2293,7 +2300,10 @@ function DirectorDesk() {
   const assetAttentionCount = videoPackages.filter((item) => item.status === "blocked" || item.status === "stale" || item.status === "warning").length;
   const assetRunningCount = videoPackages.filter((item) => item.status === "running").length;
   const productionPipeline = useMemo(() => deriveProductionPipeline({
-    hasMangaSource: Boolean(state.sourceMangaRequestId || state.reviews.some((item) => item.shot.sourcePanels?.length)),
+    hasGlobalDefinition: Boolean(state.globalSettings.storyBackground?.trim() && state.globalSettings.finalVideoStyle?.trim()),
+    hasMangaUpload: Boolean(state.sourceMangaRequestId),
+    croppedPanelCount: new Set(state.reviews.flatMap((item) => item.shot.sourcePanels || [])).size,
+    analyzedPanelCount: Object.keys(state.sourceMangaPanels || {}).length,
     structureConfirmed,
     shotCount: state.reviews.length,
     scriptAppliedCount: state.reviews.filter((item) => item.scriptStatus === "applied").length,
@@ -2310,8 +2320,7 @@ function DirectorDesk() {
       });
     }).length,
     approvedCount,
-    videoReadyCount: assetReadyCount,
-  }), [approvedCount, assetReadyCount, state.reviews, state.sourceMangaRequestId, structureConfirmed]);
+  }), [approvedCount, state.globalSettings.finalVideoStyle, state.globalSettings.storyBackground, state.reviews, state.sourceMangaPanels, state.sourceMangaRequestId, structureConfirmed]);
   const annotationBusy = bridge.busy && (
     (bridge.activeJob?.type === "annotation" && bridge.activeJob.shotId === shot.id)
     || bridge.activeJob?.type === "annotation-batch"
@@ -2804,17 +2813,29 @@ function DirectorDesk() {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length) return;
     if (review.completePromptSummary === "最终美术风格已改为写实真人电影，请按新风格重新生成。") return;
     const recoveryShotIdentity = stableShotIdentity(shot);
-    const matchingLiveJob = (bridge.promptJobs || []).find((job) => (
-      job.type === "complete-shot-prompt"
-      && job.status === "running"
-      && bridgeJobMatchesStableShot(job, state.projectUid, recoveryShotIdentity)
-    ));
-    if (matchingLiveJob) return;
-    const matchingTerminalJob = (bridge.lastPromptJobs || []).find((job) => (
-      job.type === "complete-shot-prompt"
-      && job.status !== "running"
-      && bridgeJobMatchesStableShot(job, state.projectUid, recoveryShotIdentity)
-    ));
+    const recoveryWorkIdentity = {
+      projectUid: state.projectUid,
+      shotUid: recoveryShotIdentity.shotUid,
+      shotId: recoveryShotIdentity.fallbackId,
+    };
+    const matchingLiveJob = activeShotWorkJob(bridge.promptJobs, recoveryWorkIdentity, "complete-shot-prompt");
+    if (matchingLiveJob) {
+      if (review.completePromptStatus !== "generating" || review.completePromptSourceRevision !== matchingLiveJob.sourceRevision) {
+        setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+          ...previous,
+          reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, recoveryShotIdentity) ? {
+            ...invalidatePromptReview(item),
+            completePromptStatus: "generating" as CompleteShotPromptStatus,
+            completePromptGenerationStartedAt: matchingLiveJob.startedAt || matchingLiveJob.queuedAt,
+            completePromptSourceRevision: matchingLiveJob.sourceRevision || item.completePromptSourceRevision,
+            completePromptRequestedGeneratorId: matchingLiveJob.writingModelId || item.completePromptRequestedGeneratorId,
+            completePromptSummary: matchingLiveJob.message || item.completePromptSummary,
+          } : item),
+        }));
+      }
+      return;
+    }
+    const matchingTerminalJob = latestTerminalShotWorkJob(bridge.lastPromptJobs, recoveryWorkIdentity, "complete-shot-prompt");
     const recoveryGlobalSettings = completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings);
     const recoveryPanelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [
       panelId,
@@ -2830,17 +2851,17 @@ function DirectorDesk() {
       panelAnnotations: recoveryPanelAnnotations,
       sourceMangaRequestId: mangaSourceRequestId,
     });
-    const recoverySourceRevision = review.completePromptStatus === "generating" && review.completePromptSourceRevision
-      ? review.completePromptSourceRevision
-      : currentSourceRevision;
     const terminalFinishedAt = Date.parse(matchingTerminalJob?.finishedAt || matchingTerminalJob?.updatedAt || "") || 0;
     const promptGeneratedAt = Date.parse(review.completePromptGeneratedAt || "") || 0;
     const terminalHasNewerResult = matchingTerminalJob?.status === "completed"
-      && matchingTerminalJob.sourceRevision === currentSourceRevision
       && terminalFinishedAt - promptGeneratedAt > 1000;
+    const recoverySourceRevision = terminalHasNewerResult && matchingTerminalJob?.sourceRevision
+      ? matchingTerminalJob.sourceRevision
+      : review.completePromptStatus === "generating" && review.completePromptSourceRevision
+        ? review.completePromptSourceRevision
+        : currentSourceRevision;
     const promptNeedsRecovery = !review.completePrompt?.trim()
       || review.completePromptStatus === "generating"
-      || review.completePromptSourceRevision !== currentSourceRevision
       || terminalHasNewerResult;
     if (!promptNeedsRecovery) return;
     if (review.completePromptStatus === "generating" && !matchingTerminalJob) return;
@@ -2924,27 +2945,63 @@ function DirectorDesk() {
   useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !review.completePrompt?.trim()) return;
     if (promptReviewSubmission.current.has(shot.shotUid || shot.id)) return;
-    if (promptReviewIsCurrent) return;
-    const matchingTerminalJob = (bridge.lastPromptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid && job.sourceRevision === review.promptReviewSourceRevision && ["completed", "failed", "aborted", "interrupted"].includes(job.status || "")) || (bridge.lastJob?.type === "prompt-review" && bridge.lastJob.shotId === shot.id && bridge.lastJob.sourceRevision === review.promptReviewSourceRevision && ["completed", "failed", "aborted", "interrupted"].includes(bridge.lastJob.status || "") ? bridge.lastJob : undefined);
-    if (review.promptReviewStatus !== "reviewing" && !matchingTerminalJob) return;
-    const recoveryReviewerId = review.promptReviewerId || selectedPromptReviewerId;
-    const sourceRevision = buildPromptReviewRevision({
+    const reviewRevisionFor = (reviewerId: string) => buildPromptReviewRevision({
       shotId: shot.id,
       completePrompt: review.completePrompt,
       completePromptSourceRevision: review.completePromptSourceRevision,
       completePromptGeneratorId: review.completePromptGeneratorId || legacyUnknownModelId,
-      reviewerId: recoveryReviewerId,
+      reviewerId,
     });
-    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${review.promptReviewRunId || matchingTerminalJob?.finishedAt || "legacy"}`;
+    const matchesCurrentPromptReviewJob = (job: BridgeJob | undefined) => {
+      if (!job || job.type !== "prompt-review" || !bridgeJobMatchesStableShot(job, state.projectUid, stableShotIdentity(shot))) return false;
+      const reviewerId = job.reviewerId || review.promptReviewerId || selectedPromptReviewerId;
+      return Boolean(reviewerId) && job.sourceRevision === reviewRevisionFor(reviewerId);
+    };
+    const reviewWorkIdentity = {
+      projectUid: state.projectUid,
+      shotUid: shot.shotUid,
+      shotId: shot.id,
+    };
+    const matchingLiveJob = activeShotWorkJob(bridge.promptJobs, reviewWorkIdentity, "prompt-review", matchesCurrentPromptReviewJob);
+    const matchingTerminalJob = latestTerminalShotWorkJob(bridge.lastPromptJobs, reviewWorkIdentity, "prompt-review", matchesCurrentPromptReviewJob)
+      || (["completed", "failed", "aborted", "interrupted"].includes(bridge.lastJob?.status || "") && matchesCurrentPromptReviewJob(bridge.lastJob) ? bridge.lastJob : undefined);
+    const recoveryReviewerId = matchingLiveJob?.reviewerId || matchingTerminalJob?.reviewerId || review.promptReviewerId || selectedPromptReviewerId;
+    const sourceRevision = reviewRevisionFor(recoveryReviewerId);
+    const localReviewIsCurrent = review.promptReviewStatus === "reviewing" && review.promptReviewSourceRevision === sourceRevision;
+    const completedReviewIsCurrent = promptReviewArtifactIsCurrent && review.promptReviewSourceRevision === sourceRevision;
+    if (completedReviewIsCurrent && !matchingLiveJob && !matchingTerminalJob) return;
+    if (!localReviewIsCurrent && !matchingLiveJob && !matchingTerminalJob) return;
+    const recoveryRunId = matchingLiveJob?.runId
+      || (localReviewIsCurrent ? review.promptReviewRunId : undefined)
+      || matchingTerminalJob?.runId;
+    const recoveryKey = `${activeStorageKey}:${shot.id}:${sourceRevision}:${recoveryRunId || matchingTerminalJob?.finishedAt || "legacy"}`;
     if (recoveringPromptReview.current === recoveryKey) return;
     recoveringPromptReview.current = recoveryKey;
     let active = true;
+    if (matchingLiveJob && (!localReviewIsCurrent || review.promptReviewRunId !== matchingLiveJob.runId)) {
+      setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
+        ...previous,
+        reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, stableShotIdentity(shot)) ? {
+          ...item,
+          approved: false,
+          approvedAt: undefined,
+          promptReviewerId: recoveryReviewerId,
+          promptReviewerModel: matchingLiveJob.reviewerModel || item.promptReviewerModel,
+          promptReviewStatus: "reviewing" as PromptReviewStatus,
+          promptReviewSourceRevision: sourceRevision,
+          promptReviewStartedAt: matchingLiveJob.startedAt || matchingLiveJob.queuedAt || item.promptReviewStartedAt,
+          promptReviewRequestId: matchingLiveJob.requestId || item.promptReviewRequestId,
+          promptReviewRunId: matchingLiveJob.runId || item.promptReviewRunId,
+          promptReviewError: matchingLiveJob.message || undefined,
+        } : item),
+      }));
+    }
     void (async () => {
       let httpStatus = 0;
       let result: PromptReviewRecoveryResult = {};
       try {
-        const recoveryUrl = review.promptReviewRunId
-          ? `${bridgeBase}/harness/runs/${encodeURIComponent(review.promptReviewRunId)}`
+        const recoveryUrl = recoveryRunId
+          ? `${bridgeBase}/harness/runs/${encodeURIComponent(recoveryRunId)}`
           : `${bridgeBase}/job-result?type=prompt-review&projectUid=${encodeURIComponent(state.projectUid)}&shotUid=${encodeURIComponent(shot.shotUid || "")}&shotId=${encodeURIComponent(shot.id)}&sourceRevision=${encodeURIComponent(sourceRevision)}`;
         const response = await bridgeFetch(recoveryUrl, {
           cache: "no-store",
@@ -2980,21 +3037,32 @@ function DirectorDesk() {
         }
         setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
           ...previous,
-          reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === review.promptReviewSourceRevision ? {
-            ...item,
-            approved: false,
-            approvedAt: undefined,
-            promptReviewerId: result.reviewerId,
-            promptReviewerModel: result.reviewerModel?.trim() || undefined,
-            promptReviewStatus: "ready" as PromptReviewStatus,
-            promptReviewReport: result.report,
-            promptReviewSourceRevision: result.sourceRevision,
-            promptReviewStartedAt: undefined,
-            promptReviewedAt: result.reviewedAt,
-            promptReviewRequestId: result.requestId,
-            promptReviewRunId: result.runId || item.promptReviewRunId,
-            promptReviewError: undefined,
-          } : item),
+          reviews: previous.reviews.map((item) => {
+            if (!matchesStableShotIdentity(item.shot, stableShotIdentity(shot))) return item;
+            const itemRevision = buildPromptReviewRevision({
+              shotId: item.shot.id,
+              completePrompt: item.completePrompt || "",
+              completePromptSourceRevision: item.completePromptSourceRevision,
+              completePromptGeneratorId: item.completePromptGeneratorId || legacyUnknownModelId,
+              reviewerId: recoveryReviewerId,
+            });
+            if (itemRevision !== sourceRevision) return item;
+            return {
+              ...item,
+              approved: false,
+              approvedAt: undefined,
+              promptReviewerId: result.reviewerId,
+              promptReviewerModel: result.reviewerModel?.trim() || undefined,
+              promptReviewStatus: "ready" as PromptReviewStatus,
+              promptReviewReport: result.report,
+              promptReviewSourceRevision: result.sourceRevision,
+              promptReviewStartedAt: undefined,
+              promptReviewedAt: result.reviewedAt,
+              promptReviewRequestId: result.requestId,
+              promptReviewRunId: result.runId || item.promptReviewRunId,
+              promptReviewError: undefined,
+            };
+          }),
         }));
         setToast(`已恢复 ${result.reviewerLabel || result.reviewerId} 的独立审查报告`);
       } catch (error) {
@@ -3024,7 +3092,7 @@ function DirectorDesk() {
       }
     })();
     return () => { active = false; };
-  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewRunId, review.promptReviewStartedAt, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
+  }, [activeStorageKey, activeWritingModelId, bridge.activeJob, bridge.connected, bridge.lastJob, bridge.promptJobs, bridge.lastPromptJobs, bridge.pairingToken, hydrated, promptReviewArtifactIsCurrent, review.completePrompt, review.completePromptGeneratorId, review.completePromptSourceRevision, review.promptReviewerId, review.promptReviewRunId, review.promptReviewStartedAt, review.promptReviewStatus, selectedPromptReviewerId, shot.id, shot.shotUid, state.projectUid, review.promptReviewSourceRevision]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -3632,7 +3700,7 @@ function DirectorDesk() {
     const targetShotIdentity = stableShotIdentity(targetReview.shot);
     const existingServerJob = (bridge.promptJobs || []).find((job) => (
       job.type === "complete-shot-prompt"
-      && job.status === "running"
+      && ["queued", "running"].includes(job.status || "")
       && bridgeJobMatchesStableShot(job, state.projectUid, targetShotIdentity)
     ));
     if (existingServerJob) {
@@ -3641,7 +3709,7 @@ function DirectorDesk() {
         reviews: previous.reviews.map((item) => matchesStableShotIdentity(item.shot, targetShotIdentity) ? {
           ...item,
           completePromptStatus: "generating" as CompleteShotPromptStatus,
-          completePromptGenerationStartedAt: existingServerJob.startedAt,
+          completePromptGenerationStartedAt: existingServerJob.startedAt || existingServerJob.queuedAt,
           completePromptSourceRevision: existingServerJob.sourceRevision || item.completePromptSourceRevision,
         } : item),
       }));
@@ -3897,11 +3965,11 @@ function DirectorDesk() {
       const result = await response.json() as PromptReviewRecoveryResult;
       if (!response.ok) {
         definitiveResponseFailure = result.status === "failed" || result.status === "aborted" || result.status === "interrupted"
-          || (response.status >= 400 && response.status < 500 && response.status !== 404 && response.status !== 409);
+          || (response.status >= 400 && response.status < 500 && response.status !== 404 && !(response.status === 409 && result.runId));
         throw new Error(result.error || "独立审查失败");
       }
       if (result.status === "queued" || result.status === "running") {
-        if (!result.runId) throw new Error("Harness 未返回可恢复的 Run ID");
+        if (!result.runId) throw new Error("审核服务未返回可恢复的任务编号");
         setState((previous) => previous.projectUid !== state.projectUid ? previous : ({
           ...previous,
           reviews: previous.reviews.map((item) => item.shot.shotUid === shot.shotUid && item.promptReviewSourceRevision === sourceRevision ? {
@@ -6497,7 +6565,7 @@ function DirectorDesk() {
 
           <aside className="strict-review-report-column">
             <section className="strict-review-control-card">
-              <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>每次都是隔离的新 Agent Session，只输出问题、证据与建议。</p></div>
+              <div><span>INDEPENDENT REVIEWER</span><h2>严格审核</h2><p>只核对当前提示词与原作画格，输出问题、证据与建议。</p></div>
               <label><span>Reviewer 审核模型（不影响 Creator）</span><select value={selectedPromptReviewerId} disabled={reviewControls.selectingDisabled} onChange={(event) => selectPromptReviewer(event.target.value)}>{reviewerOptions.map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? "" : " · 暂不可用"}</option>)}</select></label>
               <p className="strict-review-evidence-mode"><b>证据方式：</b>{evidenceModeLabel}<br /><b>推理深度：</b>MAX（服务端锁定）</p>
               {selectedPromptReviewer?.available ? <p className="prompt-review-config" data-call-status={selectedPromptReviewer.lastCall?.status || "configured"} role="status">{selectedPromptReviewer.lastCall?.status === 'succeeded' ? '最近一次审核调用成功' : selectedPromptReviewer.lastCall?.status === 'failed' ? selectedPromptReviewer.lastCall.message : '配置已就绪，本次服务启动后尚未完成真实审核验证'}{selectedPromptReviewer.lastCall?.checkedAt ? ` · ${new Date(selectedPromptReviewer.lastCall.checkedAt).toLocaleString('zh-CN')}` : ''}</p> : null}
@@ -6509,10 +6577,10 @@ function DirectorDesk() {
 
             {review.promptReviewStatus === "error" ? <p className="prompt-review-error">{review.promptReviewError || "严格审核失败，请重试。"}</p> : null}
             {review.promptReviewStatus === "stale" ? <p className="prompt-review-stale">Creator 内容已改变；旧报告只读保留，必须针对当前快照重新审核。</p> : null}
-            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running"><span>{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || review.promptReviewError || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</span>{review.promptReviewRunId ? <small>Harness Run · {review.promptReviewRunId}</small> : null}</div> : null}
+            {review.promptReviewStatus === "reviewing" ? <div className="strict-review-running"><span>{(bridge.promptJobs || []).find(job => job.type === "prompt-review" && job.shotUid === shot.shotUid)?.message || review.promptReviewError || "Reviewer 正在排队或核对当前只读快照，不会修改任何内容…"}</span></div> : null}
             {review.promptReviewReport ? (
               <section className={`strict-review-report ${review.promptReviewReport.verdict}`}>
-                <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · {review.promptReviewRunId || "legacy run"} · 无修改权 · 无批准权</small></header>
+                <header><span>REVIEW REPORT</span><h2>{review.promptReviewReport.verdict === "needs-revision" ? "发现问题，需要返回创作台处理" : "未发现阻断问题，可进入人工讨论"}</h2><p>{review.promptReviewReport.summary}</p><small>{review.promptReviewerModel || legacyUnknownModelId} · {review.promptReviewedAt ? new Date(review.promptReviewedAt).toLocaleString("zh-CN") : ""} · 无修改权 · 无批准权</small></header>
                 <div className="prompt-review-checks">{Object.entries(review.promptReviewReport.checks).map(([key, passed]) => <span key={key} className={passed ? "pass" : "fail"}>{passed ? "✓" : "!"} {{ sourceBoundary: "剧情边界", characterContinuity: "人物连续性", timingFeasible: "时长可执行", dialogueFeasible: "对白可执行", cameraAndActionCoherent: "镜头动作", soundAndNegativeComplete: "声音禁止项" }[key as keyof PromptReviewReport["checks"]]}</span>)}</div>
                 {review.promptReviewReport.findings.length ? <ol className="prompt-review-findings">{review.promptReviewReport.findings.map((finding) => <li key={finding.id} className={finding.severity}><div><span>{finding.severity === "blocking" ? "阻断" : finding.severity === "warning" ? "警告" : "建议"}</span><b>{finding.title}</b><small>{finding.category}{finding.panelIds.length ? ` · ${finding.panelIds.join("、")}` : ""}</small></div><p>{finding.detail}</p><strong>建议方向：{finding.suggestion}</strong></li>)}</ol> : <p className="prompt-review-clean">未发现需要列出的具体问题。</p>}
                 {review.promptReviewReport.strengths.length ? <p className="prompt-review-strengths">已确认：{review.promptReviewReport.strengths.join("；")}</p> : null}
@@ -6700,8 +6768,8 @@ function DirectorDesk() {
         </div>
       </section>
 
-      <section className="production-pipeline" aria-label="漫画到视频生产阶段">
-        <div className="production-pipeline-heading"><span>PRODUCTION</span><b>漫画 → 拆分 → 分镜 → 提示词 → 审核 → 确认 → 视频</b></div>
+      <section className="production-pipeline" aria-label="漫画到提示词终稿工作阶段">
+        <div className="production-pipeline-heading"><span>PRODUCTION</span><b>全局定义 → 上传漫画 → 裁剪漫画 → 分析漫画 → 组合分镜 → 生成提示词 → 严格审核 → 确认终稿</b></div>
         <ol>
           {productionPipeline.map((stage, index) => (
             <li className={`production-stage ${stage.status}`} key={stage.id} title={stage.detail}>

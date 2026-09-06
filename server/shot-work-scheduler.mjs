@@ -11,9 +11,19 @@ export class ShotWorkScheduler {
     return { limit: SHOT_WORK_LIMIT, active: this.#active, queued: this.#queue.length };
   }
 
+  owns(job) {
+    return this.#owned.has(this.#key(job));
+  }
+
+  #key(job) {
+    if (!job?.projectUid || !(job?.shotUid || job?.shotId)) {
+      throw new Error('Shot 工作任务缺少稳定身份');
+    }
+    return JSON.stringify([job.projectUid, job.shotUid || job.shotId]);
+  }
+
   run(job, work, onStart = () => {}) {
-    const key = JSON.stringify([job.projectUid, job.shotUid || job.shotId]);
-    if (!job.projectUid || !(job.shotUid || job.shotId)) throw new Error('Shot 工作任务缺少稳定身份');
+    const key = this.#key(job);
     if (this.#owned.has(key)) {
       throw Object.assign(new Error(`Shot ${job.shotId} 已有任务运行或排队，请等待完成`), { statusCode: 409 });
     }

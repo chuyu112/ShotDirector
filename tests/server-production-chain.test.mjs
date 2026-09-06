@@ -727,7 +727,10 @@ test("server production chain covers five-shot manga workflow without paid APIs"
     }
 
     const beforeApproval = deriveProductionPipeline({
-      hasMangaSource: true,
+      hasGlobalDefinition: true,
+      hasMangaUpload: true,
+      croppedPanelCount: 2,
+      analyzedPanelCount: 2,
       structureConfirmed: true,
       shotCount: shots.length,
       scriptAppliedCount: shots.length,
@@ -737,7 +740,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
       videoReadyCount: 0,
     });
     assert.equal(beforeApproval.find((stage) => stage.id === "review").status, "completed");
-    assert.equal(beforeApproval.find((stage) => stage.id === "video").status, "blocked");
+    assert.equal(beforeApproval.find((stage) => stage.id === "confirm").status, "active");
 
     const impossibleApproval = deriveProductionPipeline({
       hasMangaSource: true,
@@ -749,7 +752,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
       approvedCount: shots.length,
       videoReadyCount: 0,
     });
-    assert.equal(impossibleApproval.find((stage) => stage.id === "video").status, "blocked", "approval counts cannot bypass independent review");
+    assert.equal(impossibleApproval.find((stage) => stage.id === "confirm").status, "pending", "approval counts cannot bypass independent review");
 
     const unapprovedGeneratingPackage = readyVideoPackage(shots[0], false, "generating");
     assert.equal(unapprovedGeneratingPackage.status, "blocked", "an in-flight artwork must not bypass user approval");
@@ -766,7 +769,7 @@ test("server production chain covers five-shot manga workflow without paid APIs"
       approvedCount: shots.length,
       videoReadyCount: videoPackages.length,
     });
-    assert.equal(approvedPipeline.find((stage) => stage.id === "video").status, "ready");
+    assert.equal(approvedPipeline.find((stage) => stage.id === "confirm").status, "completed");
 
     const manifest = buildProjectManifest({
       projectUid,

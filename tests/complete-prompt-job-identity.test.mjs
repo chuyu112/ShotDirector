@@ -108,8 +108,12 @@ test("bridge shares the five-Shot queue while binding each task to its submissio
 
   assert.match(source, /return withCompletePromptJob\(identity,/);
   assert.doesNotMatch(source, /withJob\("complete-shot-prompt"/);
-  assert.match(source, /return withCompletePromptJob\(completePromptIdentityFromPayload\(payload\)/);
+  assert.match(source, /const identity = completePromptIdentityFromPayload\(payload\);[\s\S]*?return withCompletePromptJob\(identity,/);
   assert.match(source, /shotWorkScheduler\.run\(job/);
+  assert.match(source, /status: "queued"/);
+  assert.match(source, /job\.status = "running"/);
+  assert.match(source, /if \(options\.startGate\) await options\.startGate/);
+  assert.match(source, /shotWorkScheduler\.owns\(identity\)/);
   assert.doesNotMatch(source, /return withJob\("prompt-review"/);
   assert.match(source, /promptJobs:\s*\[\.\.\.activeCompletePromptJobs\.values\(\)\]/);
   assert.match(source, /lastPromptJobs:\s*\[\.\.\.lastCompletePromptJobs\.values\(\)\]/);

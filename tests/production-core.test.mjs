@@ -98,9 +98,12 @@ test("stable identities survive display-number changes", () => {
   assert.notEqual(ensureShotUid("", projectUid, "P01-G03"), shotUid);
 });
 
-test("pipeline never unlocks paid video before user confirmation", () => {
+test("pipeline follows the eight durable comic-to-final-prompt stages", () => {
   const pipeline = deriveProductionPipeline({
-    hasMangaSource: true,
+    hasGlobalDefinition: true,
+    hasMangaUpload: true,
+    croppedPanelCount: 4,
+    analyzedPanelCount: 4,
     structureConfirmed: true,
     shotCount: 2,
     scriptAppliedCount: 2,
@@ -109,8 +112,9 @@ test("pipeline never unlocks paid video before user confirmation", () => {
     approvedCount: 0,
     videoReadyCount: 0,
   });
+  assert.deepEqual(pipeline.map((stage) => stage.id), ["global", "upload", "crop", "analyze", "group", "prompt", "review", "confirm"]);
   assert.equal(pipeline.find((stage) => stage.id === "review")?.status, "completed");
-  assert.equal(pipeline.find((stage) => stage.id === "video")?.status, "blocked");
+  assert.equal(pipeline.find((stage) => stage.id === "confirm")?.status, "active");
 });
 
 test("manifest separates stable shot identity from editable display number", () => {

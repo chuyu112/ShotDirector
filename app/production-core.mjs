@@ -39,29 +39,27 @@ function stage(id, label, status, detail, count) {
  */
 export function deriveProductionPipeline(input) {
   const shotCount = Math.max(0, Number(input.shotCount) || 0);
-  const scriptAppliedCount = Math.max(0, Number(input.scriptAppliedCount) || 0);
   const promptReadyCount = Math.max(0, Number(input.promptReadyCount) || 0);
   const promptReviewedCount = Math.max(0, Number(input.promptReviewedCount) || 0);
   const approvedCount = Math.max(0, Number(input.approvedCount) || 0);
-  const videoReadyCount = Math.max(0, Number(input.videoReadyCount) || 0);
-  const hasMangaSource = Boolean(input.hasMangaSource);
+  const hasGlobalDefinition = input.hasGlobalDefinition === undefined ? true : Boolean(input.hasGlobalDefinition);
+  const hasMangaUpload = Boolean(input.hasMangaUpload ?? input.hasMangaSource);
+  const croppedPanelCount = Math.max(0, Number(input.croppedPanelCount) || (hasMangaUpload ? 1 : 0));
+  const analyzedPanelCount = Math.max(0, Number(input.analyzedPanelCount) || (input.hasMangaSource ? croppedPanelCount : 0));
   const structureConfirmed = Boolean(input.structureConfirmed);
   const approvalChainValid = approvedCount <= shotCount
-    && approvedCount <= scriptAppliedCount
     && approvedCount <= promptReadyCount
     && approvedCount <= promptReviewedCount;
-  const videoBlocked = approvedCount === 0 || !approvalChainValid;
 
   return [
-    stage("manga", "漫画入库", hasMangaSource ? "completed" : "pending", hasMangaSource ? "原漫画与画格证据已关联" : "等待上传漫画", hasMangaSource ? 1 : 0),
-    stage("split", "拆分编组", !hasMangaSource ? "pending" : structureConfirmed ? "completed" : "active", !hasMangaSource ? "漫画入库后开始" : structureConfirmed ? `${shotCount} 个 Shot 结构已确认` : "正在拆格、合并与确认 Shot 边界", shotCount),
-    stage("storyboard", "分镜", !structureConfirmed ? "pending" : shotCount > 0 && scriptAppliedCount === shotCount ? "completed" : "active", `${scriptAppliedCount}/${shotCount} 镜脚本已应用`, scriptAppliedCount),
-    stage("prompt", "提示词", !scriptAppliedCount ? "pending" : shotCount > 0 && promptReadyCount === shotCount ? "completed" : "active", `${promptReadyCount}/${shotCount} 镜完整提示词已生成`, promptReadyCount),
+    stage("global", "全局定义", hasGlobalDefinition ? "completed" : "active", hasGlobalDefinition ? "故事背景与最终风格已定义" : "先定义故事背景与最终风格", hasGlobalDefinition ? 1 : 0),
+    stage("upload", "上传漫画", !hasGlobalDefinition ? "pending" : hasMangaUpload ? "completed" : "active", hasMangaUpload ? "漫画原图已保存" : "等待上传漫画原图", hasMangaUpload ? 1 : 0),
+    stage("crop", "裁剪漫画", !hasMangaUpload ? "pending" : croppedPanelCount > 0 ? "completed" : "active", croppedPanelCount ? `${croppedPanelCount} 个画格已裁出` : "等待确认并裁出画格", croppedPanelCount),
+    stage("analyze", "分析漫画", !croppedPanelCount ? "pending" : analyzedPanelCount >= croppedPanelCount ? "completed" : "active", `${Math.min(analyzedPanelCount, croppedPanelCount)}/${croppedPanelCount} 个画格已分析`, analyzedPanelCount),
+    stage("group", "组合分镜", analyzedPanelCount < croppedPanelCount ? "pending" : structureConfirmed ? "completed" : "active", structureConfirmed ? `${shotCount} 个 Shot 组合已确认` : "等待检查和确认 Shot 组合", shotCount),
+    stage("prompt", "生成提示词", !structureConfirmed ? "pending" : shotCount > 0 && promptReadyCount === shotCount ? "completed" : "active", `${promptReadyCount}/${shotCount} 镜完整提示词已生成`, promptReadyCount),
     stage("review", "审核", !promptReadyCount ? "pending" : shotCount > 0 && promptReviewedCount === shotCount ? "completed" : "active", `${promptReviewedCount}/${shotCount} 镜通过独立 AI Reviewer；保留联网证据`, promptReviewedCount),
-    stage("confirm", "确认", !promptReviewedCount ? "pending" : shotCount > 0 && approvedCount === shotCount ? "completed" : "active", `${approvedCount}/${shotCount} 镜已由用户签字确认`, approvedCount),
-    stage("video", "LibTV 生视频", videoBlocked ? "blocked" : videoReadyCount > 0 ? "ready" : "active", videoBlocked
-      ? approvedCount ? "审批状态与脚本、提示词或独立审核不一致，禁止提交" : "用户确认前禁止提交"
-      : `${videoReadyCount}/${approvedCount} 个视频包可提交；当前仅准备，不自动付费`, videoReadyCount),
+    stage("confirm", "确认终稿", !promptReviewedCount || !approvalChainValid ? "pending" : shotCount > 0 && approvedCount === shotCount ? "completed" : "active", `${approvedCount}/${shotCount} 镜已由用户确认终稿`, approvedCount),
   ];
 }
 

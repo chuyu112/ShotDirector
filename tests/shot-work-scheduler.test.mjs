@@ -22,3 +22,16 @@ test('Creator, Chat and Reviewer share five slots, preserve FIFO, and release on
   assert.deepEqual(pool.snapshot(), { limit: 5, active: 0, queued: 0 });
   assert.equal(await pool.run({ projectUid: 'project', shotUid: 'shot-1' }, () => 'retry'), 'retry');
 });
+
+test('stable Shot ownership is reserved synchronously before queued work starts', async () => {
+  const pool = new ShotWorkScheduler();
+  let release;
+  const job = { projectUid: 'project', shotUid: 'shot-1', shotId: '01' };
+  const pending = pool.run(job, () => new Promise(resolve => { release = resolve; }));
+  assert.equal(pool.owns(job), true);
+  assert.throws(() => pool.run({ ...job, sourceRevision: 'another-version' }, () => 'duplicate'), /已有任务/);
+  await tick();
+  release('done');
+  assert.equal(await pending, 'done');
+  assert.equal(pool.owns(job), false);
+});

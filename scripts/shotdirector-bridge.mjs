@@ -831,6 +831,9 @@ function publicJob(job) {
     projectUid: job.projectUid ? String(job.projectUid).slice(0, 160) : undefined,
     shotUid: job.shotUid ? String(job.shotUid).slice(0, 160) : undefined,
     sourceRevision: job.sourceRevision ? String(job.sourceRevision).slice(0, 160) : undefined,
+    completePromptSourceRevision: job.completePromptSourceRevision ? String(job.completePromptSourceRevision).slice(0, 160) : undefined,
+    reviewerId: job.reviewerId ? String(job.reviewerId).slice(0, 160) : undefined,
+    reviewerModel: job.reviewerModel ? String(job.reviewerModel).slice(0, 240) : undefined,
     projectTitle: job.projectTitle ? String(job.projectTitle).slice(0, 240) : undefined,
     assetId: job.assetId ? String(job.assetId).slice(0, 160) : undefined,
     assetKind: job.assetKind,
@@ -840,6 +843,7 @@ function publicJob(job) {
     sessionId: job.sessionId,
     protocolVersion: job.protocolVersion,
     status: job.status,
+    queuedAt: job.queuedAt,
     startedAt: job.startedAt,
     updatedAt: job.updatedAt,
     finishedAt: job.finishedAt,
@@ -4055,7 +4059,7 @@ async function withCompletePromptJob(identity, projectTitle, work, type = "compl
   const requestId = isMediaId(requestedRequestId) ? requestedRequestId : randomUUID();
   const visibleJobMetadata = { ...jobMetadata };
   delete visibleJobMetadata.requestId;
-  const startedAt = new Date().toISOString();
+  const queuedAt = new Date().toISOString();
   const job = {
     type,
     chatTurnId: chatTurnId || undefined,
@@ -4063,9 +4067,10 @@ async function withCompletePromptJob(identity, projectTitle, work, type = "compl
     ...visibleJobMetadata,
     projectTitle,
     requestId,
-    status: "running",
-    startedAt,
-    updatedAt: startedAt,
+    status: "queued",
+    queuedAt,
+    startedAt: undefined,
+    updatedAt: queuedAt,
     finishedAt: undefined,
     stage: "queued",
     message: `Shot ${identity.shotId || identity.shotUid} 已加入工作队列（最多同时工作 5 个 Shot）`,
@@ -4078,6 +4083,10 @@ async function withCompletePromptJob(identity, projectTitle, work, type = "compl
   };
   try {
     const result = await shotWorkScheduler.run(job, () => writingModelTaskContext.run(taskRuntime, () => work(requestId, report)), () => {
+      const startedAt = new Date().toISOString();
+      job.status = "running";
+      job.startedAt = startedAt;
+      job.updatedAt = startedAt;
       addJobEvent(job, "preparing", `Shot ${identity.shotId} 开始${type === "prompt-review" ? "严格审核" : type === "shot-chat" ? "Chat" : "生成提示词"}`);
     });
     job.result = result;
@@ -4302,38 +4311,42 @@ function strictReviewHarnessJob(reviewer, requestId) {
 
 async function reviewCompleteShotPrompt(payload, options = {}) {
   const { shot, panelIds, reviewer } = strictReviewSubmission(payload);
+  const identity = completePromptIdentityFromPayload(payload);
   const requestId = isMediaId(options.requestId) ? options.requestId : randomUUID();
   const harnessJob = strictReviewHarnessJob(reviewer, requestId);
   const runId = harnessJob.id;
   const sessionId = manjingHarnessSessionId(harnessJob);
 
-  const analysis = recoverMediaAnalysisResult(payload.sourceMangaRequestId);
-  if (analysis?.kind !== "manga" || !Array.isArray(analysis.mangaPages)) throw new Error("来源漫画分析结果不可用");
-  const panelAnnotations = payload.panelAnnotations && typeof payload.panelAnnotations === "object" ? payload.panelAnnotations : {};
-  const panels = [];
-  for (const panelId of panelIds) {
-    const page = analysis.mangaPages.find((item) => item.panels?.some((panel) => panel.id === panelId));
-    const panel = page?.panels?.find((item) => item.id === panelId);
-    if (!page || !panel?.includeInShots) throw new Error(`找不到来源画格 ${panelId}`);
-    panels.push({
-      panelId,
-      cropPath: await createMangaPanelCrop(payload.sourceMangaRequestId, panelId),
-      sourceObservation: panel.sourceObservation || "",
-      textSummary: panel.textSummary || "",
-      sourceText: (analysis.sourceText || []).filter((item) => item.location === panelId),
-      userAnnotation: String(panelAnnotations[panelId] || "").trim(),
-    });
-  }
-  const evidence = { panelIds, panels };
-  const reviewSnapshotHash = strictReviewSnapshotHash(payload, evidence, reviewer);
-
-  return withCompletePromptJob(completePromptIdentityFromPayload(payload), payload.projectTitle, async (jobRequestId, report) => {
+  // Reserve the stable Shot before any image/crop I/O. This makes acceptance
+  // atomic: a 202 acknowledgement can never be followed by a hidden same-Shot
+  // scheduler conflict.
+  return withCompletePromptJob(identity, payload.projectTitle, async (jobRequestId, report) => {
+    if (options.startGate) await options.startGate;
     await harnessStore.beginRun(harnessJob);
+    const analysis = recoverMediaAnalysisResult(payload.sourceMangaRequestId);
+    if (analysis?.kind !== "manga" || !Array.isArray(analysis.mangaPages)) throw new Error("来源漫画分析结果不可用");
+    const panelAnnotations = payload.panelAnnotations && typeof payload.panelAnnotations === "object" ? payload.panelAnnotations : {};
+    const panels = [];
+    for (const panelId of panelIds) {
+      const page = analysis.mangaPages.find((item) => item.panels?.some((panel) => panel.id === panelId));
+      const panel = page?.panels?.find((item) => item.id === panelId);
+      if (!page || !panel?.includeInShots) throw new Error(`找不到来源画格 ${panelId}`);
+      panels.push({
+        panelId,
+        cropPath: await createMangaPanelCrop(payload.sourceMangaRequestId, panelId),
+        sourceObservation: panel.sourceObservation || "",
+        textSummary: panel.textSummary || "",
+        sourceText: (analysis.sourceText || []).filter((item) => item.location === panelId),
+        userAnnotation: String(panelAnnotations[panelId] || "").trim(),
+      });
+    }
+    const evidence = { panelIds, panels };
+    const reviewSnapshotHash = strictReviewSnapshotHash(payload, evidence, reviewer);
     const outputPath = join(responseDir, `prompt-review-${jobRequestId}.json`);
     const prompt = promptReviewerAgentPrompt(payload, evidence, reviewer);
     const reviewStartedAt = Date.now();
     const attempts = [];
-    report("preparing-review", `已创建独立 Reviewer 任务 ${requestId.slice(0, 8)}，不会复用生成 Agent 会话`);
+    report("preparing-review", `已创建独立 Reviewer 任务 ${requestId.slice(0, 8)}；只核对当前提示词，不修改正文`);
     let result;
     let compatibleReviewerLineage;
     if (reviewer.provider === "codex") {
@@ -4420,6 +4433,9 @@ async function reviewCompleteShotPrompt(payload, options = {}) {
     runId,
     sessionId,
     protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
+    reviewerId: reviewer.id,
+    reviewerModel: reviewer.model,
+    completePromptSourceRevision: payload.completePromptSourceRevision,
   }).then(result => {
     reviewerCallHealth.set(reviewer.id, { status: 'succeeded', checkedAt: new Date().toISOString() });
     return result;
@@ -4464,6 +4480,12 @@ async function enqueuePromptReviewRun(payload, taskRuntime) {
     // No committed report exists for this exact immutable review snapshot.
   }
 
+  if (shotWorkScheduler.owns(identity)) {
+    const error = new Error(`Shot ${identity.shotId} 已有生成、Chat 或审核任务，请等待完成后再审核`);
+    error.statusCode = 409;
+    throw error;
+  }
+
   const requestId = randomUUID();
   const harnessJob = strictReviewHarnessJob(reviewer, requestId);
   const runId = harnessJob.id;
@@ -4486,6 +4508,16 @@ async function enqueuePromptReviewRun(payload, taskRuntime) {
   };
   const entry = { acknowledgement, completion: null };
   pendingPromptReviewRuns.set(runKey, entry);
+  let releaseStart;
+  let rejectStart;
+  const startGate = new Promise((resolve, reject) => {
+    releaseStart = resolve;
+    rejectStart = reject;
+  });
+  // Reserve the Shot synchronously before persisting/acknowledging the Run.
+  // The actual provider work waits until the durable queued record exists.
+  const completion = writingModelTaskContext.run(taskRuntime, () => reviewCompleteShotPrompt(payload, { requestId, startGate }));
+  entry.completion = completion;
   try {
     await harnessStore.queueRun(harnessJob, {
       requestId,
@@ -4496,13 +4528,13 @@ async function enqueuePromptReviewRun(payload, taskRuntime) {
       reviewerId: reviewer.id,
       reviewerModel: reviewer.model,
     });
+    releaseStart();
   } catch (error) {
+    rejectStart(error);
+    await completion.catch(() => undefined);
     pendingPromptReviewRuns.delete(runKey);
     throw error;
   }
-
-  const completion = writingModelTaskContext.run(taskRuntime, () => reviewCompleteShotPrompt(payload, { requestId }));
-  entry.completion = completion;
   void completion.then(async () => {
     await harnessStore.finishRun(harnessJob, "completed", {
       requestId,
@@ -5166,7 +5198,7 @@ const server = createServer(async (req, res) => {
     if (!allowedOrigins.has(origin)) { sendJson(res, 403, { error: "只接受本地漫镜页面请求" }, origin); return; }
     if (!hasPairingToken(req)) { sendJson(res, 401, { error: "页面与 Pi Agent Harness 尚未配对" }, origin); return; }
     const runId = safeDecodeURIComponent(url.pathname.slice("/harness/runs/".length));
-    if (!runId || !/^run-[a-f0-9-]{36}$/i.test(runId)) { sendJson(res, 400, { error: "Harness Run ID 无效" }, origin); return; }
+    if (!runId || !/^run-[a-f0-9-]{36}$/i.test(runId)) { sendJson(res, 400, { error: "审核任务编号无效" }, origin); return; }
 
     const inMemoryJob = [...activeCompletePromptJobs.values(), ...lastCompletePromptJobs.values()]
       .find((job) => job.runId === runId);
@@ -5185,7 +5217,7 @@ const server = createServer(async (req, res) => {
       }, origin);
       return;
     }
-    if (inMemoryJob?.status === "running") {
+    if (["queued", "running"].includes(inMemoryJob?.status)) {
       sendJson(res, 202, {
         protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
         runId,
@@ -5215,7 +5247,7 @@ const server = createServer(async (req, res) => {
       }, origin);
       return;
     }
-    sendJson(res, 404, { error: "找不到该 Harness Run" }, origin);
+    sendJson(res, 404, { error: "找不到该审核任务" }, origin);
     return;
   }
 
@@ -5540,10 +5572,10 @@ const server = createServer(async (req, res) => {
         return;
       }
       const livePromptJob = findCompletePromptJob(activeCompletePromptJobs, identity);
-      if (livePromptJob?.status === "running") {
+      if (livePromptJob && ["queued", "running"].includes(livePromptJob.status)) {
         const status = publicJob(livePromptJob);
         sendJson(res, 202, {
-          status: "running",
+          status: status.status,
           requestId: status.requestId,
           projectUid: identity.projectUid,
           shotUid: identity.shotUid || undefined,
@@ -5578,10 +5610,10 @@ const server = createServer(async (req, res) => {
     const liveJob = type === "prompt-review"
       ? [...activeCompletePromptJobs.values()].find(job => job.type === type && job.shotId === shotId && job.sourceRevision === expectedSourceRevision && (!jobShotUid || job.shotUid === jobShotUid) && (!jobProjectUid || job.projectUid === jobProjectUid))
       : type === "artwork" && shotId ? findArtworkJob(activeArtworkJobs, jobProjectTitle, shotId) : activeJob;
-    if ((type === "annotation" || type === "annotation-batch" || type === "global-annotation" || type === "prompt-review" || type === "artwork") && shotId && matches(liveJob) && liveJob.status === "running") {
+    if ((type === "annotation" || type === "annotation-batch" || type === "global-annotation" || type === "prompt-review" || type === "artwork") && shotId && matches(liveJob) && ["queued", "running"].includes(liveJob.status)) {
       const status = publicJob(liveJob);
       sendJson(res, 202, {
-        status: "running",
+        status: status.status,
         stage: status.stage,
         message: status.message,
         startedAt: status.startedAt,

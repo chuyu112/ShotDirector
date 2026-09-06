@@ -1,12 +1,17 @@
+import { activeShotWorkJob, matchesShotWorkJob } from "./shot-work-reconciliation.mjs";
+
 // Reviewer selection is local to a Shot. It is NOT a writing-model switch.
 // Creator, Chat and Reviewer share a five-Shot server queue, not one UI lock.
-export function promptReviewControls({ review, reviewer, bridge, hasSource }) {
-  const currentJob = (bridge.promptJobs || []).find(job => job.status === 'running' && (review.shot.shotUid ? job.shotUid === review.shot.shotUid : job.shotId === review.shot.id));
-  const reviewing = review.promptReviewStatus === "reviewing"
+export function promptReviewControls({ review, reviewer, bridge, hasSource, projectUid = "", currentReviewSourceRevision = "" }) {
+  const identity = { projectUid, shotUid: review.shot.shotUid, shotId: review.shot.id };
+  const currentJob = activeShotWorkJob(bridge.promptJobs, identity);
+  const localReviewIsCurrent = review.promptReviewStatus === "reviewing"
+    && (!currentReviewSourceRevision || review.promptReviewSourceRevision === currentReviewSourceRevision);
+  const reviewing = localReviewIsCurrent
     || currentJob?.type === 'prompt-review'
     || (bridge.activeJob?.type === "prompt-review"
-      && bridge.activeJob.status === "running"
-      && bridge.activeJob.shotId === review.shot.id);
+      && ["queued", "running"].includes(bridge.activeJob.status)
+      && matchesShotWorkJob(bridge.activeJob, identity));
   let reason = "";
   let action = "";
   if (reviewing) reason = "当前 Shot 正在严格审核，请等待本次报告。";

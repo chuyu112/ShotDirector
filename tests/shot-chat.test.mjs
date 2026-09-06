@@ -44,7 +44,8 @@ test('all annotation entry points are removed, legacy data survives, and Chat ex
   assert.match(reviewer, /复制审核建议/);
   assert.doesNotMatch(reviewer, /<ShotChat|sendShotChat|finishShotChat|updateCompleteShotPrompt/);
   const bridge = readFileSync(new URL('../scripts/shotdirector-bridge.mjs', import.meta.url), 'utf8');
-  assert.match(bridge, /withCompletePromptJob\(completePromptIdentityFromPayload\(payload\), payload.projectTitle/);
+  assert.match(bridge, /const identity = completePromptIdentityFromPayload\(payload\)/);
+  assert.match(bridge, /withCompletePromptJob\(identity, payload\.projectTitle/);
   assert.match(bridge, /shotWorkScheduler.run/);
   assert.match(bridge, /"shot-chat", turnId/);
   assert.match(bridge, /reasoningEffort: shotPromptReasoningEffort/);

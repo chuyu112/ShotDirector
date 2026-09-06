@@ -209,7 +209,8 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(page, /completePromptConfirmedAt/);
   assert.match(page, /complete-shot-prompt/);
   assert.match(page, /review\.completePromptStatus === "generating" && !matchingTerminalJob/);
-  assert.match(page, /review\.completePromptSourceRevision !== currentSourceRevision/);
+  assert.match(page, /terminalHasNewerResult && matchingTerminalJob\?\.sourceRevision/);
+  assert.match(page, /completePromptSourceRevision: matchingLiveJob\.sourceRevision/);
   assert.match(page, /terminalHasNewerResult/);
   assert.match(page, /recoverySourceRevision}:\$\{terminalJobStamp/);
   assert.match(page, /review\.completePromptStatus === "generating" && recoveringCompletePrompt\.current === recoveryKey/);
@@ -300,8 +301,9 @@ test("Shot prompt controls use stable identities and do not globally block paral
   assert.match(page, /projectUid: submittedProjectUid/);
   assert.match(page, /promptJobs: Array\.isArray\(value\.promptJobs\)/);
   assert.match(page, /lastPromptJobs: Array\.isArray\(value\.lastPromptJobs\)/);
-  assert.match(page, /const matchingLiveJob = \(bridge\.promptJobs \|\| \[\]\)\.find/);
-  assert.match(page, /const matchingTerminalJob = \(bridge\.lastPromptJobs \|\| \[\]\)\.find/);
+  assert.match(page, /import \{ activeShotWorkJob, latestTerminalShotWorkJob, matchesShotWorkJob \} from "\.\/shot-work-reconciliation\.mjs"/);
+  assert.match(page, /const matchingLiveJob = activeShotWorkJob\(bridge\.promptJobs, recoveryWorkIdentity, "complete-shot-prompt"\)/);
+  assert.match(page, /const matchingTerminalJob = latestTerminalShotWorkJob\(bridge\.lastPromptJobs, recoveryWorkIdentity, "complete-shot-prompt"\)/);
   assert.match(page, /const terminalJobStamp = matchingTerminalJob/);
   assert.match(page, /projectUid: state\.projectUid,[\s\S]*shotUid: recoveryShotIdentity\.shotUid,[\s\S]*shotId: recoveryShotIdentity\.fallbackId,[\s\S]*sourceRevision: recoverySourceRevision/);
   assert.match(page, /completePromptStatus: review\.completePromptStatus === "generating"[\s\S]*\? review\.completePromptStatus/);
