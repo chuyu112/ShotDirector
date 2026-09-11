@@ -637,7 +637,7 @@ export const WhiteboxStage = forwardRef<WhiteboxStageHandle, WhiteboxStageProps>
     orbitCamera: THREE.PerspectiveCamera;
     width: number;
     height: number;
-  }>();
+  } | undefined>(undefined);
 
   useImperativeHandle(forwardedRef, () => ({
     captureCleanPng() {

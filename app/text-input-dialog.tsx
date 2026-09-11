@@ -80,7 +80,7 @@ export function TextInputDialog({
           {error ? <p className="text-input-dialog-error" role="alert">{error}</p> : null}
           <footer>
             <button type="button" className="button secondary" disabled={busy} onClick={onCancel}>取消</button>
-            <button type="submit" className="button primary" disabled={busy || !value.trim()}>
+            <button type="submit" className="button primary" data-working={busy} disabled={busy || !value.trim()}>
               {busy ? busyLabel : confirmLabel}
             </button>
           </footer>

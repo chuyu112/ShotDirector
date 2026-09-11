@@ -8,7 +8,12 @@ const globals = { storyBackground: 'UI fixture only', adaptationFocus: '', chara
 const makeReport = () => ({ verdict: 'needs-revision', summary: '停顿需要明确', strengths: [], checks: { sourceBoundary: true, characterContinuity: true, timingFeasible: false, dialogueFeasible: true, cameraAndActionCoherent: true, soundAndNegativeComplete: true }, findings: [{ id: 'f1', severity: 'warning', category: 'timing', title: '停顿', detail: '没有标明停顿时长', panelIds: ['P01-R-G01'], suggestion: '增加两秒停顿' }] });
 let snapshot = { projectUid: 'ui-project', projectTitle: 'Chat 与五槽队列测试', globalSettings: globals, generationModel: 'seedance-2.5', reviews: Array.from({ length: 7 }, (_, i) => ({ shot: { id: String(i + 1).padStart(2, '0'), shotUid: `ui-shot-${i + 1}`, timecode: '00:00–00:30', duration: 30, title: `测试镜头 ${i + 1}`, story: 'test', scene: 'test', characters: ['测试人物'], props: [], omniReferences: [], composition: 'test', camera: 'test', action: 'test', dialogue: [], continuity: [], negative: [], segments: [], sourceText: [], sourcePanels: ['P01-R-G01'], artStyle: 'test' }, versions: [], annotations: { characters: '保留的历史批注' }, scriptStatus: 'draft', artworkStatus: 'empty', approved: false, completePrompt: oldPrompt, completePromptStatus: 'ready', completePromptSourceRevision: 'ui-v1', completePromptGeneratorId: 'fixture-model', promptReviewerId: 'kimi-k3', promptReviewStatus: 'ready', promptReviewReport: makeReport() })), currentShot: 0, view: 'script', workspaceMode: 'shots', structureStatus: 'draft', sourceMangaRequestId: mangaId, sourceDocument: 'test', sourceMangaPanels: {}, sourceMangaPanelAnnotations: { 'P01-R-G01': '历史画格批注' }, assetPrompts: [], globalStatus: 'applied' };
 const turns = new Map(), jobs = new Map(), log = [];
-let delay = 350;
+let delay = 350, queueDelay = 0, postStatus = 200, readDelay = 0;
+let selectedModel = 'jk-gpt-5.6-sol';
+const models = [
+  { id: 'jk-gpt-5.6-sol', label: 'JK GPT-5.6 Sol', provider: 'jiekou-responses', model: 'gpt-5.6-sol', available: true },
+  { id: 'glm-5.3-flash', label: 'GLM-5.3-Flash', provider: 'glm', model: 'glm-5.3-flash', available: true },
+];
 createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:3338');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -17,22 +22,31 @@ createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   let text = ''; for await (const chunk of req) text += chunk;
   const json = (value, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
-  if (url.pathname === '/control') { delay = Number(url.searchParams.get('delay') || 350); json({ ok: true }); return; }
+  if (url.pathname === '/control') { delay = Number(url.searchParams.get('delay') || 350); queueDelay = Number(url.searchParams.get('queueDelay') || 0); postStatus = Number(url.searchParams.get('postStatus') || 200); readDelay = Number(url.searchParams.get('readDelay') || 0); json({ ok: true }); return; }
   if (url.pathname === '/log') { json(log); return; }
   if (url.pathname === '/auth/me') { json({ serverMode: true, authenticated: true, user: { id: 'ui-user', email: 'fixture@example.test', role: 'superadmin' }, projects: [{ id: 'ui-project', name: snapshot.projectTitle }], activeProject: { id: 'ui-project', name: snapshot.projectTitle } }); return; }
-  if (url.pathname === '/health') { json({ connected: true, serverMode: true, busy: jobs.size > 0, shotWork: scheduler.snapshot(), promptJobs: [...jobs.values()], modelProvider: { configured: true, id: 'glm', label: 'Fixture 主力 Agent' }, reviewers: [{ id: 'kimi-k3', label: 'Fixture Reviewer', available: true, evidenceMode: 'direct-images' }] }); return; }
+  if (url.pathname === '/health') { json({ connected: true, serverMode: true, busy: jobs.size > 0, shotWork: scheduler.snapshot(), promptJobs: [...jobs.values()], writingModels: models.map(m => ({ ...m, selected: m.id === selectedModel })), modelProvider: { configured: true, id: 'jiekou-responses', selectionId: selectedModel, label: 'Fixture 主力 Agent' }, reviewers: [{ id: 'kimi-k3', label: 'Fixture Reviewer', available: true, evidenceMode: 'direct-images' }] }); return; }
+  if (url.pathname === '/writing-model' && req.method === 'POST') { selectedModel = JSON.parse(text).id; json({ status: 'ok' }); return; }
+  if (url.pathname === '/model-tests' && req.method === 'GET') { json({ models: [] }); return; }
   if (url.pathname === '/draft-state') {
     if (req.method === 'POST') { snapshot = JSON.parse(text).state; json({ status: 'saved' }); return; }
     json({ state: snapshot }); return;
   }
   if (['/projects/rename', '/source-global-settings', '/source-shot'].includes(url.pathname)) { json({ status: 'saved' }); return; }
-  if (url.pathname === '/job-result' && url.searchParams.get('type') === 'shot-chat') { const result = turns.get(url.searchParams.get('chatTurnId')); json(result || { status: 'running' }, result ? 200 : 202); return; }
+  if (url.pathname === '/job-result' && url.searchParams.get('type') === 'shot-chat') {
+    const turnId = url.searchParams.get('chatTurnId');
+    if (readDelay) await new Promise(resolve => setTimeout(resolve, readDelay));
+    const result = turns.get(turnId), job = jobs.get(turnId);
+    json(result || { status: job?.status || 'running', stage: job?.stage, message: job?.message }, result ? 200 : 202); return;
+  }
   if (['/shot-chat', '/review-shot-prompt', '/complete-shot-prompt'].includes(url.pathname)) {
     const p = JSON.parse(text), type = url.pathname.slice(1) === 'review-shot-prompt' ? 'prompt-review' : url.pathname.slice(1);
-    const job = { projectUid: p.projectUid, shotUid: p.shot.shotUid, shotId: p.shot.id, type, status: 'running', stage: 'queued', message: '排队中' };
+    const job = { projectUid: p.projectUid, shotUid: p.shot.shotUid, shotId: p.shot.id, chatTurnId: p.chatTurnId, type, status: 'queued', stage: 'queued', queuedAt: new Date().toISOString(), message: '排队中（隔离测试）', writingModelId: selectedModel, writingModelLabel: models.find(m => m.id === selectedModel)?.label };
     const key = p.chatTurnId || `${type}-${p.shot.shotUid}`; jobs.set(key, job);
     log.push({ type, shotUid: p.shot.shotUid, message: p.message, history: p.history });
+    if (postStatus !== 200 && type === 'shot-chat') json({ error: '模拟网关超时，原任务继续运行' }, postStatus);
     try {
+      if (queueDelay) await new Promise(resolve => setTimeout(resolve, queueDelay));
       const result = await scheduler.run(job, async () => {
         await new Promise(resolve => setTimeout(resolve, delay));
         if (type === 'shot-chat') {
@@ -41,9 +55,10 @@ createServer(async (req, res) => {
         }
         if (type === 'prompt-review') return { status: 'completed', shotId: p.shot.id, projectUid: p.projectUid, shotUid: p.shot.shotUid, reviewerId: p.reviewerId, sourceRevision: p.sourceRevision, report: { ...makeReport(), verdict: 'discussion-ready', findings: [] }, reviewedAt: new Date().toISOString(), reviewerModel: 'fixture-reviewer', requestId: crypto.randomUUID() };
         return { status: 'completed', projectUid: p.projectUid, shotId: p.shot.id, shotUid: p.shot.shotUid, sourceRevision: p.sourceRevision, prompt: oldPrompt, summary: '测试生成', research: { used: false, queries: [], sources: [], notes: [] }, warnings: [], generatedAt: new Date().toISOString(), generatorId: 'fixture-model' };
-      }, () => { job.stage = 'running'; job.message = '正在处理'; });
-      if (p.chatTurnId) turns.set(p.chatTurnId, result); json(result);
-    } catch (error) { json({ error: error.message }, 409); }
+      }, () => { job.status = 'running'; job.stage = 'running'; job.startedAt = new Date().toISOString(); job.message = '主力 Agent 正在读取画格并核对审核建议（隔离测试）'; });
+      if (p.chatTurnId) turns.set(p.chatTurnId, result);
+      if (!res.writableEnded) json(result);
+    } catch (error) { if (!res.writableEnded) json({ error: error.message }, 409); }
     finally { jobs.delete(key); }
     return;
   }

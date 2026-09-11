@@ -502,7 +502,7 @@ export function ManjingAuthGate({
                 新建项目
               </button>
               <button type="button" disabled={projectBusy || !(selectedProjectId || gate.activeProject.id)} onClick={() => void activateProject(selectedProjectId || gate.activeProject.id)}>加载项目</button>
-              <button type="button" disabled={projectBusy} onClick={() => void saveProject()}>{projectSaveStage || (projectBusy ? "处理中…" : "保存项目")}</button>
+              <button type="button" data-working={projectBusy} disabled={projectBusy} onClick={() => void saveProject()}>{projectSaveStage || (projectBusy ? "处理中…" : "保存项目")}</button>
             </div>
             <div className="manjing-server-account">
               <span className={gate.user.role === "superadmin" ? "superadmin-badge" : undefined}>
@@ -513,7 +513,7 @@ export function ManjingAuthGate({
             </div>
             {sessionError ? <p role="alert">{sessionError}</p> : null}
             {projectNotice ? <p className="project-notice" role="status">{projectNotice}</p> : null}
-            <button type="button" disabled={loggingOut} onClick={() => void logout()}>
+            <button type="button" data-working={loggingOut} disabled={loggingOut} onClick={() => void logout()}>
               {loggingOut ? "正在退出…" : "退出登录"}
             </button>
           </section>

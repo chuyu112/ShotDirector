@@ -8,6 +8,7 @@ export type StoryboardSegment = {
 export type StoryboardShot = {
   /** Stable internal identity. `id` remains the editable/display Shot number. */
   shotUid?: string;
+  contentConfirmation?: { id: string; revision: string; confirmedAt: string; confirmedBy: string; sourceMangaRequestId: string };
   id: string;
   timecode: string;
   duration: number;

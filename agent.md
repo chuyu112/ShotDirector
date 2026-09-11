@@ -4,6 +4,25 @@
 
 漫镜（Manjing）是本地优先的 AI 导演工作台，用于把脚本、漫画或视频素材整理为可审核的 Shot，并维护证据、全局设定、资产、导演布局、白模、提示词、生成结果和审批状态之间的关系。
 
+## 2026-09-11 Shot 01 人工内容核对（本地，未部署）
+
+- 原裁图人工核对由专用界面与 `server/shot-content-review.mjs` 持久化。先逐格人工裁定，再预览并确认结构同步；禁止模型代填结论、自动纠正事实、自动重裁或自动提交审核。
+- 本次边界为已保存的 Shot 01：26 秒、10 格、原顺序止于 P02-R-G08；具体 ID 不得按连续编号推断。只同步动作/节拍/禁止项/连续性及项目草稿全局时间线，保留原稿、原识别与审核溯源；后续提示词必须重新严格审核。
+- 核对绑定原图 SHA-256 与项目/Shot/内容版本，变化后重新核对。人工已确认事实与旧模型说法分开传入 Creator、Chat、Reviewer；旧请求不能省略确认指针绕回旧证据。详细操作与验证见 `docs/2026-09-11-Shot01人工核对与结构同步.md`。
+
+## 2026-09-09 参考项目优点采用
+
+- 用户明确：只取心流与 Kunpeng 的闪光点用于漫镜，不单独写插件。新增能力直接融入现有脚本导入、导演配方、全局设定、资产、提示词和白模流程；不以整套植入上游、独立插件/服务或第二个工作台为目标。
+- 可复用点与现有代码落点统一记录在 `docs/漫镜-参考项目优点采用.md`；按实际需求逐项实现和验证，不把清单中的待增强能力宣称为已完成。
+- 稳定 ID、人工锁定、状态验证与历史快照已有漫镜实现，继续沿用；其他能力接入既有 Harness、项目/Shot 隔离、独立审核和人工确认机制。
+
+## 独立源码参考附件（2026-09-08 归档）
+
+- 用户指定将心流与 Kunpeng 作为两个附件保存，统一入口为 `attachments/README.md`，来源与校验清单为 `attachments/manifest.json`。
+- `attachments/xinliu/` 保存小说创作工作台原包、Gem 和审阅资料；`attachments/kunpeng/` 保存既有文档引用的 Kunpeng 提交 `1c629c9` 原包及 MIT 许可证。每个附件独立维护 `agent.md` 和 `memory.md`。
+- 当前附件作为源码参考。漫镜已借鉴 Kunpeng 的部分工程契约与历史快照设计，后续按上述采用方向增强现有能力，完整上游模块不是待交付目标。
+- 附件保留为 ZIP，后续开发从独立副本读取并按漫镜架构适配；不得仅因存入附件就安装插件、运行上游服务或宣称页面能力已上线。
+
 ## 2026-09-03 Shot Chat 与工作并发（覆盖旧批注入口规则）
 
 - 移除所有全局、单镜、逐格和导演批注的输入与提交入口；历史批注随项目保留，不因界面迁移删除用户内容。
@@ -20,7 +39,7 @@
 - 本地桥接：`scripts/shotdirector-bridge.mjs`，默认监听 `127.0.0.1:4317`。
 - 服务器公开网关：`server/manjing-gateway.mjs`，处理注册、Session、项目选择、CSRF/CORS、持久化额度和 Worker 代理。
 - 租户 Worker 池：`server/tenant-worker-pool.mjs`；服务端文字模型适配层：`server/compatible-chat-structured-provider.mjs`、`server/openai-responses-provider.mjs`、`server/anthropic-structured-provider.mjs`、`server/doubao-responses-provider.mjs`。所有 Creator／Reviewer 只走服务端 API，不使用或依赖个人 Codex／ChatGPT 登录额度；GPT 图片是独立且默认额度为 0 的可选能力；LibTV：`server/libtv-worker.mjs`。
-- 直接生产部署：`deploy/manjing-web.service`、`deploy/manjing-gateway.service`、`deploy/nginx.manjing.systemd.conf`（只服务 `kakayiduo.cloud`）；可回滚发布入口为 `deploy/apply-release-systemd.sh`。
+- 生产服务器（2026-09-10 核验）：`43.173.105.8` 使用 Debian、Docker Compose 项目 `manjing` 与宿主机 Nginx。用户指定正式域名为 `manjing.kakayiduo.cloud`，配置为 `deploy/nginx.manjing.subdomain.conf`；域名切换进展见 `docs/2026-09-10-漫镜子域名切换.md`。`deploy/manjing-*.service`、`deploy/nginx.manjing.systemd.conf` 和 `deploy/apply-release-systemd.sh` 保留为 systemd 方案，不能据此推断当前服务器布局。
 - 视频拆帧：`scripts/extract_every_second.py`；Alibaba Cloud Linux x86_64 的固定 FFmpeg 安装器为 `deploy/install-ffmpeg-static.sh`。
 - Pi AgentSession 核心：`runner/manjing-pi-harness.mjs`。
 - Creator / Reviewer 运行时：`runner/manjing-agent-runtime.mjs`。
@@ -39,9 +58,12 @@
 npm run dev
 npm run test:harness
 npm run test:server
+npm run typecheck
 npm test
 npm run lint
 ```
+
+`npm test` 先运行严格类型检查，再构建并执行回归。不得用测试或 lint 通过代替类型检查，也不得通过忽略业务文件或关闭严格检查消除报错。
 
 ## 必须维护的业务约束
 
@@ -111,7 +133,9 @@ npm run lint
 
 ## 当前结构性注意事项
 
+- Chat 原回合恢复必须覆盖当前工作区全部 pending Shot，按稳定项目、Shot 与回合标识管理独立只读查询；不能仅轮询当前选中 Shot。健康更新和切镜不重置其他回合，离开工作区取消读取，晚到结果不得串写。回归见 `tests/shot-chat-recovery.test.mjs`。
 - UI 维护先阅读 `docs/UI设计规范.md`。公共层 `workbench.css` 与设置层 `settings-workbench.css` 负责视觉，不能用泛化的 `header span` 等选择器误伤品牌或状态；正文 14px、辅助 12px、标签 11px，按内容分层而不是缩放整页。手机生产流程保留横向浏览，不展开七行挤走主任务；长模型名、生成时间、菜单和禁用原因必须可读。响应式验收必须包含中间宽度（900px），不能只测大屏和手机。
+- 工作中状态独立放大：标题 24px（手机 22px）、状态文字与按钮至少 16px；生成、审核、主力 Agent 选择采纳、分析、恢复、上传和保存等共用文字加加载标识。当前工作优先于旧完成状态，任务模型不可随下拉选择改写；Chat 结果恢复不能依赖创作台子组件是否挂载。2026-09-10 本地验证与生产内容问题见 `docs/2026-09-10-工作状态与采纳链路检查.md`；本批于 2026-09-11 获用户授权并部署，证据见 `docs/2026-09-11-工作状态与Chat恢复部署记录.md`。
 - 顶部“加载项目”切换服务器项目后必须导航回根入口，由项目自己的最近工作区指针恢复具体漫画草稿；禁止保留当前页面的 `?main=1`，否则会把空白模板误显示为已加载项目。
 - 服务器“保存项目”必须把项目列表名称规范为“作品名 YYYY-MM-DD”，日期固定按 Asia/Shanghai 计算；同一项目重复保存不得反复追加日期，不同项目同日同名时依次追加 ` (2)`、` (3)`。日期只属于项目目录显示名，不得修改漫画正文中的作品标题、提示词内容或素材存储键。
 

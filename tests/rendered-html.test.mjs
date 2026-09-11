@@ -14,7 +14,7 @@ test("clean package starts from a neutral project", async () => {
 
   assert.match(layout, /漫镜 Manjing｜AI 导演工作台/);
   assert.match(layout, /NEXT_PUBLIC_MANJING_SITE_URL/);
-  assert.match(layout, /https:\/\/kakayiduo\.cloud/);
+  assert.match(layout, /https:\/\/manjing\.kakayiduo\.cloud/);
   assert.doesNotMatch(layout, /manjing\.jadecircle\.cn/);
   assert.match(layout, /metadataBase: new URL\(publicSiteUrl\)/);
   assert.doesNotMatch(layout, /localhost:3000/);
@@ -138,7 +138,7 @@ test("keeps Creator and Reviewer model lineage explicit across legacy state and 
   assert.match(styles, /\.writing-model-menu > button\.active \{ color: white; background: var\(--blue\); \}/);
   assert.match(styles, /\.reasoning-effort-picker:focus-within \{ border-color: var\(--blue\)/);
   assert.match(page, /writingModelId: activeWritingModelId/);
-  assert.match(page, /正在生成新版本/);
+  assert.match(page, /正在生成提示词/);
   assert.match(page, /开始时间：/);
   assert.match(page, /完成时间：/);
   assert.match(page, /当前展示上一版/);

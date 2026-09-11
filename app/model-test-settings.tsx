@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { modelTestStatusLabel } from './model-test-status.mjs';
 import { MODEL_TEST_CASE_ID, MODEL_TEST_EXPECTED, MODEL_TEST_RULES } from './model-test-contract.mjs';
+import { WorkStatusNotice } from './work-status-notice';
 
 type TestRow = { id: string; label: string; model: string; provider: string; available: boolean; reason?: string; result?: { status: string; requestedModel: string; actualModel?: string; startedAt?: string; finishedAt?: string; durationMs?: number; error?: string } };
 type TestState = { round?: { id: string; status: string }; models: TestRow[] };
@@ -43,7 +44,8 @@ export function ModelTestSettings({ base, request, pairingToken }: { base: strin
     finally { revision.current++; sending.current = false; setSubmitting(false); }
   }
   return <section className="model-test-settings" aria-label="LLM 模型测试">
-    <header><div><span>API DIAGNOSTICS</span><h2>LLM 模型测试</h2></div><button type="button" className="button primary" disabled={submitting || running || !state.models.some(m => m.available)} onClick={() => void start(state.models.filter(m => m.available).map(m => m.id))}>{running ? '本轮测试中…' : submitting ? '提交中…' : '测试全部模型'}</button></header>
+    <header><div><span>API DIAGNOSTICS</span><h2>LLM 模型测试</h2></div><button type="button" className="button primary" data-working={submitting || running} disabled={submitting || running || !state.models.some(m => m.available)} onClick={() => void start(state.models.filter(m => m.available).map(m => m.id))}>{running ? '本轮测试中…' : submitting ? '提交中…' : '测试全部模型'}</button></header>
+    {submitting || running ? <WorkStatusNotice label={submitting ? '正在提交模型测试' : '模型测试进行中'} message="下方列表会同步本轮排队、测试中和已完成的结果。">请稍候，无需重复点击。</WorkStatusNotice> : null}
     <p>手动发起真实 API 小请求，会产生少量 Token 用量。LOW 推理 · 每模型一次 · 最多两个并发 · 单模型最长 90 秒。不修改项目、Shot 或当前模型选择，不自动重试。</p>
     <p>接口正常　格式正常✅ · 接口正常　格式错误⚠️ · 接口错误　格式错误❌。接口正常只表示收到本次完整响应；格式错误不会禁用模型。接口报错时无法完成格式校验。结果不代表图片能力、长任务或 MAX 严格审核已通过。</p>
     {error && <p role="alert" className="model-test-error">{error}</p>}
@@ -58,7 +60,7 @@ export function ModelTestSettings({ base, request, pairingToken }: { base: strin
           const statusLabel = modelTestStatusLabel(r, model.available);
           return <tr key={model.id}>
             <th scope="row">{model.label}<small>{model.provider}</small></th>
-            <td><span className="model-test-status" data-label={statusLabel}>{statusLabel}</span></td>
+            <td><span className="model-test-status" data-working={r?.status === 'running' || r?.status === 'queued'} data-label={statusLabel}>{statusLabel}</span></td>
             <td>{r?.requestedModel || model.model}<small>{r?.actualModel || '尚无实际响应模型'}</small></td>
             <td>{typeof r?.durationMs === 'number' ? `${(r.durationMs / 1000).toFixed(1)} 秒` : '—'}</td>
             <td>{r?.finishedAt || r?.startedAt ? new Date(r.finishedAt || r.startedAt!).toLocaleString('zh-CN') : '—'}</td>

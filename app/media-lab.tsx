@@ -961,12 +961,13 @@ export function MediaLab({
           <button
             type="button"
             className="media-primary"
+            data-working={submitting || jobRunning}
             onClick={() => { void startAnalysis(); }}
             disabled={submitting || jobRunning}
             aria-disabled={!canAnalyze}
             title={analyzeBlockers.length ? `尚缺：${analyzeBlockers.join("、")}` : "开始上传并拆解漫画"}
           >
-            {submitting ? "正在上传……" : kind === "video" ? "开始完整拉片" : "开始拆成可审核分镜"}
+            {submitting ? "正在上传……" : jobRunning ? kind === "video" ? "视频拉片进行中…" : "漫画拆解进行中…" : kind === "video" ? "开始完整拉片" : "开始拆成可审核分镜"}
           </button>
           <button type="button" className="media-secondary" onClick={clearCurrent} disabled={submitting || jobRunning || (!visibleQueue.length && !visibleResult)}>清空当前</button>
         </div>
@@ -976,12 +977,12 @@ export function MediaLab({
         ) : null}
 
         {!pairingToken && connected ? <p className="media-inline-error">桥接已响应，但页面还没有配对令牌；请刷新漫镜后重试。</p> : null}
-        {notice ? <p className="media-notice" role="status" aria-live="polite">{notice}</p> : null}
+        {notice ? <p className="media-notice" data-working={submitting || recovering || jobRunning} role="status" aria-live="polite">{notice}</p> : null}
         {error ? <p className="media-error" role="alert">{error}</p> : null}
       </section>
 
       {job ? (
-        <section className="media-job-panel" aria-labelledby="media-job-title">
+        <section className="media-job-panel" data-working={job.status === "running"} aria-labelledby="media-job-title">
           <div className="media-section-heading">
             <div>
               <p className="media-step">02 · 处理状态</p>
@@ -1013,7 +1014,7 @@ export function MediaLab({
               <button type="button" className="media-primary" onClick={() => { void startAnalysis(job.requestId); }} disabled={recovering || submitting}>
                 继续分析
               </button>
-              <button type="button" className="media-primary" onClick={recoverGeneratedResult} disabled={recovering || submitting}>
+              <button type="button" className="media-primary" data-working={recovering} onClick={recoverGeneratedResult} disabled={recovering || submitting}>
                 {recovering ? "正在恢复……" : "恢复已生成结果"}
               </button>
               <span>「继续分析」保留原素材并复用已完成的拆图进度；「恢复已生成结果」只读取已写完的文件，不会再次调用写作模型。</span>
@@ -1031,7 +1032,7 @@ export function MediaLab({
               <p>{visibleResult.summary}</p>
             </div>
             <div className="media-export-actions">
-              <button type="button" onClick={recoverGeneratedResult} disabled={recovering || submitting || jobRunning}>{recovering ? "正在重新读取……" : "重新读取本地结果"}</button>
+              <button type="button" data-working={recovering} onClick={recoverGeneratedResult} disabled={recovering || submitting || jobRunning}>{recovering ? "正在重新读取……" : "重新读取本地结果"}</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.json`, JSON.stringify(visibleResult, null, 2), "application/json;charset=utf-8")}>下载 JSON</button>
               <button type="button" onClick={() => downloadText(`${safeFileName(visibleResult.projectTitle)}.md`, visibleResult.scriptMarkdown, "text/markdown;charset=utf-8")}>下载 Markdown</button>
               <button type="button" className="media-create-draft" onClick={() => onCreateDraft({ ...visibleResult, readingDirection: visibleResult.readingDirection || readingDirection, projectBackground: storyBackground.trim() })}>进入逐镜审核（独立草稿）</button>

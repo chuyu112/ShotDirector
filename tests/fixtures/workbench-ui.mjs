@@ -6,15 +6,26 @@
  * Start: node tests/fixtures/workbench-ui.mjs
  * Frontend: NEXT_PUBLIC_MANJING_API_BASE=http://127.0.0.1:3349 npm run dev:site -- --hostname 127.0.0.1 --port 3348
  * Counters: GET http://127.0.0.1:3349/__fixture/status
+ * Loading preview: MANJING_UI_PROMPT_STATE=running (or queued) node tests/fixtures/workbench-ui.mjs
+ * Review preview: MANJING_UI_REVIEW_STATE=running (or queued) node tests/fixtures/workbench-ui.mjs
+ * Slow completed response: MANJING_UI_REVIEW_STATE=completing MANJING_UI_REVIEW_DELAY_MS=2500
  * A fixture model may be selected to inspect UI, but invoking it is rejected.
  */
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { createShotContentReviewStore } from '../../server/shot-content-review.mjs';
+import { contentReviewState } from './content-review-data.mjs';
+import { buildPromptReviewRevision } from '../../app/video-package.ts';
 
 export const workbenchFixturePort = 3349;
 export const workbenchFixtureOrigin = 'http://127.0.0.1:3348';
 const fixtureAt = '2026-09-05T11:20:00.000Z';
-const projectId = 'fixture-workbench-project';
+const projectId = 'project-fixture-workbench';
 const mangaId = '22222222-2222-4222-8222-222222222222';
 const globalFileId = 'fixture-global-file';
 const fixtureNotice = 'UI 验收测试数据 · 非真实作品、账号或 AI 生成结果';
@@ -58,7 +69,7 @@ function makeReview(index) {
   const sourcePanels = Array.from({ length: panelsPerShot[index] }, (_, panel) => `P${id}-R-G${String(panel + 1).padStart(2, '0')}`);
   return {
     shot: {
-      id, shotUid: `fixture-shot-${id}`, timecode: `00:${String(index * 30 % 60).padStart(2, '0')}–00:30`, duration: 30,
+      id, shotUid: `shot-fixture-${id}`, timecode: `00:${String(index * 30 % 60).padStart(2, '0')}–00:30`, duration: 30,
       title: shotTitles[index], story: `【UI 测试样例】${storyLines[index]}`, scene: locations[index],
       characters: index === 0 || index > 4 ? ['林遥（测试角色）'] : ['林遥（测试角色）', '店主（测试角色）'],
       props: ['旧书'], omniReferences: [], composition: '保留人物、门窗和主要道具之间的空间关系。',
@@ -133,8 +144,34 @@ function panelSvg(panelId) {
   <text x="300" y="440" text-anchor="middle" font-family="sans-serif" font-size="17" fill="#52636b">原创示意 · 非漫画裁图 / 非 AI 生成结果</text></svg>`;
 }
 
-export function createWorkbenchFixtureServer() {
+export function createWorkbenchFixtureServer({ promptGenerationState = '', promptReviewState = '', promptReviewResponseDelayMs = 0, contentReview = false } = {}) {
   let snapshot = makeSnapshot();
+  let contentFixture, contentStore, contentEnvelope;
+  if (contentReview) {
+    const state = contentReviewState();
+    snapshot = { ...snapshot, ...state, projectUid: projectId, projectTitle: '原裁图人工核对 · 合成 UI 测试', reviews: state.reviews.map((item, index) => ({ ...makeReview(index), ...item, approved: false, promptReviewStatus: 'stale' })) };
+    contentFixture = mkdtempSync(join(tmpdir(), 'manjing-content-ui-'));
+    const drafts = join(contentFixture, 'drafts'); mkdirSync(drafts);
+    contentEnvelope = { scopeId: mangaId, state: snapshot };
+    writeFileSync(join(drafts, `${mangaId}.json`), JSON.stringify(contentEnvelope));
+    contentStore = createShotContentReviewStore({ directory: join(contentFixture, 'records'), draftDirectory: drafts,
+      readEvidence: (_, panelId) => ({ bytes: Buffer.from(panelSvg(panelId)), sourceObservation: '合成旧识别：图案 A（仅为测试）', sourceText: [], imagePath: `/content-review-image/${mangaId}/${panelId}` }) });
+  }
+  const promptJobs = [];
+  if (['running', 'queued'].includes(promptGenerationState)) {
+    const review = snapshot.reviews[0];
+    const startedAt = new Date().toISOString();
+    Object.assign(review, { completePromptStatus: 'generating', completePromptGenerationStartedAt: startedAt, completePromptRequestedGeneratorId: 'glm-5.3-flash' });
+    promptJobs.push({ type: 'complete-shot-prompt', projectUid: snapshot.projectUid, shotUid: review.shot.shotUid, shotId: review.shot.id, sourceRevision: review.completePromptSourceRevision, status: promptGenerationState, queuedAt: startedAt, startedAt: promptGenerationState === 'running' ? startedAt : undefined, writingModelId: 'glm-5.3-flash', writingModelLabel: 'GLM-5.3-Flash', message: promptGenerationState === 'running' ? '【UI 测试状态】正在生成完整提示词，无真实模型调用。' : '【UI 测试状态】等待空闲工作名额，无真实模型调用。' });
+  }
+  if (['running', 'queued', 'completing'].includes(promptReviewState)) {
+    const review = snapshot.reviews[promptJobs.length ? 1 : 0];
+    const startedAt = new Date().toISOString();
+    const sourceRevision = buildPromptReviewRevision({ shotId: review.shot.id, completePrompt: review.completePrompt, completePromptSourceRevision: review.completePromptSourceRevision, completePromptGeneratorId: review.completePromptGeneratorId, reviewerId: review.promptReviewerId });
+    Object.assign(review, { promptReviewStatus: 'reviewing', promptReviewStartedAt: startedAt, promptReviewSourceRevision: sourceRevision, promptReviewRunId: `run-${randomUUID()}` });
+    const status = promptReviewState === 'queued' ? 'queued' : 'running';
+    promptJobs.push({ type: 'prompt-review', projectUid: snapshot.projectUid, shotUid: review.shot.shotUid, shotId: review.shot.id, sourceRevision, status, queuedAt: startedAt, startedAt: status === 'running' ? startedAt : undefined, reviewerId: review.promptReviewerId, reviewerModel: 'k3', runId: review.promptReviewRunId, message: status === 'running' ? '【UI 测试状态】正在核对原作画格、剧情与镜头细节，无真实模型调用。' : '【UI 测试状态】等待空闲审核名额，无真实模型调用。' });
+  }
   let selectedModel = 'jk-gpt-5.6-sol';
   let selectedEffort = 'high';
   const files = new Map([[globalFileId, { id: globalFileId, name: '雨夜书店 · 测试全局文件', updatedAt: fixtureAt, payload: { schemaVersion: 1, settings: structuredClone(fixtureGlobals), assetPrompts: [], referenceAssets: [] } }]]);
@@ -143,7 +180,7 @@ export function createWorkbenchFixtureServer() {
   const denied = [];
   const health = () => ({
     connected: true, serverMode: true, busy: false, fixture: true, notice: fixtureNotice,
-    shotWork: { limit: 5, active: 0, queued: 0 }, promptJobs: [], lastPromptJobs: [], artworkJobs: [], assetJobs: [],
+    shotWork: { limit: 5, active: promptJobs.filter(job => job.status === 'running').length, queued: promptJobs.filter(job => job.status === 'queued').length }, promptJobs: promptJobs.filter(job => ['running', 'queued'].includes(job.status)), lastPromptJobs: promptJobs.filter(job => job.status === 'completed'), artworkJobs: [], assetJobs: [],
     modelProvider: { ...models.find(model => model.id === selectedModel), id: 'fixture', selectionId: selectedModel, configured: true, supportsWebSearch: false },
     writingModels: models.map(model => ({ ...model, selected: model.id === selectedModel })),
     reasoningPolicy: { selected: selectedEffort, options: ['low', 'high', 'max'], taskOverrides: { mangaSplit: 'low', completeShotPrompt: 'max', strictReview: 'max' } },
@@ -151,9 +188,9 @@ export function createWorkbenchFixtureServer() {
     harness: { harnessVersion: 'ui-fixture', runs: [] },
     libtv: { installed: false, status: 'missing', message: 'UI 验收环境：无视频服务，禁止提交生成任务。' },
   });
-  const session = () => ({ serverMode: true, authenticated: true, fixture: true, user: { id: 'fixture-user', email: 'ui-fixture@example.test', displayName: 'UI 验收测试', role: 'superadmin' }, projects: [{ id: projectId, name: snapshot.projectTitle }], activeProject: { id: projectId, name: snapshot.projectTitle } });
+  const session = () => ({ serverMode: true, authenticated: true, fixture: true, user: { id: contentReview ? 'fixture-content-review-user' : 'fixture-user', email: 'ui-fixture@example.test', displayName: 'UI 验收测试', role: 'superadmin' }, projects: [{ id: projectId, name: snapshot.projectTitle }], activeProject: { id: projectId, name: snapshot.projectTitle } });
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', workbenchFixtureOrigin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Manjing-Token,X-ShotDirector-Token');
@@ -175,7 +212,7 @@ export function createWorkbenchFixtureServer() {
     };
     try {
       if (path === '/__fixture/status' && method === 'GET') {
-        json({ notice: fixtureNotice, counters, requests: Object.fromEntries(requests), denied, stateSavedInMemoryOnly: true }); return;
+        json({ notice: fixtureNotice, counters, requests: Object.fromEntries(requests), denied, stateSavedInMemoryOnly: !contentReview, contentConfirmed: Boolean(snapshot.contentReviewHistory?.length) }); return;
       }
       if (path === '/model-tests' && method !== 'GET') { block('UI 验收环境禁止调用 LLM 测试；没有发起真实请求。', 'modelTestAttempts'); return; }
       if (/^\/(?:shot-chat|review-shot-prompt|complete-shot-prompt|generate|analyze|annotation|artwork|asset-artwork|video|libtv|load-script|media-analysis)/.test(path) && method !== 'GET') {
@@ -187,15 +224,40 @@ export function createWorkbenchFixtureServer() {
         if (Buffer.byteLength(body) > 8 * 1024 * 1024) { json({ error: 'Fixture payload too large' }, 413); return; }
       }
       const payload = body ? JSON.parse(body) : {};
+      if (contentStore && method === 'POST' && /^\/shot-content-review\/(prepare|save|preview|confirm)$/.test(path)) {
+        const operation = path.split('/').at(-1);
+        const result = contentStore[operation](payload);
+        if (operation === 'confirm') { contentEnvelope = result.snapshot; snapshot = contentEnvelope.state; }
+        json(result); return;
+      }
+      if (contentStore && method === 'GET' && path.startsWith('/content-review-image/')) {
+        const bytes = Buffer.from(panelSvg(path.split('/').at(-1)));
+        if (createHash('sha256').update(bytes).digest('hex') !== url.searchParams.get('hash')) { json({ error: 'Fixture image changed' }, 409); return; }
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); res.end(bytes); return;
+      }
       if (path === '/auth/me' && method === 'GET') { json(session()); return; }
       if (path === '/health' && method === 'GET') { json(health()); return; }
+      if (path.startsWith('/harness/runs/') && method === 'GET') {
+        const job = promptJobs.find(item => item.type === 'prompt-review' && path === `/harness/runs/${item.runId}`);
+        if (!job) { json({ status: 'not-found', fixture: true }, 404); return; }
+        await new Promise(resolve => setTimeout(resolve, Math.max(0, Number(promptReviewResponseDelayMs) || 0)));
+        if (promptReviewState === 'completing') {
+          job.status = 'completed';
+          job.finishedAt ||= new Date().toISOString();
+          json({ ...job, message: '【UI 测试状态】审核已完成，无真实模型调用。', reviewedAt: job.finishedAt, report: makeReview(1).promptReviewReport, fixture: true }); return;
+        }
+        json({ ...job, fixture: true }, 202); return;
+      }
       if (path === '/draft-state-recent' && method === 'GET') { json({ scopeId: mangaId, projectTitle: snapshot.projectTitle, savedAt: fixtureAt, fixture: true }); return; }
       if (path === '/draft-state') {
         if (method === 'POST') {
           if (!payload.state || payload.state.projectUid !== projectId || !Array.isArray(payload.state.reviews)) { json({ error: 'Only this synthetic fixture project may be saved' }, 400); return; }
-          snapshot = structuredClone(payload.state); counters.draftSaves++; json({ status: 'saved', savedAt: new Date().toISOString(), fixture: true }); return;
+          if (contentStore && contentEnvelope.agentRevision && contentEnvelope.agentRevision !== payload.appliedAgentRevision) { json({ status: 'agent-revision-required', agentRevision: contentEnvelope.agentRevision }, 202); return; }
+          snapshot = structuredClone(payload.state);
+          if (contentStore) { contentEnvelope = { ...contentEnvelope, scopeId: payload.scopeId || mangaId, state: snapshot }; writeFileSync(join(contentFixture, 'drafts', `${contentEnvelope.scopeId}.json`), JSON.stringify(contentEnvelope)); }
+          counters.draftSaves++; json({ status: 'saved', savedAt: new Date().toISOString(), fixture: true }); return;
         }
-        if (method === 'GET') { json({ state: snapshot, fixture: true }); return; }
+        if (method === 'GET') { json({ ...(contentStore ? contentEnvelope : {}), state: snapshot, fixture: true }); return; }
       }
       if (path === '/model-tests' && method === 'GET') {
         counters.modelTestReads++;
@@ -228,20 +290,22 @@ export function createWorkbenchFixtureServer() {
       }
       if (path === '/projects/select' && method === 'POST' && payload.projectId === projectId) { json(session()); return; }
       if (path === '/job-result' && method === 'GET') { json({ status: 'not-found', fixture: true }, 404); return; }
-      const panelMatch = path.match(/^\/media-panel\/([a-f0-9-]+)\/(P\d{2}-R-G\d{2})$/i);
+      const panelMatch = path.match(/^\/media-panel\/([a-f0-9-]+)\/(P\d{2}-[RL]-G\d{2})$/i);
       if (panelMatch && method === 'GET' && panelMatch[1] === mangaId && snapshot.sourceMangaPanels[panelMatch[2]]) {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' }); res.end(panelSvg(panelMatch[2])); return;
       }
       if (method !== 'GET') { block('该操作不在隔离 UI 验收服务允许范围内；无外部请求。'); return; }
       json({ error: 'Unknown isolated fixture read route', fixture: true }, 404);
     } catch (error) {
-      json({ error: error instanceof SyntaxError ? 'Invalid fixture JSON' : 'Fixture request failed' }, 400);
+      json({ error: error instanceof SyntaxError ? 'Invalid fixture JSON' : error.message || 'Fixture request failed' }, error.statusCode || 400);
     }
   });
+  if (contentFixture) server.on('close', () => rmSync(contentFixture, { recursive: true, force: true }));
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  createWorkbenchFixtureServer().listen(workbenchFixturePort, '127.0.0.1', () => {
+  createWorkbenchFixtureServer({ promptGenerationState: process.env.MANJING_UI_PROMPT_STATE || '', promptReviewState: process.env.MANJING_UI_REVIEW_STATE || '', promptReviewResponseDelayMs: process.env.MANJING_UI_REVIEW_DELAY_MS || 0, contentReview: process.env.MANJING_UI_CONTENT_REVIEW === '1' }).listen(workbenchFixturePort, '127.0.0.1', () => {
     console.log(`Isolated UI fixture ready: http://127.0.0.1:${workbenchFixturePort} — ${fixtureNotice}`);
   });
 }

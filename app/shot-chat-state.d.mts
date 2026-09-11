@@ -1,2 +1,4 @@
 export function chatReplyCanApply(input: { projectUid: string; shotUid: string; currentPrompt: string; currentSourceRevision: string; approved: boolean; pending?: { turnId: string; sourceRevision: string; basePrompt: string }; result: { action: string; projectUid: string; shotUid: string; chatTurnId: string; sourceRevision: string } }): boolean;
 export function reviewSuggestionsText(shotId: string, report: { summary?: string; findings?: Array<{ severity: string; title: string; detail: string; suggestion: string; panelIds?: string[] }> }, sourceRevision?: string): string;
+export function shotChatWorkLabel(chat?: { pending?: { turnId: string; recovering?: boolean; status?: string }; messages?: Array<{ id: string; role: string; text: string }> }, options?: { status?: string; connected?: boolean; approved?: boolean }): string;
+export function shotChatSubmissionDecision(httpStatus: number, result?: { status?: string } | null): 'completed' | 'failed' | 'recover';
