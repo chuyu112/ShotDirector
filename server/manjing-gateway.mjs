@@ -1,5 +1,6 @@
 import { request as httpRequest } from "node:http";
 import { createServer } from "node:http";
+import { localCodexRelayFromEnvironment } from './local-codex-relay.mjs';
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
@@ -453,6 +454,7 @@ export function createManjingGateway({
   quotaTimeZone = normalizedTimeZone(process.env.MANJING_QUOTA_TIME_ZONE),
   libtvVersionProbe = createLibtvVersionProbe(),
   ffmpegVersionProbe = createFfmpegVersionProbe(),
+  localCodexRelay = localCodexRelayFromEnvironment(),
 } = {}) {
   const effectiveDailyLimits = normalizeDailyLimits(dailyLimits);
   const auth = createAuthApiAdapter(store, { cookie: { secure: cookieSecure, sameSite: "Lax", path: "/" } });
@@ -478,6 +480,7 @@ export function createManjingGateway({
     incomingUrl.pathname = normalizedPath(incomingUrl.pathname);
     const path = incomingUrl.pathname;
     try {
+      if (localCodexRelay && await localCodexRelay.handle(req, res, path)) return;
       applyCorsHeaders(req, res, allowedOrigins);
       if (req.method === "GET" && path === "/healthz") {
         const [libtv, ffmpeg] = await Promise.all([

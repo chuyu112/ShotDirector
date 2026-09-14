@@ -57,7 +57,7 @@ type PanelDropTarget = {
   position: "end";
   createShotAt?: number;
 };
-type WritingModelId = "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "ko-gpt-5.6-luna" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
+type WritingModelId = "local-codex-gpt-6" | "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "ko-gpt-5.6-luna" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
 type AssetImageRatio = "16:9" | "9:16" | "1:1" | "3:4" | "4:3" | "3:2" | "2:3" | "4:5" | "5:4" | "21:9";
@@ -238,6 +238,7 @@ type WritingModelOption = {
 };
 
 const writingModelCatalog: WritingModelOption[] = [
+  { id: 'local-codex-gpt-6', label: '本地 Codex GPT-6', hint: '本机 Codex 登录额度 · 图片与文字', provider: 'local-codex', model: 'gpt-6-astra', available: false, reason: '等待本地 Codex 连接' },
   { id: "glm-5.3-flash", label: "GLM-5.3-Flash", hint: "默认 · 多模态", provider: "glm", model: "glm-5.3-flash", available: false, reason: "正在读取服务器状态" },
   { id: "kimi-k3", label: "Kimi K3", hint: "聊天与创作 · 多模态", provider: "kimi", model: "k3", available: false, reason: "正在读取服务器状态" },
   { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "快速文字创作", provider: "deepseek", model: "deepseek-v4-flash", available: false, reason: "正在读取服务器 env" },
@@ -255,6 +256,7 @@ const serverSelectableWritingModelIds = new Set<WritingModelId>(writingModelCata
 function creatorModelLineageLabel(modelId?: string, provider?: string) {
   const normalizedModelId = String(modelId || "").trim() || legacyUnknownModelId;
   const normalizedProvider = String(provider || "").trim();
+  if (normalizedProvider === 'local-codex') return `${normalizedModelId} · 本地 Codex`;
   if (!normalizedProvider || normalizedProvider === "codex" || normalizedProvider === "human-editor") {
     return `${normalizedModelId}${normalizedProvider ? ` · ${normalizedProvider}` : ""}`;
   }
@@ -2149,7 +2151,7 @@ function DirectorDesk() {
   const generationModel = state.generationModel || defaultGenerationModel;
   const writingModelOptions = useMemo(() => {
     const live = new Map((bridge.writingModels || []).map((model) => [model.id, model]));
-    return writingModelCatalog.map((fallback) => {
+    return writingModelCatalog.filter((fallback) => fallback.provider !== 'local-codex' || live.has(fallback.id)).map((fallback) => {
       const remote = live.get(fallback.id);
       const serverSelectable = serverSelectableWritingModelIds.has(fallback.id);
       const available = serverSelectable && Boolean(remote?.available);
@@ -2157,7 +2159,7 @@ function DirectorDesk() {
         ...fallback,
         model: serverSelectable && remote?.model ? remote.model : fallback.model,
         available,
-        selected: available && Boolean(remote?.selected),
+        selected: Boolean(remote?.selected),
         reason: serverSelectable ? remote?.reason || (available ? undefined : fallback.reason) : fallback.reason,
       };
       });
@@ -2169,14 +2171,14 @@ function DirectorDesk() {
       ...writingModelOptions.filter((model) => !writingModelOrder.includes(model.id)),
     ];
   }, [writingModelOptions, writingModelOrder]);
-  const activeWritingModel = writingModelOptions.find((model) => model.selected && model.available)
+  const activeWritingModel = writingModelOptions.find((model) => model.selected)
     || (bridge.modelProvider?.configured
-      ? writingModelOptions.find((model) => model.id === bridge.modelProvider?.selectionId && model.available)
+      ? writingModelOptions.find((model) => model.id === bridge.modelProvider?.selectionId)
         || writingModelOptions.find((model) => model.provider === bridge.modelProvider?.id && model.available)
       : undefined);
   const writingModelSummary = switchingWritingModelId
     ? "切换中…"
-    : activeWritingModel?.label || (bridge.connected ? "暂无可用模型" : "未连接");
+    : activeWritingModel ? `${activeWritingModel.label}${activeWritingModel.available ? '' : ' · 未就绪'}` : (bridge.connected ? "暂无可用模型" : "未连接");
   const activeWritingModelId = activeWritingModel?.id || bridge.modelProvider?.selectionId || "";
   const chatJobFor = (item: ShotReview) => activeShotWorkJob(bridge.promptJobs, {
     projectUid: state.projectUid, shotUid: item.shot.shotUid, shotId: item.shot.id,

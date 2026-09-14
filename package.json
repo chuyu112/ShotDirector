@@ -9,6 +9,8 @@
     "dev": "concurrently -k -n SITE,PI-HARNESS \"vinext dev --hostname 0.0.0.0 --port 3000\" \"node --env-file-if-exists=.env.bridge.local scripts/shotdirector-bridge.mjs\"",
     "dev:site": "vinext dev",
     "dev:bridge": "node --env-file-if-exists=.env.bridge.local scripts/shotdirector-bridge.mjs",
+    "start:local-codex": "node runner/local-codex-runner.mjs",
+    "check:local-codex": "node runner/local-codex-runner.mjs --check",
     "build": "vinext build",
     "build:server": "node scripts/build-server.mjs",
     "start": "vinext start",

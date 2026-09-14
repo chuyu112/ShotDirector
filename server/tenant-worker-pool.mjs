@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { localCodexWorkerEnvironment } from './local-codex-contract.mjs';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/;
 const WORKER_ENV_KEYS = new Set([
@@ -144,6 +145,8 @@ export class TenantWorkerPool {
     this.spawnImpl = spawnImpl;
     this.reservePortImpl = reservePortImpl;
     this.baseEnv = workerBaseEnvironment(baseEnv);
+    // The device credential never enters the common Worker environment.
+    this.localCodexEnv = Object.fromEntries(['MANJING_LOCAL_CODEX_OWNER_ID', 'MANJING_LOCAL_CODEX_TOKEN', 'MANJING_LOCAL_CODEX_RELAY_URL'].map(key => [key, baseEnv[key]]));
     this.fetchImpl = fetchImpl;
     this.workers = new Map();
     this.pending = new Map();
@@ -248,6 +251,7 @@ export class TenantWorkerPool {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...this.baseEnv,
+        ...localCodexWorkerEnvironment(this.localCodexEnv, userId, projectId),
         MANJING_APP_ROOT: this.appRoot,
         MANJING_DATA_ROOT: projectRoot,
         MANJING_SERVER_WORKER: "1",

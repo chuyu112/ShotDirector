@@ -28,7 +28,7 @@ test("all director-desk bridge fetches include the session cookie", async () => 
   assert.doesNotMatch(page, /(^|[^.\w])fetch\(/m);
 });
 
-test("writing model picker mirrors the env-driven API-only catalog and only switches through the server", async () => {
+test("writing model picker uses the server catalog and preserves its selected model when unavailable", async () => {
   const [page, css, bridge] = await Promise.all([
     readFile(pagePath, "utf8"),
     readFile(cssPath, "utf8"),
@@ -52,9 +52,10 @@ test("writing model picker mirrors the env-driven API-only catalog and only swit
   assert.match(page, /serverSelectableWritingModelIds = new Set<WritingModelId>\(writingModelCatalog\.map\(\(model\) => model\.id\)\)/);
   assert.match(page, /Chat \/ Work 模型/);
   assert.match(page, /Reviewer 审核模型（不影响 Creator）/);
-  assert.match(page, /selected: available && Boolean\(remote\?\.selected\)/);
-  assert.match(page, /activeWritingModel = writingModelOptions\.find\(\(model\) => model\.selected && model\.available\)/);
-  assert.match(page, /activeWritingModel\?\.label \|\| \(bridge\.connected \? "暂无可用模型" : "未连接"\)/);
+  assert.match(page, /selected: Boolean\(remote\?\.selected\)/);
+  assert.match(page, /activeWritingModel = writingModelOptions\.find\(\(model\) => model\.selected\)/);
+  assert.match(page, /activeWritingModel\.available \? '' : ' · 未就绪'/);
+  assert.match(page, /fallback\.provider !== 'local-codex' \|\| live\.has\(fallback\.id\)/);
   assert.match(page, /model\.available \? model\.hint : model\.reason \|\| "待接入"/);
   assert.match(css, /\.writing-model-picker\s*\{/);
   assert.match(css, /\.writing-model-menu\s*\{/);

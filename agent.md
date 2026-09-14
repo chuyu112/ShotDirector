@@ -4,6 +4,21 @@
 
 漫镜（Manjing）是本地优先的 AI 导演工作台，用于把脚本、漫画或视频素材整理为可审核的 Shot，并维护证据、全局设定、资产、导演布局、白模、提示词、生成结果和审批状态之间的关系。
 
+## 2026-09-15 当前功能与验收范围
+
+- 用户明确当前功能为：把漫画裁剪好，生成完整提示词，进行独立严格审核，最后输出提示词即可。验收链路为「漫画裁剪与 Shot 编组 → 完整提示词 → 独立严格审核 → 必要时修改并复审 → 最终提示词输出」。
+- 当前交付终点是提示词正文。视频生成包、资产同步、LibTV 视频提交与视频成品不纳入本轮验收；下文保留的相关历史说明不代表本轮必须实现，不因测试链路而扩展开发范围。
+- 当前验证重点为原画格完整性与顺序、人工裁框与编组、提示词和证据版本绑定、独立 Reviewer、改稿后审核失效与复审、任务恢复，以及最终复制的正文与当前完整提示词一致。
+- 本地模型替身测试、真实模型调用和实际浏览器交互分别记录，不互相替代。
+
+## 2026-09-15 本地 Codex GPT-6 通道
+
+- 用户已明确授权：除 API 外，线上漫镜也能调用这台 Mac 已登录的 Codex。新增 `local-codex-gpt-6`，固定 `gpt-6-astra`，用于完整提示词、Shot Chat 和独立严格审核；这些任务继续固定 MAX。此规则覆盖下文历史 API-only 限制，不恢复旧 Codex Sol/Luna 标识。
+- Mac 主动通过 HTTPS 领取任务并返回完整结构化结果；本地 Codex 使用 ChatGPT 登录额度，模型仍由云端执行。登录凭据不离开 Mac。连接令牌仅在网关和本机私有配置中，Worker 只得到账户及项目专用令牌；其他账户看不到这个模型。
+- 每次模型调用使用新的临时会话，仅传当前任务文本和已授权项目图片；禁用命令、文件修改、MCP、联网工具与子 Agent。严格审核仍由既有 Pi Harness 创建独立 Run，不继承 Creator 会话或批准权限。
+- Mac 离线、登录或额度不可用时显示未就绪，保留原选择，不自动换 API。领取任务和完整结果分别持久化；断线只查询或补传原结果，无法确认完成的执行不得自动重提。
+- 接入与运行说明：`docs/2026-09-15-本地Codex接入.md`。发布与真实链路验证必须单独记录，不能用配置就绪代替生成或严格审核成功。
+
 ## 2026-09-11 Shot 01 人工内容核对（已部署，生产事实待人工确认）
 
 - 原裁图人工核对由专用界面与 `server/shot-content-review.mjs` 持久化。先逐格人工裁定，再预览并确认结构同步；禁止模型代填结论、自动纠正事实、自动重裁或自动提交审核。
@@ -39,7 +54,7 @@
 - 前端：React 19、TypeScript、Vinext/Vite。
 - 本地桥接：`scripts/shotdirector-bridge.mjs`，默认监听 `127.0.0.1:4317`。
 - 服务器公开网关：`server/manjing-gateway.mjs`，处理注册、Session、项目选择、CSRF/CORS、持久化额度和 Worker 代理。
-- 租户 Worker 池：`server/tenant-worker-pool.mjs`；服务端文字模型适配层：`server/compatible-chat-structured-provider.mjs`、`server/openai-responses-provider.mjs`、`server/anthropic-structured-provider.mjs`、`server/doubao-responses-provider.mjs`。所有 Creator／Reviewer 只走服务端 API，不使用或依赖个人 Codex／ChatGPT 登录额度；GPT 图片是独立且默认额度为 0 的可选能力；LibTV：`server/libtv-worker.mjs`。
+- 租户 Worker 池：`server/tenant-worker-pool.mjs`；API 适配层：`server/compatible-chat-structured-provider.mjs`、`server/openai-responses-provider.mjs`、`server/anthropic-structured-provider.mjs`、`server/doubao-responses-provider.mjs`。用户绑定的本地 Codex 通道：`server/local-codex-provider.mjs`、`server/local-codex-relay.mjs` 与 `runner/local-codex-*.mjs`；其他 API 路由及默认项独立保留。GPT 图片是独立且默认额度为 0 的可选能力；LibTV：`server/libtv-worker.mjs`。
 - 生产服务器（2026-09-10 核验）：`43.173.105.8` 使用 Debian、Docker Compose 项目 `manjing` 与宿主机 Nginx。用户指定正式域名为 `manjing.kakayiduo.cloud`，配置为 `deploy/nginx.manjing.subdomain.conf`；域名切换进展见 `docs/2026-09-10-漫镜子域名切换.md`。`deploy/manjing-*.service`、`deploy/nginx.manjing.systemd.conf` 和 `deploy/apply-release-systemd.sh` 保留为 systemd 方案，不能据此推断当前服务器布局。
 - 视频拆帧：`scripts/extract_every_second.py`；Alibaba Cloud Linux x86_64 的固定 FFmpeg 安装器为 `deploy/install-ffmpeg-static.sh`。
 - Pi AgentSession 核心：`runner/manjing-pi-harness.mjs`。

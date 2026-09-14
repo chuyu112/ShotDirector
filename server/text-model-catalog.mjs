@@ -1,4 +1,13 @@
+import { LOCAL_CODEX_SELECTION, LOCAL_CODEX_MODEL, LOCAL_CODEX_PROVIDER } from './local-codex-contract.mjs';
+
 const DEFINITIONS = Object.freeze([
+  {
+    id: LOCAL_CODEX_SELECTION, label: '本地 Codex GPT-6', hint: '本机 Codex 登录额度 · 图片与文字',
+    provider: LOCAL_CODEX_PROVIDER, transport: 'local-codex-relay', localCodex: true,
+    supportsImages: true, writingEnabled: true, reviewEnabled: true,
+    defaultModel: LOCAL_CODEX_MODEL,
+    baseVars: ['MANJING_LOCAL_CODEX_RELAY_URL'], keyVars: ['MANJING_LOCAL_CODEX_WORKER_TOKEN'], modelVars: [],
+  },
   {
     id: "glm-5.3-flash",
     label: "GLM-5.3-Flash",
@@ -231,7 +240,8 @@ export function textModelConfig(modelId, env = process.env) {
 }
 
 export function textModelConfigs(env = process.env) {
-  return DEFINITIONS.map((definition) => textModelConfig(definition.id, env));
+  return DEFINITIONS.filter(definition => !definition.localCodex || Boolean(env.MANJING_LOCAL_CODEX_WORKER_TOKEN))
+    .map((definition) => textModelConfig(definition.id, env));
 }
 
 export function reviewModelConfigs(env = process.env) {

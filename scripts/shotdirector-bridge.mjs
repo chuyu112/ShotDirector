@@ -30,6 +30,7 @@ import {
 } from "./complete-prompt-job-identity.mjs";
 import { OpenAIResponsesProvider } from "../server/openai-responses-provider.mjs";
 import { CompatibleChatStructuredProvider } from "../server/compatible-chat-structured-provider.mjs";
+import { LocalCodexProvider } from '../server/local-codex-provider.mjs';
 import { AnthropicStructuredProvider } from "../server/anthropic-structured-provider.mjs";
 import { DoubaoResponsesProvider } from "../server/doubao-responses-provider.mjs";
 import { reviewModelConfigs, textModelConfigs } from "../server/text-model-catalog.mjs";
@@ -150,6 +151,9 @@ function unavailableRuntimeProvider(config, error) {
 
 function runtimeProvider(config) {
   try {
+    if (config.transport === 'local-codex-relay') {
+      return new LocalCodexProvider({ baseUrl: config.baseUrl, token: config.apiKey, userId: tenantId, projectId: tenantProjectId, allowedRoots: [dataRoot] });
+    }
     if (config.transport === "chat-completions") {
       return compatibleProviderOrUnavailable({
         kind: config.compatibleKind,
@@ -442,8 +446,10 @@ function reviewerRegistry() {
       runtimeProvider: runtime?.runtimeProvider,
       supportsImages: config.supportsImages,
       evidenceMode: config.supportsImages ? "direct-images" : "structured-panel-evidence",
-      available: runtime?.available === true,
-      reason: runtime?.available ? undefined : runtime?.reason || runtime?.runtimeProvider?.configurationError || config.reason,
+      available: runtime?.available === true && (!config.localCodex || runtime.runtimeProvider?.connection?.ready === true),
+      reason: config.localCodex && !runtime?.runtimeProvider?.connection?.ready
+        ? runtime?.runtimeProvider?.connection?.reason || '本地 Codex 未连接'
+        : runtime?.available ? undefined : runtime?.reason || runtime?.runtimeProvider?.configurationError || config.reason,
     }];
   });
   const merged = new Map();
@@ -488,8 +494,10 @@ function publicWritingModelOptions() {
     model: item.model || item.id,
     label: item.label,
     hint: item.hint,
-    available: item.available,
-    reason: item.available ? undefined : item.reason || item.runtimeProvider?.configurationError || "env 配置不完整",
+    available: item.available && (!item.localCodex || item.runtimeProvider?.connection?.ready === true),
+    reason: item.localCodex && !item.runtimeProvider?.connection?.ready
+      ? item.runtimeProvider?.connection?.reason || '本地 Codex 未连接'
+      : item.available ? undefined : item.reason || item.runtimeProvider?.configurationError || "env 配置不完整",
     supportsImages: item.supportsImages,
     selected: item.id === aiProvider,
     }));
@@ -945,7 +953,7 @@ async function runCodexResponses(prompt, {
   const effectiveReasoningEffort = reasoningEffort || writingRuntime.reasoningEffort;
   if (!runtimeProvider?.configured) throw new Error(writingRuntime.unavailableReason);
   if (!existsSync(schemaPath)) throw new Error("找不到结构化输出 Schema");
-  onProgress("preparing", `正在准备 ${writingRuntime.label} Responses API 任务`);
+  onProgress("preparing", `正在准备 ${writingRuntime.label} ${writingRuntime.providerId === 'local-codex' ? '本机 Codex' : 'Responses API'}任务`);
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
   onProgress("running", imagePaths.length ? `正在提交文本和 ${imagePaths.length} 张图片` : "正在提交服务端模型任务");
   if (imagePaths.length && !writingRuntime.supportsImages) {
@@ -969,7 +977,9 @@ async function runCodexResponses(prompt, {
     safetyIdentifier: tenantId,
     promptCacheKey: `manjing-${tenantId}-${basename(schemaPath, extname(schemaPath))}`,
     stream: writingRuntime.providerId.startsWith("jiekou-"),
-    onProgress: () => onProgress("receiving", `${writingRuntime.label} 正在流式返回生成数据`),
+    onProgress: (event) => writingRuntime.providerId === 'local-codex'
+      ? onProgress(event?.phase === 'queued' ? 'queued' : 'running', event?.phase === 'queued' ? '正在等待本机 Codex 执行' : '本机 Codex 正在处理，等待完整结果')
+      : onProgress("receiving", `${writingRuntime.label} 正在流式返回生成数据`),
     timeoutMs,
   });
   let structured;
@@ -1163,7 +1173,7 @@ function runCodex(prompt, options) {
   const writingRuntime = options.writingRuntime || currentWritingRuntimeContext();
   const runtimeOptions = { ...options, writingRuntime };
   if (writingRuntime.modelRuntime?.transport === "chat-completions") return runCompatibleChatStructured(prompt, runtimeOptions);
-  if (writingRuntime.modelRuntime?.transport === "responses") return runCodexResponses(prompt, runtimeOptions);
+  if (["responses", 'local-codex-relay'].includes(writingRuntime.modelRuntime?.transport)) return runCodexResponses(prompt, runtimeOptions);
   if (writingRuntime.modelRuntime?.transport === "anthropic-messages") return runAnthropicStructured(prompt, runtimeOptions);
   if (writingRuntime.modelRuntime?.transport === "doubao-responses") return runDoubaoStructured(prompt, runtimeOptions);
   return Promise.reject(new Error(`不支持的 MANJING_AI_PROVIDER：${writingRuntime.selectionId}`));
@@ -5178,6 +5188,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/health") {
+    await Promise.all([...writingModelRuntimes.values()].filter(item => item.localCodex).map(item => item.runtimeProvider.refreshStatus?.()));
     await refreshLibtvVersion();
     void refreshLibtvStatus();
     pruneCompletePromptJobs(lastCompletePromptJobs);
