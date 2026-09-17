@@ -1304,18 +1304,12 @@ input:focus-visible {
 }
 
 .shot-strip button.is-current {
-  background: var(--panel);
-  color: var(--blue);
+  background: var(--blue);
+  color: white;
 }
 
-.shot-strip button.is-current::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 4px;
-  background: var(--blue);
+.shot-strip button.is-current .shot-working-label {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .shot-strip button.is-done {
@@ -1446,11 +1440,20 @@ input:focus-visible {
   cursor: pointer;
 }
 
-.shot-subshot-options button:hover,
-.shot-subshot-options button.active {
+.shot-subshot-options button:hover {
   border-color: var(--blue);
   background: #e7efff;
   color: var(--blue);
+}
+
+.shot-subshot-options button.active {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: white;
+}
+
+.shot-subshot-options button.active small {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .shot-subshot-options b {
