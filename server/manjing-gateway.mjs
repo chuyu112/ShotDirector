@@ -274,10 +274,8 @@ function normalizeLimit(value, fallback) {
 }
 
 function normalizeDailyLimits(limits) {
-  const ai = normalizeLimit(limits?.ai, 10);
   return {
-    ai,
-    superadminAi: normalizeLimit(limits?.superadminAi, ai),
+    ai: normalizeLimit(limits?.ai, 10),
     globalAi: normalizeLimit(limits?.globalAi, null),
     image: normalizeLimit(limits?.image, 0),
     globalImage: normalizeLimit(limits?.globalImage, null),
@@ -293,8 +291,10 @@ function normalizeDailyLimits(limits) {
 }
 
 function dailyLimitsForUser(limits, user) {
+  // 超级管理员不受每日配额限制：账户级与全服级都改用极大上限，
+  // 用量仍照常计数（可审计），但永远不会因配额被拒绝。
   return user?.role === "superadmin"
-    ? { ...limits, ai: limits.superadminAi }
+    ? { ...limits, ai: Number.MAX_SAFE_INTEGER, globalAi: Number.MAX_SAFE_INTEGER }
     : limits;
 }
 
@@ -445,7 +445,6 @@ export function createManjingGateway({
   maxProjectsPerUser = positiveIntegerEnv("MANJING_MAX_PROJECTS_PER_USER", 10),
   dailyLimits = {
     ai: nonNegativeIntegerEnv("MANJING_DAILY_AI_REQUESTS", 10),
-    superadminAi: nonNegativeIntegerEnv("MANJING_DAILY_SUPERADMIN_AI_REQUESTS", 10),
     globalAi: nonNegativeIntegerEnv("MANJING_DAILY_GLOBAL_AI_REQUESTS", 200),
     image: nonNegativeIntegerEnv("MANJING_DAILY_IMAGE_REQUESTS", 0),
     globalImage: nonNegativeIntegerEnv("MANJING_DAILY_GLOBAL_IMAGE_REQUESTS", 20),

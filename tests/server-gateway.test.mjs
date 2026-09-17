@@ -445,7 +445,7 @@ test("gateway health probes real tool versions and enforces a global AI budget",
   assert.match(denied.error, /ai-model-call-budget/);
 });
 
-test("superadmin receives an independent 100-unit AI budget while regular users stay at 10", async (t) => {
+test("superadmin bypasses daily user-scope and global AI caps while regular users stay limited", async (t) => {
   const backend = createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end('{"ok":true}');
@@ -461,7 +461,7 @@ test("superadmin receives an independent 100-unit AI budget while regular users 
     store,
     workerPool,
     cookieSecure: false,
-    dailyLimits: { ai: 10, superadminAi: 100, globalAi: 200 },
+    dailyLimits: { ai: 10, globalAi: 20 },
   });
   const port = await listen(gateway.server);
   const base = `http://127.0.0.1:${port}`;
@@ -496,6 +496,25 @@ test("superadmin receives an independent 100-unit AI budget while regular users 
     WHERE owner_user_id = ? AND counter_type = 'ai-model-call-budget'
   `).get(admin.payload.user.id)?.amount || 0);
   assert.equal(adminUsage, 18);
+
+  // 超级管理员不受账户级和全服级每日上限约束：全服上限设为 20，
+  // 两次 18 单位调用后全服计数 36 已超限，但 superadmin 仍可继续调用。
+  response = await fetch(`${base}/media-analyze`, {
+    method: "POST",
+    headers: { Cookie: admin.cookie, Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "manga", mediaIds }),
+  });
+  assert.equal(response.status, 200);
+  const adminUsageAfterSecondCall = Number(store.database.prepare(`
+    SELECT amount FROM usage_counters
+    WHERE owner_user_id = ? AND counter_type = 'ai-model-call-budget'
+  `).get(admin.payload.user.id)?.amount || 0);
+  assert.equal(adminUsageAfterSecondCall, 36);
+  const globalUsage = Number(store.database.prepare(`
+    SELECT amount FROM global_usage_counters
+    WHERE counter_type = 'ai-model-call-budget'
+  `).get()?.amount || 0);
+  assert.equal(globalUsage, 36);
 
   response = await fetch(`${base}/media-analyze`, {
     method: "POST",
