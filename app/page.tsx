@@ -19,6 +19,7 @@ import { dialogueMetrics, visualTimingMetrics } from "./shot-timing-metrics.mjs"
 import { promptReviewControls, promptReviewShotLabel } from "./prompt-review-controls.mjs";
 import { promptReviewRecoveryDecision } from "./prompt-review-recovery.mjs";
 import { PromptReviewRecoveryReader } from "./prompt-review-polling.mjs";
+import { completePromptRecoveryHttpAction, completePromptRecoveryPlan } from "./complete-prompt-recovery.mjs";
 import { activeShotWorkJob, latestTerminalShotWorkJob, matchesShotWorkJob } from "./shot-work-reconciliation.mjs";
 import { persistProjectSnapshot } from "./project-save.mjs";
 import { LineListField, LineListTextarea } from "./line-list-field";
@@ -2109,6 +2110,7 @@ function DirectorDesk() {
   const recoveringAnnotationJob = useRef("");
   const recoveringArtworkJob = useRef("");
   const recoveringCompletePrompt = useRef("");
+  const recoveringCompletePrompts = useRef(new Set<string>());
   const recoveringPromptReview = useRef("");
   const promptReviewRecoveryReader = useRef(new PromptReviewRecoveryReader<{
     httpStatus: number; result: PromptReviewRecoveryResult; error?: unknown;
@@ -2907,6 +2909,174 @@ function DirectorDesk() {
   }, [activeStorageKey, bridge.connected, bridge.pairingToken, contentReviewSession, hydrated, projectArchiveLoaded, projectScopeId, state]);
 
   useEffect(() => {
+    if (!hydrated || !projectArchiveLoaded || !bridge.connected || !bridge.pairingToken || contentReviewSession) return;
+    const projectUid = state.projectUid;
+    const pairingToken = bridge.pairingToken;
+
+    const activePromptJobs = state.reviews.map((item) => {
+      const identity = stableShotIdentity(item.shot);
+      return {
+        identity,
+        job: activeShotWorkJob(bridge.promptJobs, {
+          projectUid,
+          shotUid: identity.shotUid,
+          shotId: identity.fallbackId,
+        }, "complete-shot-prompt"),
+      };
+    }).filter((entry) => entry.job);
+
+    if (activePromptJobs.some(({ identity, job }) => {
+      const item = state.reviews.find((candidate) => matchesStableShotIdentity(candidate.shot, identity));
+      return item && (item.completePromptStatus !== "generating" || item.completePromptSourceRevision !== job?.sourceRevision);
+    })) {
+      setState((previous) => previous.projectUid !== projectUid ? previous : ({
+        ...previous,
+        reviews: previous.reviews.map((item) => {
+          const entry = activePromptJobs.find(({ identity }) => matchesStableShotIdentity(item.shot, identity));
+          if (!entry?.job || (item.completePromptStatus === "generating" && item.completePromptSourceRevision === entry.job.sourceRevision)) return item;
+          return {
+            ...invalidatePromptReview(item),
+            completePromptStatus: "generating" as CompleteShotPromptStatus,
+            completePromptGenerationStartedAt: entry.job.startedAt || entry.job.queuedAt || item.completePromptGenerationStartedAt,
+            completePromptSourceRevision: entry.job.sourceRevision || item.completePromptSourceRevision,
+            completePromptRequestedGeneratorId: entry.job.writingModelId || item.completePromptRequestedGeneratorId,
+            completePromptSummary: entry.job.message || item.completePromptSummary,
+          };
+        }),
+      }));
+    }
+
+    state.reviews.forEach((item) => {
+      if (item.completePromptStatus !== "generating") return;
+      const identity = stableShotIdentity(item.shot);
+      const workIdentity = {
+        projectUid,
+        shotUid: identity.shotUid,
+        shotId: identity.fallbackId,
+      };
+      const activeJob = activeShotWorkJob(bridge.promptJobs, workIdentity, "complete-shot-prompt");
+      const sourceRevision = String(item.completePromptSourceRevision || "").trim();
+      const terminalJob = latestTerminalShotWorkJob(
+        bridge.lastPromptJobs,
+        workIdentity,
+        "complete-shot-prompt",
+        (job) => !sourceRevision || job.sourceRevision === sourceRevision,
+      );
+      const plan = completePromptRecoveryPlan({
+        status: item.completePromptStatus,
+        sourceRevision,
+        generationStartedAt: item.completePromptGenerationStartedAt,
+        hasActiveJob: Boolean(activeJob),
+        hasTerminalJob: Boolean(terminalJob),
+      });
+      const unlock = (message: string) => {
+        setState((previous) => {
+          if (previous.projectUid !== projectUid) return previous;
+          let changed = false;
+          const reviews = previous.reviews.map((candidate) => {
+            if (!matchesStableShotIdentity(candidate.shot, identity)
+              || candidate.completePromptStatus !== "generating"
+              || String(candidate.completePromptSourceRevision || "").trim() !== sourceRevision) return candidate;
+            changed = true;
+            return {
+              ...candidate,
+              completePromptStatus: "error" as CompleteShotPromptStatus,
+              completePromptGenerationStartedAt: undefined,
+              completePromptSummary: message,
+            };
+          });
+          return changed ? { ...previous, reviews } : previous;
+        });
+      };
+      if (plan.action === "unlock") {
+        unlock(plan.message || "上次生成没有可恢复结果，已解除占用，请重新生成。");
+        return;
+      }
+      if (plan.action !== "query") return;
+
+      const recoveryShotKey = identity.shotUid || identity.fallbackId;
+      const recoveryKey = `${activeStorageKey}:${projectUid}:${recoveryShotKey}:${sourceRevision}`;
+      if (recoveringCompletePrompts.current.has(recoveryKey)) return;
+      recoveringCompletePrompts.current.add(recoveryKey);
+      const recoveryQuery = new URLSearchParams({
+        type: "complete-shot-prompt",
+        projectUid,
+        shotUid: identity.shotUid,
+        shotId: identity.fallbackId,
+        sourceRevision,
+      });
+
+      void bridgeFetch(`${bridgeBase}/job-result?${recoveryQuery.toString()}`, {
+        cache: "no-store",
+        headers: { "X-Manjing-Token": pairingToken },
+        signal: AbortSignal.timeout(10_000),
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const payloadStatus = typeof payload.status === "string" ? payload.status : "";
+        const action = completePromptRecoveryHttpAction(response.status, payloadStatus);
+        if (action === "wait" || action === "retry") return;
+        if (action === "unlock") {
+          unlock(typeof payload.error === "string" && payload.error.trim()
+            ? `${payload.error.trim()}；已解除占用，请重新生成。`
+            : "上次生成没有可恢复结果，已解除占用，请重新生成。");
+          return;
+        }
+
+        const result = payload as unknown as CompleteShotPromptResult;
+        if (result.sourceRevision !== sourceRevision
+          || !completePromptResultMatchesStableShot(result, projectUid, identity)
+          || !result.prompt?.trim()) {
+          unlock("已保存的生成结果与当前 Shot 或版本不一致，已解除占用，请重新生成。");
+          return;
+        }
+        setState((previous) => {
+          if (previous.projectUid !== projectUid) return previous;
+          let changed = false;
+          const reviews = previous.reviews.map((candidate) => {
+            if (!matchesStableShotIdentity(candidate.shot, identity)
+              || candidate.completePromptStatus !== "generating"
+              || String(candidate.completePromptSourceRevision || "").trim() !== sourceRevision) return candidate;
+            changed = true;
+            return {
+              ...invalidatePromptReview(candidate),
+              completePromptStatus: "ready" as CompleteShotPromptStatus,
+              completePrompt: result.prompt,
+              completePromptSummary: result.summary,
+              completePromptResearch: result.research,
+              completePromptWarnings: result.warnings,
+              completePromptGeneratedAt: result.generatedAt,
+              completePromptGenerationStartedAt: undefined,
+              completePromptSourceRevision: result.sourceRevision,
+              completePromptConfirmedAt: candidate.completePromptConfirmedAt || result.generatedAt || new Date().toISOString(),
+              completePromptGeneratorId: result.generatorId?.trim() || legacyUnknownModelId,
+              completePromptGeneratorProvider: result.generatorProvider?.trim() || undefined,
+              completePromptRequestedGeneratorId: result.requestedGeneratorId?.trim() || undefined,
+            };
+          });
+          if (!changed) return previous;
+          const allReady = reviews.every((candidate) => candidate.completePromptConfirmedAt && candidate.completePromptStatus === "ready");
+          return {
+            ...previous,
+            reviews,
+            assetPrompts: mergeProjectAssetPrompts(
+              previous.assetPrompts,
+              confirmedAssetPrompts(reviews.filter((candidate) => matchesStableShotIdentity(candidate.shot, identity)), previous.globalSettings),
+            ),
+            structureStatus: allReady ? "confirmed" : previous.structureStatus,
+            structureConfirmedAt: allReady ? previous.structureConfirmedAt || new Date().toISOString() : previous.structureConfirmedAt,
+          };
+        });
+        setToast(`已自动恢复 Shot ${item.shot.id} 的完整提示词；仍需独立审查`);
+      }).catch(() => {
+        // Authentication, network, and gateway failures are transient. Keep the
+        // saved generating state and retry after the bridge reconnects.
+      }).finally(() => {
+        recoveringCompletePrompts.current.delete(recoveryKey);
+      });
+    });
+  }, [activeStorageKey, bridge.connected, bridge.lastPromptJobs, bridge.pairingToken, bridge.promptJobs, contentReviewSession, hydrated, projectArchiveLoaded, state.projectUid, state.reviews]);
+
+  useEffect(() => {
     if (!hydrated || !bridge.connected || !bridge.pairingToken || !shot.sourcePanels?.length) return;
     if (review.completePromptSummary === "最终美术风格已改为写实真人电影，请按新风格重新生成。") return;
     const recoveryShotIdentity = stableShotIdentity(shot);
@@ -2932,6 +3102,9 @@ function DirectorDesk() {
       }
       return;
     }
+    // All generating Shots are reconciled above, including Shots that are not
+    // currently selected and jobs lost from Worker memory after a restart.
+    if (review.completePromptStatus === "generating") return;
     const matchingTerminalJob = latestTerminalShotWorkJob(bridge.lastPromptJobs, recoveryWorkIdentity, "complete-shot-prompt");
     const recoveryGlobalSettings = completeGlobalSettingsForReviews(state.projectTitle, state.reviews, state.globalSettings);
     const recoveryPanelAnnotations = Object.fromEntries((shot.sourcePanels || []).map((panelId) => [
@@ -2954,14 +3127,10 @@ function DirectorDesk() {
       && terminalFinishedAt - promptGeneratedAt > 1000;
     const recoverySourceRevision = terminalHasNewerResult && matchingTerminalJob?.sourceRevision
       ? matchingTerminalJob.sourceRevision
-      : review.completePromptStatus === "generating" && review.completePromptSourceRevision
-        ? review.completePromptSourceRevision
-        : currentSourceRevision;
+      : currentSourceRevision;
     const promptNeedsRecovery = !review.completePrompt?.trim()
-      || review.completePromptStatus === "generating"
       || terminalHasNewerResult;
     if (!promptNeedsRecovery) return;
-    if (review.completePromptStatus === "generating" && !matchingTerminalJob) return;
     const recoveryShotKey = recoveryShotIdentity.shotUid || recoveryShotIdentity.fallbackId;
     const terminalJobStamp = matchingTerminalJob
       ? matchingTerminalJob.finishedAt || matchingTerminalJob.updatedAt || "latest"

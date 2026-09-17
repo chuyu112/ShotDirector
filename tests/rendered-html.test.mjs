@@ -208,7 +208,12 @@ test("requires shot-structure approval before downstream generation", async () =
   assert.match(page, /buildCompleteShotPromptRevision/);
   assert.match(page, /completePromptConfirmedAt/);
   assert.match(page, /complete-shot-prompt/);
-  assert.match(page, /review\.completePromptStatus === "generating" && !matchingTerminalJob/);
+  assert.doesNotMatch(page, /review\.completePromptStatus === "generating" && !matchingTerminalJob/);
+  assert.match(page, /const recoveringCompletePrompts = useRef\(new Set<string>\(\)\)/);
+  assert.match(page, /state\.reviews\.forEach\(\(item\) => \{[\s\S]*completePromptRecoveryPlan/);
+  assert.match(page, /completePromptRecoveryHttpAction\(response\.status, payloadStatus\)/);
+  assert.match(page, /completePromptStatus: "error" as CompleteShotPromptStatus/);
+  assert.match(page, /已解除占用，请重新生成/);
   assert.match(page, /terminalHasNewerResult && matchingTerminalJob\?\.sourceRevision/);
   assert.match(page, /completePromptSourceRevision: matchingLiveJob\.sourceRevision/);
   assert.match(page, /terminalHasNewerResult/);
