@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { LOCAL_CODEX_MODEL, LOCAL_CODEX_MAX_BYTES, localCodexCredentialMatches, localCodexError, localCodexWorkerToken, normalizeLocalCodexTask } from './local-codex-contract.mjs';
+import { LOCAL_CODEX_MODEL, LOCAL_CODEX_MAX_BYTES, isSupportedLocalCodexModel, localCodexCredentialMatches, localCodexError, localCodexWorkerToken, normalizeLocalCodexTask } from './local-codex-contract.mjs';
 
 function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -28,7 +28,7 @@ export class LocalCodexRelay {
     this.now = now;
     this.offlineAfterMs = offlineAfterMs;
     this.lastSeen = 0;
-    this.device = { ready: false, reason: '等待这台 Mac 的本地 Codex 连接' };
+    this.device = { ready: false, models: [], reason: '等待这台 Mac 的本地 Codex 连接' };
     this.jobs = new Map();
     mkdirSync(root, { recursive: true, mode: 0o700 });
     for (const file of readdirSync(root).filter(name => /^[a-f0-9-]{36}\.json$/i.test(name))) {
@@ -41,7 +41,7 @@ export class LocalCodexRelay {
 
   status() {
     const online = this.lastSeen > 0 && this.now() - this.lastSeen < this.offlineAfterMs;
-    return { online, ready: online && this.device.ready === true, model: LOCAL_CODEX_MODEL,
+    return { online, ready: online && this.device.ready === true, model: this.device.models?.[0] || LOCAL_CODEX_MODEL, models: this.device.models || [],
       reason: !online ? '这台 Mac 的本地 Codex 离线，请启动本地连接服务' : this.device.ready ? undefined : this.device.reason,
       lastSeenAt: this.lastSeen ? new Date(this.lastSeen).toISOString() : null,
       running: [...this.jobs.values()].filter(job => job.status === 'running').length };
@@ -81,7 +81,10 @@ export class LocalCodexRelay {
       if (runner && req.method === 'POST' && path === '/local-codex/runner/poll') {
         const input = await body(req);
         this.lastSeen = this.now();
-        this.device = { ready: input.ready === true && input.model === LOCAL_CODEX_MODEL,
+        const models = Array.isArray(input.models)
+          ? input.models.filter(isSupportedLocalCodexModel)
+          : [input.model].filter(isSupportedLocalCodexModel);
+        this.device = { ready: input.ready === true && models.length > 0, models,
           reason: input.ready ? undefined : '本地 Codex 登录、模型或额度尚未就绪，请在 Mac 检查连接服务' };
         const record = input.claim === true && this.device.ready
           ? [...this.jobs.values()].find(job => job.status === 'queued') : null;
@@ -98,11 +101,11 @@ export class LocalCodexRelay {
         if (record.status !== 'running') throw localCodexError('本地 Codex 任务尚未领取', 409);
         if (input.status === 'completed') {
           const result = input.result;
-          if (result?.model !== LOCAL_CODEX_MODEL || typeof result.text !== 'string' || !result.text.trim() || result.text.length > 2_000_000) throw localCodexError('本地 Codex 返回结果不完整');
+          if (!isSupportedLocalCodexModel(result?.model) || typeof result.text !== 'string' || !result.text.trim() || result.text.length > 2_000_000) throw localCodexError('本地 Codex 返回结果不完整');
           try { JSON.parse(result.text); } catch { throw localCodexError('本地 Codex 未返回完整 JSON'); }
           const usage = Object.fromEntries(Object.entries(result.usage || {}).filter(([key, value]) => /^(input_tokens|output_tokens|total_tokens|cached_input_tokens)$/.test(key) && Number.isFinite(value) && value >= 0));
           this.save({ ...record, status: 'completed', finishedAt: this.now(), result: {
-            text: result.text, model: result.model, reportedModel: result.reportedModel === LOCAL_CODEX_MODEL ? result.reportedModel : null,
+            text: result.text, model: result.model, reportedModel: isSupportedLocalCodexModel(result.reportedModel) ? result.reportedModel : null,
             provider: 'local-codex', responseId: String(result.responseId || '').slice(0, 160), usage,
           } });
         } else {

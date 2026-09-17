@@ -1,5 +1,10 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-17 本地 Codex 双模型选择
+
+- 本地 Codex 现在提供两个可选项：`local-codex-gpt-6` → `gpt-6-astra`，`local-codex-gpt-5.6-sol` → `gpt-5.6-sol`；任务按提交时模型执行，继续支持图片输入与 MAX，历史提示词与审核结果不改写。
+- 本机 `model/list` 已确认 ChatGPT 登录账户同时提供这两个模型、图片输入和 `max`；需要同时更新 Mac LaunchAgent 运行副本与线上 Worker 后，网页才会分别显示为可用。
+
 ## 2026-09-15 本地 Codex GPT-6 接入
 
 - 用户要求除 API 外使用本机 Codex，并选择「线上漫镜也能调用这台 Mac 的 Codex」。服务器 `43.173.105.8` 已用现有 `.env.deploy.local` 连接成功，确认现网仍为 `20260911T072655Z-be7bbe2`；只有一个管理员账户。

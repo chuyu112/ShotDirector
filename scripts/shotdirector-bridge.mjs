@@ -152,7 +152,7 @@ function unavailableRuntimeProvider(config, error) {
 function runtimeProvider(config) {
   try {
     if (config.transport === 'local-codex-relay') {
-      return new LocalCodexProvider({ baseUrl: config.baseUrl, token: config.apiKey, userId: tenantId, projectId: tenantProjectId, allowedRoots: [dataRoot] });
+      return new LocalCodexProvider({ baseUrl: config.baseUrl, token: config.apiKey, model: config.model, userId: tenantId, projectId: tenantProjectId, allowedRoots: [dataRoot] });
     }
     if (config.transport === "chat-completions") {
       return compatibleProviderOrUnavailable({

@@ -26,7 +26,7 @@ export class LocalCodexRunner {
     this.execute = execute;
     this.probe = probe;
     this.fetch = fetchImpl;
-    this.connection = { ready: false, model: LOCAL_CODEX_MODEL };
+    this.connection = { ready: false, model: LOCAL_CODEX_MODEL, models: [] };
     this.lastProbe = 0;
     this.active = null;
     this.abortController = new AbortController();
@@ -75,11 +75,11 @@ export class LocalCodexRunner {
   async tick() {
     if (Date.now() - this.lastProbe > 60_000) {
       try { this.connection = await this.probe(); }
-      catch { this.connection = { ready: false, model: LOCAL_CODEX_MODEL }; }
+      catch { this.connection = { ready: false, model: LOCAL_CODEX_MODEL, models: [] }; }
       this.lastProbe = Date.now();
     }
     await this.flushResults();
-    const response = await this.request('/poll', { ready: this.connection.ready, model: LOCAL_CODEX_MODEL, claim: !this.active && this.connection.ready });
+    const response = await this.request('/poll', { ready: this.connection.ready, model: this.connection.model || LOCAL_CODEX_MODEL, models: this.connection.models || [], claim: !this.active && this.connection.ready });
     if (response.task) {
       const task = normalizeLocalCodexTask(response.task);
       if (task.userId !== this.ownerId) throw new Error('拒绝执行其他账户的本地 Codex 任务');
@@ -96,7 +96,7 @@ export class LocalCodexRunner {
           this.persist({ id: task.id, status: 'completed', result, finishedAt: new Date().toISOString() });
         } catch {
           this.persist({ id: task.id, status: 'failed', finishedAt: new Date().toISOString() });
-          this.connection = { ready: false, model: LOCAL_CODEX_MODEL };
+          this.connection = { ready: false, model: LOCAL_CODEX_MODEL, models: [] };
           this.lastProbe = 0;
         }
       })().finally(() => { this.active = null; });

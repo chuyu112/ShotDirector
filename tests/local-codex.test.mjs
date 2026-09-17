@@ -10,7 +10,7 @@ import { LocalCodexRelay } from '../server/local-codex-relay.mjs';
 import { LocalCodexProvider } from '../server/local-codex-provider.mjs';
 import { LocalCodexRunner } from '../runner/local-codex-runner.mjs';
 import { executeLocalCodexTask } from '../runner/local-codex-executor.mjs';
-import { localCodexWorkerEnvironment, localCodexWorkerToken, normalizeLocalCodexTask } from '../server/local-codex-contract.mjs';
+import { LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL, localCodexWorkerEnvironment, localCodexWorkerToken, normalizeLocalCodexTask } from '../server/local-codex-contract.mjs';
 import { textModelConfigs } from '../server/text-model-catalog.mjs';
 import { ManjingAuthStore } from '../server/auth-store.mjs';
 import { createManjingGateway } from '../server/manjing-gateway.mjs';
@@ -20,7 +20,7 @@ const token = 'synthetic-device-token-not-a-secret-1234567890';
 const ownerId = 'owner-fixture';
 const projectId = 'project-fixture';
 const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-const task = (overrides = {}) => ({ id: randomUUID(), userId: ownerId, projectId, model: 'gpt-6-astra', prompt: 'Synthetic request', schema, schemaName: 'prompt-review', reasoningEffort: 'max', images: [], timeoutMs: 10_000, ...overrides });
+const task = (overrides = {}) => ({ id: randomUUID(), userId: ownerId, projectId, model: LOCAL_CODEX_MODEL, prompt: 'Synthetic request', schema, schemaName: 'prompt-review', reasoningEffort: 'max', images: [], timeoutMs: 10_000, ...overrides });
 
 async function fixture(t, options = {}) {
   const root = mkdtempSync(join(tmpdir(), 'manjing-local-codex-test-'));
@@ -44,14 +44,16 @@ test('local Codex credentials and model catalog are scoped to the owning account
   assert.notEqual(scoped.MANJING_LOCAL_CODEX_WORKER_TOKEN, token);
   assert.notEqual(scoped.MANJING_LOCAL_CODEX_WORKER_TOKEN, localCodexWorkerEnvironment(env, ownerId, 'other-project').MANJING_LOCAL_CODEX_WORKER_TOKEN);
   assert.equal(textModelConfigs({}).some(model => model.localCodex), false);
-  const model = textModelConfigs(scoped).find(model => model.localCodex);
-  assert.equal(model.model, 'gpt-6-astra');
-  assert.equal(model.configured, true);
-  assert.equal(model.writingEnabled && model.reviewEnabled && model.supportsImages, true);
+  const models = textModelConfigs(scoped).filter(model => model.localCodex);
+  assert.deepEqual(new Set(models.map(model => model.model)), new Set([LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL]));
+  assert.equal(models.every(model => model.configured), true);
+  assert.equal(models.every(model => model.writingEnabled && model.reviewEnabled && model.supportsImages), true);
 });
 
-test('local Codex accepts only GPT-6, structured tasks and MAX for complete prompts and reviews', () => {
-  for (const overrides of [{ model: 'gpt-5.6-sol' }, { schema: null }, { prompt: '' }, { reasoningEffort: 'low' }, { userId: '../outside' }, { id: '../outside' }, { id: 'not-a-uuid' }]) assert.throws(() => normalizeLocalCodexTask(task(overrides)));
+test('local Codex accepts both GPT-6 Astra and GPT-5.6 Sol, with structured tasks and MAX for complete prompts and reviews', () => {
+  assert.equal(normalizeLocalCodexTask(task({ model: LOCAL_CODEX_MODEL })).model, LOCAL_CODEX_MODEL);
+  assert.equal(normalizeLocalCodexTask(task({ model: LOCAL_CODEX_SOL_MODEL })).model, LOCAL_CODEX_SOL_MODEL);
+  for (const overrides of [{ model: 'unsupported-local-model' }, { schema: null }, { prompt: '' }, { reasoningEffort: 'low' }, { userId: '../outside' }, { id: '../outside' }, { id: 'not-a-uuid' }]) assert.throws(() => normalizeLocalCodexTask(task(overrides)));
   const normalized = normalizeLocalCodexTask(task({ command: 'must-not-execute', cwd: '/private', executable: 'sh' }));
   assert.equal(normalized.command, undefined);
   assert.equal(normalized.cwd, undefined);
@@ -65,7 +67,7 @@ test('relay authenticates runner separately, rejects other projects and expires 
   const before = relay.jobs.size;
   await assert.rejects(provider.generate(task()), /离线/);
   assert.equal(relay.jobs.size, before);
-  await runnerRequest('/poll', { ready: true, model: 'gpt-6-astra', claim: false });
+  await runnerRequest('/poll', { ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL], claim: false });
   assert.equal((await provider.refreshStatus()).ready, true);
   const denied = await fetch(`${base}/api/local-codex/runner/poll`, { method: 'POST', headers: { Authorization: `Bearer ${provider.token}` }, body: '{}' });
   assert.equal(denied.status, 401);
@@ -79,8 +81,8 @@ test('provider to durable relay to local runner returns only the completed resul
   const { root, base, provider, relay } = await fixture(t);
   let executions = 0;
   const runner = new LocalCodexRunner({ server: base, token, ownerId, root: join(root, 'runner'),
-    probe: async () => ({ ready: true, model: 'gpt-6-astra' }),
-    execute: async received => { executions++; assert.equal(received.reasoningEffort, 'max'); return { text: '{"ok":true}', model: 'gpt-6-astra', responseId: 'synthetic-run', usage: { total_tokens: 3, hidden_reasoning: 'must-not-propagate' } }; },
+    probe: async () => ({ ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL] }),
+    execute: async received => { executions++; assert.equal(received.reasoningEffort, 'max'); return { text: '{"ok":true}', model: received.model, responseId: 'synthetic-run', usage: { total_tokens: 3, hidden_reasoning: 'must-not-propagate' } }; },
   });
   await runner.tick();
   const response = provider.generate(task());
@@ -103,10 +105,10 @@ test('provider to durable relay to local runner returns only the completed resul
 
 test('runner restart fails an interrupted execution without making another model call', async t => {
   const { root, provider, base, relay, runnerRequest } = await fixture(t);
-  await runnerRequest('/poll', { ready: true, model: 'gpt-6-astra', claim: false });
+  await runnerRequest('/poll', { ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL], claim: false });
   const input = task();
   await provider.request('/jobs', { payload: input });
-  const claimed = await (await runnerRequest('/poll', { ready: true, model: 'gpt-6-astra', claim: true })).json();
+  const claimed = await (await runnerRequest('/poll', { ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL], claim: true })).json();
   assert.equal(claimed.task.id, input.id);
   const runnerRoot = join(root, 'restart-runner');
   const first = new LocalCodexRunner({ server: base, token, ownerId, root: runnerRoot });
@@ -120,15 +122,15 @@ test('runner restart fails an interrupted execution without making another model
 
 test('local image forwarding rejects paths outside the current project', async t => {
   const { provider, runnerRequest } = await fixture(t);
-  await runnerRequest('/poll', { ready: true, model: 'gpt-6-astra' });
+  await runnerRequest('/poll', { ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL] });
   await assert.rejects(provider.generate({ ...task(), imagePaths: [fileURLToPath(new URL('../package.json', import.meta.url))] }), /不属于当前项目/);
 });
 
 test('a retained local result whose server task expired does not block future heartbeats', async t => {
   const { root, base, relay } = await fixture(t);
-  const runner = new LocalCodexRunner({ server: base, token, ownerId, root: join(root, 'runner'), probe: async () => ({ ready: true }) });
+  const runner = new LocalCodexRunner({ server: base, token, ownerId, root: join(root, 'runner'), probe: async () => ({ ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL] }) });
   const id = randomUUID();
-  runner.persist({ id, status: 'completed', result: { text: '{"ok":true}', model: 'gpt-6-astra' } });
+  runner.persist({ id, status: 'completed', result: { text: '{"ok":true}', model: LOCAL_CODEX_MODEL } });
   await runner.tick();
   assert.equal(runner.records.get(id).delivery, 'server-task-expired');
   assert.equal(relay.status().ready, true);
@@ -151,12 +153,13 @@ test('authenticated gateway and real tenant Worker route Codex through the Harne
   const otherCookie = `manjing_session=${store.createSession({ userId: other.id }).token}`;
   let calls = 0;
   const runner = new LocalCodexRunner({ server: base, token, ownerId: user.id, root: join(root, 'runner'),
-    probe: async () => ({ ready: true }), execute: async task => {
+    probe: async () => ({ ready: true, model: LOCAL_CODEX_MODEL, models: [LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_MODEL] }), execute: async task => {
       calls++;
       assert.equal(task.userId, user.id);
       assert.equal(task.projectId, defaultProject.id);
       assert.match(task.instructions, /诊断/);
-      return { text: '{"ok":true}', model: 'gpt-6-astra', reportedModel: null, responseId: randomUUID(), usage: { total_tokens: 3 } };
+      assert.equal(task.model, LOCAL_CODEX_SOL_MODEL);
+      return { text: '{"ok":true}', model: LOCAL_CODEX_SOL_MODEL, reportedModel: null, responseId: randomUUID(), usage: { total_tokens: 3 } };
     } });
   t.after(async () => { await runner.stop(); await gateway.close(); gateway.server.closeAllConnections(); await new Promise(resolve => gateway.server.close(resolve)); rmSync(root, { recursive: true, force: true }); });
   await runner.tick();
@@ -164,11 +167,11 @@ test('authenticated gateway and real tenant Worker route Codex through the Harne
   t.diagnostic('runner ready; starting real Worker health');
   const health = await (await fetch(`${base}/api/health`, { headers })).json();
   t.diagnostic('owner health returned');
-  assert.equal(health.writingModels.find(m => m.id === 'local-codex-gpt-6').available, true);
-  assert.equal(health.reviewers.find(m => m.id === 'local-codex-gpt-6').available, true);
+  assert.equal(health.writingModels.find(m => m.id === 'local-codex-gpt-5.6-sol').available, true);
+  assert.equal(health.reviewers.find(m => m.id === 'local-codex-gpt-5.6-sol').available, true);
   assert.doesNotMatch(JSON.stringify(health), /synthetic-device-token|WORKER_TOKEN|runtimeProvider/);
-  assert.equal((await fetch(`${base}/api/writing-model`, { method: 'POST', headers, body: JSON.stringify({ id: 'local-codex-gpt-6' }) })).status, 200);
-  const started = await fetch(`${base}/api/model-tests`, { method: 'POST', headers, body: JSON.stringify({ ids: ['local-codex-gpt-6'], requestId: randomUUID() }) });
+  assert.equal((await fetch(`${base}/api/writing-model`, { method: 'POST', headers, body: JSON.stringify({ id: 'local-codex-gpt-5.6-sol' }) })).status, 200);
+  const started = await fetch(`${base}/api/model-tests`, { method: 'POST', headers, body: JSON.stringify({ ids: ['local-codex-gpt-5.6-sol'], requestId: randomUUID() }) });
   assert.equal(started.status, 202);
   t.diagnostic('model diagnostic submitted');
   let snapshot;
@@ -179,19 +182,19 @@ test('authenticated gateway and real tenant Worker route Codex through the Harne
     if (snapshot.round.status === 'completed') break;
     await new Promise(resolve => setTimeout(resolve, 30));
   } while (Date.now() < deadline);
-  assert.equal(snapshot.models.find(m => m.id === 'local-codex-gpt-6').result.status, 'succeeded');
+  assert.equal(snapshot.models.find(m => m.id === 'local-codex-gpt-5.6-sol').result.status, 'succeeded');
   assert.equal(calls, 1);
   t.diagnostic('model diagnostic completed');
   const secondHealth = await (await fetch(`${base}/api/health`, { headers: { Cookie: otherCookie } })).json();
   t.diagnostic('other account health returned');
-  assert.equal(secondHealth.writingModels.some(m => m.id === 'local-codex-gpt-6'), false);
+  assert.equal(secondHealth.writingModels.some(m => m.id === 'local-codex-gpt-5.6-sol'), false);
   now += 21_000;
   const offline = await (await fetch(`${base}/api/health`, { headers })).json();
-  const selected = offline.writingModels.find(m => m.id === 'local-codex-gpt-6');
+  const selected = offline.writingModels.find(m => m.id === 'local-codex-gpt-5.6-sol');
   assert.equal(selected.selected, true);
   assert.equal(selected.available, false);
   assert.match(selected.reason, /离线/);
-  assert.equal(offline.reviewers.find(m => m.id === 'local-codex-gpt-6').available, false);
+  assert.equal(offline.reviewers.find(m => m.id === 'local-codex-gpt-5.6-sol').available, false);
 });
 
 test('executor starts a fresh isolated model-only thread and does not emit private reasoning', async t => {
@@ -205,7 +208,7 @@ test('executor starts a fresh isolated model-only thread and does not emit priva
       requests.push({ method, params });
       if (method === 'account/read') return { account: { type: 'chatgpt' } };
       if (method === 'config/read') return { config: { mcp_servers: { private: { enabled: true } } } };
-      if (method === 'thread/start') return { thread: { id: randomUUID() }, model: 'gpt-6-astra' };
+      if (method === 'thread/start') return { thread: { id: randomUUID() }, model: params.model };
       if (method === 'turn/start') {
         imagePath = params.input.find(item => item.type === 'localImage').path;
         assert.equal(readFileSync(imagePath).toString(), 'synthetic-image');

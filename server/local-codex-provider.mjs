@@ -5,10 +5,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { LOCAL_CODEX_MODEL, LOCAL_CODEX_PROVIDER, normalizeLocalCodexTask, localCodexError } from './local-codex-contract.mjs';
 
 export class LocalCodexProvider {
-  constructor({ baseUrl, token, userId, projectId, allowedRoots = [], fetchImpl = globalThis.fetch, pollMs = 1_000 }) {
+  constructor({ baseUrl, token, userId, projectId, model = LOCAL_CODEX_MODEL, allowedRoots = [], fetchImpl = globalThis.fetch, pollMs = 1_000 }) {
     this.id = LOCAL_CODEX_PROVIDER;
-    this.label = '本地 Codex GPT-6';
-    this.model = LOCAL_CODEX_MODEL;
+    this.model = String(model || LOCAL_CODEX_MODEL);
+    this.label = this.model === 'gpt-5.6-sol' ? '本地 Codex GPT-5.6 Sol' : '本地 Codex GPT-6';
     this.supportsImages = true;
     this.baseUrl = String(baseUrl || '').replace(/\/$/, '');
     this.token = String(token || '');
@@ -42,14 +42,22 @@ export class LocalCodexProvider {
     if (!this.configured) return this.connection;
     if (this.statusPromise) return this.statusPromise;
     this.statusPromise = this.request('/status', { timeoutMs: 750 })
-      .then(value => { this.connection = { ready: value.ready === true, reason: value.reason, checkedAt: Date.now() }; })
+      .then(value => {
+        const models = Array.isArray(value.models) ? value.models : [value.model].filter(Boolean);
+        this.connection = {
+          ready: value.ready === true && models.includes(this.model),
+          models,
+          reason: value.reason || (value.ready === true && !models.includes(this.model) ? `${this.label} 未在本机 Codex 中就绪` : undefined),
+          checkedAt: Date.now(),
+        };
+      })
       .catch(() => { this.connection = { ready: false, reason: '这台 Mac 的本地 Codex 未连接', checkedAt: Date.now() }; })
       .finally(() => { this.statusPromise = null; });
     await this.statusPromise;
     return this.connection;
   }
 
-  async generate({ prompt, instructions, model = LOCAL_CODEX_MODEL, schema, schemaName, imagePaths = [], reasoningEffort = 'max', timeoutMs = 900_000, signal, onProgress = () => {} }) {
+  async generate({ prompt, instructions, model = this.model, schema, schemaName, imagePaths = [], reasoningEffort = 'max', timeoutMs = 900_000, signal, onProgress = () => {} }) {
     if (!this.configured) throw localCodexError(this.configurationError, 503);
     await this.refreshStatus();
     if (!this.connection.ready) throw localCodexError(this.connection.reason || '本地 Codex 未就绪', 503, 'LOCAL_CODEX_OFFLINE');

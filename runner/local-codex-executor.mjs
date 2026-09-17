@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { LOCAL_CODEX_MODEL, localCodexError, normalizeLocalCodexTask } from '../server/local-codex-contract.mjs';
+import { LOCAL_CODEX_MODEL, LOCAL_CODEX_MODELS, localCodexError, normalizeLocalCodexTask } from '../server/local-codex-contract.mjs';
 
 const featureOverrides = {
   shell_tool: false, unified_exec: false, apps: false, plugins: false, remote_plugin: false,
@@ -99,14 +99,17 @@ export async function probeLocalCodex({ createClient = options => new CodexStdio
   try {
     await client.initialize();
     const account = await client.request('account/read', { refreshToken: false });
-    if (account.account?.type !== 'chatgpt') return { ready: false, model: LOCAL_CODEX_MODEL, reason: '请先在本机 Codex 登录 ChatGPT' };
+    if (account.account?.type !== 'chatgpt') return { ready: false, model: LOCAL_CODEX_MODEL, models: [], reason: '请先在本机 Codex 登录 ChatGPT' };
     const models = await client.request('model/list', { limit: 100, includeHidden: true });
-    const model = models.data?.find(item => item.model === LOCAL_CODEX_MODEL);
-    if (!model?.inputModalities?.includes('image') || !model.supportedReasoningEfforts?.some(item => item.reasoningEffort === 'max')) return { ready: false, model: LOCAL_CODEX_MODEL, reason: '本机 Codex 未提供支持图片和 MAX 的 GPT-6 Astra' };
+    const availableModels = LOCAL_CODEX_MODELS.filter(({ model: modelId }) => {
+      const model = models.data?.find(item => item.model === modelId);
+      return model?.inputModalities?.includes('image') && model.supportedReasoningEfforts?.some(item => item.reasoningEffort === 'max');
+    }).map(({ model: modelId }) => modelId);
+    if (!availableModels.length) return { ready: false, model: LOCAL_CODEX_MODEL, models: [], reason: '本机 Codex 未提供支持图片和 MAX 的 GPT-6 Astra 或 GPT-5.6 Sol' };
     const limits = await client.request('account/rateLimits/read', {}).catch(() => null);
     const windows = Object.values(limits?.rateLimitsByLimitId || { core: limits?.rateLimits }).flatMap(value => [value?.primary, value?.secondary]).filter(Boolean);
-    if (windows.some(window => window.usedPercent >= 100)) return { ready: false, model: LOCAL_CODEX_MODEL, reason: '本机 Codex 当前额度已用尽' };
-    return { ready: true, model: LOCAL_CODEX_MODEL, supportsImages: true, reasoningEfforts: ['low', 'high', 'max'] };
+    if (windows.some(window => window.usedPercent >= 100)) return { ready: false, model: LOCAL_CODEX_MODEL, models: availableModels, reason: '本机 Codex 当前额度已用尽' };
+    return { ready: true, model: availableModels[0], models: availableModels, supportsImages: true, reasoningEfforts: ['low', 'high', 'max'] };
   } finally { client.close(); }
 }
 
@@ -133,13 +136,13 @@ export async function executeLocalCodexTask(input, { scratchRoot = join(tmpdir()
     signal?.throwIfAborted();
     const mcpServers = Object.fromEntries(Object.keys(effectiveConfig.config?.mcp_servers || {}).map(name => [name, { enabled: false }]));
     const started = await client.request('thread/start', {
-      model: LOCAL_CODEX_MODEL, ephemeral: true, cwd, permissions: 'manjing-model-only', approvalPolicy: 'never',
+      model: task.model, ephemeral: true, cwd, permissions: 'manjing-model-only', approvalPolicy: 'never',
       baseInstructions: modelOnlyInstructions, developerInstructions: task.instructions,
       config: { mcp_servers: mcpServers, features: featureOverrides, web_search: 'disabled', project_doc_max_bytes: 0,
         permissions: { 'manjing-model-only': { filesystem: { ':minimal': 'read', [cwd]: 'read' }, network: { enabled: false } } } },
     });
     const threadId = started.thread?.id;
-    if (!threadId || started.model !== LOCAL_CODEX_MODEL) throw localCodexError('本地 Codex 未使用指定 GPT-6 模型', 502);
+    if (!threadId || started.model !== task.model) throw localCodexError('本地 Codex 未使用请求的模型', 502);
     let finalText = '';
     let usage = {};
     let turnId;
@@ -175,7 +178,7 @@ export async function executeLocalCodexTask(input, { scratchRoot = join(tmpdir()
     terminal.catch(() => {});
     signal?.throwIfAborted();
     await client.request('turn/start', {
-      threadId, model: LOCAL_CODEX_MODEL, effort: task.reasoningEffort, summary: 'none',
+      threadId, model: task.model, effort: task.reasoningEffort, summary: 'none',
       approvalPolicy: 'never', outputSchema: task.schema,
       input: [{ type: 'text', text: task.prompt }, ...images],
     });

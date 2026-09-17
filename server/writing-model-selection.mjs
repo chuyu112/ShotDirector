@@ -1,8 +1,8 @@
-const LEGACY_WRITING_MODEL_IDS = Object.freeze({
-  "codex-gpt-5.6-sol": "jk-gpt-5.6-sol",
-  "gpt-5.6-sol": "jk-gpt-5.6-sol",
-  "codex-gpt-5.6-luna": "jk-gpt-5.6-luna",
-  "gpt-5.6-luna": "jk-gpt-5.6-luna",
+const LEGACY_WRITING_MODEL_MIGRATIONS = Object.freeze({
+  "codex-gpt-5.6-sol": { id: "jk-gpt-5.6-sol", provider: "jiekou-responses" },
+  "gpt-5.6-sol": { id: "jk-gpt-5.6-sol", provider: "jiekou-responses" },
+  "codex-gpt-5.6-luna": { id: "jk-gpt-5.6-luna", provider: "jiekou-responses" },
+  "gpt-5.6-luna": { id: "jk-gpt-5.6-luna", provider: "jiekou-responses" },
 });
 
 export function migratedWritingModelSelection(saved, updatedAt = new Date().toISOString()) {
@@ -10,19 +10,19 @@ export function migratedWritingModelSelection(saved, updatedAt = new Date().toIS
     return { selection: saved, migrated: false };
   }
   const currentId = String(saved.id || "").trim();
-  const migratedId = LEGACY_WRITING_MODEL_IDS[currentId];
-  if (!migratedId) return { selection: saved, migrated: false };
+  const migration = LEGACY_WRITING_MODEL_MIGRATIONS[currentId];
+  if (!migration) return { selection: saved, migrated: false };
   return {
     migrated: true,
     selection: {
       ...saved,
-      id: migratedId,
-      provider: "jiekou-responses",
+      id: migration.id,
+      provider: migration.provider,
       updatedAt,
     },
   };
 }
 
 export function legacyWritingModelIds() {
-  return Object.keys(LEGACY_WRITING_MODEL_IDS);
+  return Object.keys(LEGACY_WRITING_MODEL_MIGRATIONS);
 }

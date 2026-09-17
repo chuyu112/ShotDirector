@@ -1,4 +1,4 @@
-import { LOCAL_CODEX_SELECTION, LOCAL_CODEX_MODEL, LOCAL_CODEX_PROVIDER } from './local-codex-contract.mjs';
+import { LOCAL_CODEX_SELECTION, LOCAL_CODEX_MODEL, LOCAL_CODEX_SOL_SELECTION, LOCAL_CODEX_SOL_MODEL, LOCAL_CODEX_PROVIDER } from './local-codex-contract.mjs';
 
 const DEFINITIONS = Object.freeze([
   {
@@ -6,6 +6,13 @@ const DEFINITIONS = Object.freeze([
     provider: LOCAL_CODEX_PROVIDER, transport: 'local-codex-relay', localCodex: true,
     supportsImages: true, writingEnabled: true, reviewEnabled: true,
     defaultModel: LOCAL_CODEX_MODEL,
+    baseVars: ['MANJING_LOCAL_CODEX_RELAY_URL'], keyVars: ['MANJING_LOCAL_CODEX_WORKER_TOKEN'], modelVars: [],
+  },
+  {
+    id: LOCAL_CODEX_SOL_SELECTION, label: '本地 Codex GPT-5.6 Sol', hint: '本机 Codex 登录额度 · 图片与文字',
+    provider: LOCAL_CODEX_PROVIDER, transport: 'local-codex-relay', localCodex: true,
+    supportsImages: true, writingEnabled: true, reviewEnabled: true,
+    defaultModel: LOCAL_CODEX_SOL_MODEL,
     baseVars: ['MANJING_LOCAL_CODEX_RELAY_URL'], keyVars: ['MANJING_LOCAL_CODEX_WORKER_TOKEN'], modelVars: [],
   },
   {
