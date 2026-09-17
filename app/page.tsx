@@ -583,6 +583,8 @@ const artworkDb = "shotdirector-artwork-v1";
 const configuredApiBase = process.env.NEXT_PUBLIC_MANJING_API_BASE?.trim();
 const bridgeBase = (configuredApiBase || "http://127.0.0.1:4317").replace(/\/+$/, "");
 const bridgeFetch = manjingSessionFetch;
+const writingModelSwitchTimeoutMs = 15_000;
+const writingModelSyncTimeoutMs = 5_000;
 // In server mode the browser authenticates with its HttpOnly session cookie and
 // the gateway injects the real per-tenant worker token. Keep a non-secret local
 // sentinel so the existing local-bridge guards stay usable without exposing the
@@ -2775,6 +2777,7 @@ function DirectorDesk() {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Manjing-Token": bridge.pairingToken as string },
         body: JSON.stringify({ id: model.id }),
+        signal: AbortSignal.timeout(writingModelSwitchTimeoutMs),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "写作模型切换失败");
@@ -2786,7 +2789,36 @@ function DirectorDesk() {
       writingModelMenuRef.current?.removeAttribute("open");
       setToast(`写作模型已切换为 ${model.label}`);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "写作模型切换失败");
+      const timedOut = error instanceof DOMException
+        ? error.name === "AbortError" || error.name === "TimeoutError"
+        : String((error as { name?: unknown } | null)?.name || "") === "TimeoutError";
+      if (timedOut) {
+        // A gateway timeout does not prove that the selection was rejected. Read
+        // the worker's durable state once before reporting an uncertain result.
+        try {
+          const syncResponse = await bridgeFetch(`${bridgeBase}/health`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(writingModelSyncTimeoutMs),
+          });
+          const sync = await syncResponse.json().catch(() => ({}));
+          if (syncResponse.ok && sync.modelProvider?.selectionId === model.id) {
+            setBridge((current) => ({
+              ...current,
+              modelProvider: sync.modelProvider || current.modelProvider,
+              writingModels: Array.isArray(sync.writingModels) ? sync.writingModels : current.writingModels,
+            }));
+            writingModelMenuRef.current?.removeAttribute("open");
+            setToast(`写作模型已切换为 ${model.label}`);
+            return;
+          }
+        } catch {
+          // Keep the explicit timeout message below; the next health poll can
+          // still reconcile a selection that completed after this check.
+        }
+        setToast("写作模型切换超时；当前选择未确认，请稍后重试");
+      } else {
+        setToast(error instanceof Error ? error.message : "写作模型切换失败");
+      }
     } finally {
       setSwitchingWritingModelId("");
     }

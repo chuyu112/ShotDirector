@@ -410,6 +410,13 @@ function proxyToWorker(req, res, worker, targetUrl, bufferedBody = null) {
       upstreamResponse.once("end", resolveProxy);
       upstreamResponse.once("error", rejectProxy);
     });
+    if (["/writing-model", "/reasoning-effort"].includes(targetUrl.pathname)) {
+      upstream.setTimeout(15_000, () => {
+        const error = new Error("租户 Worker 响应超时");
+        error.statusCode = 504;
+        upstream.destroy(error);
+      });
+    }
     upstream.once("error", rejectProxy);
     req.once("aborted", () => upstream.destroy());
     if (bufferedBody !== null) upstream.end(bufferedBody);
