@@ -208,10 +208,13 @@ html { scrollbar-gutter: stable; }
 .app-shell .panel-assembly-board { padding: 16px; gap: 16px; }
 .app-shell .panel-shot-group { flex-basis: 296px; background: var(--panel); }
 .app-shell .panel-shot-group.is-confirmed { background: #f1f8f4; }
-.app-shell .panel-shot-group-title { grid-template-columns: minmax(0, 1fr); }
+.app-shell .panel-shot-group-title {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(96px, auto) auto;
+}
 .app-shell .panel-shot-group-title .panel-group-select { justify-content: flex-end; padding: 6px 12px; border-left: 0; border-top: 1px solid var(--line); color: var(--blue); font-size: 11px; }
 .app-shell .panel-shot-group-title b { white-space: nowrap; font-size: 13px; }
-.app-shell .panel-shot-main { padding: 10px 12px; flex-wrap: wrap; }
+.app-shell .panel-shot-main { min-height: 96px; box-sizing: border-box; padding: 10px 12px; flex-wrap: wrap; align-content: center; }
 .app-shell .panel-shot-group-title span, .app-shell .panel-shot-timing-detail { font-size: 11px; }
 .app-shell .panel-shot-duration-input { background: var(--surface); border-color: var(--line-strong); color: var(--ink); border-radius: 4px; }
 .app-shell .panel-shot-duration-input input { font-size: 12px; width: 30px; }
