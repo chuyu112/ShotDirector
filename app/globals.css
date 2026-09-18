@@ -1120,8 +1120,7 @@ input:focus-visible {
 .panel-shot-name { font-size: 11px; }
 .panel-shot-group-title > .panel-group-select { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 8px; padding: 9px 10px; border: 0; background: transparent; font: inherit; cursor: pointer; }
 .panel-shot-group-title b { font-size: 11px; }
-.panel-shot-timing-detail { display: grid; gap: 4px; margin: 0; padding: 8px 10px; background: #edf3f0; color: #315e50; font-size: 10px; line-height: 1.5; }
-.panel-shot-timing-detail.over, .panel-shot-timing-detail.over-model { background: #fff0e8; color: #a53b16; }
+
 .panel-shot-approved { display: inline-flex; margin-left: 6px; padding: 3px 6px; border-radius: 999px; background: #167257; color: white; font-size: 8px; font-style: normal; font-weight: 950; letter-spacing: .02em; }
 .panel-shot-group-title span { color: var(--muted); font-size: 9px; font-weight: 800; }
 .panel-shot-duration-line { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; white-space: nowrap; }

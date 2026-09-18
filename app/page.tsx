@@ -749,6 +749,15 @@ function timingEvidenceLabel(estimate: ShotTimingEstimate) {
   return `${visual} · ${speech}`;
 }
 
+function timingStatusShortLabel(estimate: ShotTimingEstimate) {
+  if (estimate.status === "over-model") return " · 超上限";
+  if (estimate.deltaSeconds < 0) return ` · 超时 ${Math.abs(estimate.deltaSeconds)}s`;
+  if (estimate.localWindowOverrunSeconds > 0.15) return " · 单句抢词";
+  if (estimate.deltaSeconds === 0) return " · 刚好";
+  if (estimate.status === "tight") return " · 偏挤";
+  return "";
+}
+
 const sections: Array<{ id: SectionId; number: string; title: string; hint: string }> = [
   { id: "characters", number: "01", title: "人物", hint: "身份、外形、谁能露脸、谁绝不能露脸" },
   { id: "scene", number: "02", title: "物品和场景", hint: "关键车辆、道具、地点、时代、人物站位、朝向和构图" },
@@ -7234,11 +7243,6 @@ function DirectorDesk() {
           <div>
             <span>CURRENT SHOT</span>
             <b>SHOT {shot.id}</b>
-            <p>{currentChatActivity ? currentChatActivity.label : promptReviewInProgress ? currentPromptReviewLabel : review.completePromptStatus === "ready"
-              ? promptReviewIsCurrent ? "完整提示词已审查，等待你明确批准" : "完整提示词讨论稿已生成，等待独立 Reviewer"
-              : review.completePromptStatus === "generating"
-                ? `${currentPromptGenerationLabel}，完成后会自动显示`
-                : "这一镜尚未生成完整提示词讨论稿"}</p>
           </div>
           <button
             type="button"
@@ -7259,14 +7263,14 @@ function DirectorDesk() {
         <div className="shot-structure-copy">
           <span>STEP 00 · SHOT STRUCTURE</span>
           <h2>{structureConfirmed ? "镜头结构已确认" : "先按画格图片检查默认分组"}</h2>
-          <p>{structureConfirmed
-            ? `当前 ${state.reviews.length} 个 Shot 已锁定；资产、分镜图和视频提示词已经解锁。`
-            : `已把 ${structurePanelEntries.length} 张有效画格按阅读顺序分进 ${state.reviews.length} 个建议 Shot。先看每张图归在哪一组；只有明显错误时才需要调整。`}</p>
         </div>
         {!structureConfirmed && structurePanelEntries.length ? (
           <section className="panel-assembly-board" aria-label="漫画画格编组台">
-            <header className="panel-assembly-heading">
-              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3><p>每张卡片就是一格漫画；黄色边框表示已选。默认分组可直接确认，也可以选择相邻画格重新组合、拆成单格或排除。</p><p>原作阅读方向：{state.sourceMangaReadingDirection === "left-to-right" ? "每行从左到右，再向下" : "日漫 · 每行从右到左，再向下"}。Shot 卡片始终按阅读角标从左到右排列：左 1、右 2，再换行。画格 ID 不代表先后；旧顺序可用「按原页校正阅读顺序」修正。</p></div>
+            <header
+              className="panel-assembly-heading"
+              title={`每张卡片就是一格漫画；黄色边框表示已选。阅读方向：${state.sourceMangaReadingDirection === "left-to-right" ? "每行从左到右，再向下" : "日漫 · 每行从右到左，再向下"}。Shot 卡片始终按阅读角标从左到右排列：左 1、右 2，再换行。画格 ID 不代表先后；旧顺序可用「按原页校正阅读顺序」修正。`}
+            >
+              <div><span>PANEL ASSEMBLY</span><h3>画格编组台</h3></div>
               <strong>{structurePanelEntries.length} 张图 · {state.reviews.length} 个 Shot</strong>
             </header>
             <div
@@ -7329,7 +7333,7 @@ function DirectorDesk() {
                     <div className="panel-shot-group-title">
                       <div
                         className="panel-shot-main"
-                        title={timingEstimateLabel(itemTiming, item.shot.duration)}
+                        title={`${timingEvidenceLabel(itemTiming)}｜${timingEstimateLabel(itemTiming, item.shot.duration)}`}
                         onClick={() => selectShot(reviewIndex)}
                       >
                         <b className="panel-shot-name">SHOT {item.shot.id}{item.approved ? <i className="panel-shot-approved">✓ 已批准</i> : null}</b>
@@ -7353,15 +7357,11 @@ function DirectorDesk() {
                             <i>s</i>
                           </label>
                           {item.completePromptConfirmedAt ? " · 讨论稿已生成" : ""}
-                          <em className={`panel-shot-timing ${itemTiming.status}`}>估 {itemTiming.requiredSeconds}s</em>
+                          <em className={`panel-shot-timing ${itemTiming.status}`}>估 {itemTiming.requiredSeconds}s{timingStatusShortLabel(itemTiming)}</em>
                         </span>
                       </div>
                       <button type="button" className="panel-group-select" onClick={() => toggleStructurePanelGroup(panelIds)}>{panelIds.every((panelId) => selectedStructurePanelIds.includes(panelId)) ? "取消整组" : "选择整组"}</button>
                     </div>
-                    <p className={`panel-shot-timing-detail ${itemTiming.status}`}>
-                      <span>{timingEvidenceLabel(itemTiming)}</span>
-                      <strong>{timingEstimateLabel(itemTiming, item.shot.duration)}</strong>
-                    </p>
                     <button
                       type="button"
                       className={`complete-shot-prompt-button ${item.completePromptStatus || "empty"} ${item.completePromptStatus === "generating" ? "prompt-generation-button" : ""}`}

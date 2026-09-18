@@ -218,7 +218,7 @@ html { scrollbar-gutter: stable; }
 .app-shell .panel-shot-group-title .panel-group-select { justify-content: flex-end; padding: 6px 12px; border-left: 0; border-top: 1px solid var(--line); color: var(--blue); font-size: 11px; }
 .app-shell .panel-shot-group-title b { white-space: nowrap; font-size: 13px; }
 .app-shell .panel-shot-main { min-height: 96px; box-sizing: border-box; padding: 10px 12px; flex-wrap: wrap; align-content: center; }
-.app-shell .panel-shot-group-title span, .app-shell .panel-shot-timing-detail { font-size: 11px; }
+.app-shell .panel-shot-group-title span { font-size: 11px; }
 .app-shell .panel-shot-duration-input { background: var(--surface); border-color: var(--line-strong); color: var(--ink); border-radius: 4px; }
 .app-shell .panel-shot-duration-input input { font-size: 12px; width: 30px; }
 .app-shell .panel-shot-duration-input:focus-within { border-color: var(--blue); box-shadow: var(--focus-ring); }
