@@ -1099,12 +1099,13 @@ input:focus-visible {
 .panel-shot-groups-top input[type="range"]:disabled { cursor: default; opacity: .45; }
 .panel-shot-groups { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 10px; scrollbar-width: thin; }
 .panel-shot-group { flex: 0 0 260px; overflow: hidden; border: 1px solid rgba(21,21,21,.16); border-radius: 12px; background: #f7f4ec; }
-.panel-shot-group.is-current { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(187, 73, 30, .22); }
+.panel-shot-group.is-current { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(187, 73, 30, .32), 0 4px 16px rgba(187, 73, 30, .18); }
 .panel-shot-group.is-confirmed { border-color: #2f7d62; background: #edf7f2; }
 .panel-shot-group.is-approved { border-color: #167257; box-shadow: inset 0 3px 0 #167257; }
 /* 选中态必须盖过已批准／已确认态，否则当前镜头卡片与普通已完成卡片无法区分 */
 .panel-shot-group.is-current.is-approved,
-.panel-shot-group.is-current.is-confirmed { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(187, 73, 30, .22); }
+.panel-shot-group.is-current.is-confirmed { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(187, 73, 30, .32), 0 4px 16px rgba(187, 73, 30, .18); }
+.panel-shot-group.is-current .panel-shot-group-title { background: #e8efff; }
 .panel-shot-group.is-drop-target { border-color: #175cff; box-shadow: 0 0 0 3px rgba(23,92,255,.18); }
 .panel-new-shot-drop { flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 180px; padding: 20px 4px; border: 2px dashed #a7b9e5; border-radius: 10px; background: #f0f4ff; color: #476294; text-align: center; }
 .panel-new-shot-drop > b { font-size: 24px; line-height: 1; }
@@ -1114,11 +1115,9 @@ input:focus-visible {
 .panel-new-shot-drop.is-end > span { font-size: 13px; }
 .panel-new-shot-drop.is-drop-target { border-color: #175cff; background: #dce7ff; color: #0b46ce; box-shadow: inset 0 0 0 2px #175cff; }
 .panel-shot-group-title { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; border-bottom: 1px solid rgba(21,21,21,.1); background: rgba(255,255,255,.8); }
-.panel-shot-main { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; }
-.panel-shot-main > button { min-width: 0; border: 0; padding: 2px 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
-/* 当前 Shot 的 SHOT 编号按钮变成实心蓝 pill：点选目标本身必须有明确的选中反馈 */
-.panel-shot-group.is-current .panel-shot-main > button { padding: 3px 10px; border-radius: 999px; background: var(--blue); color: #fff; }
-.panel-shot-group.is-current .panel-shot-main > button .panel-shot-approved { margin-left: 4px; background: rgba(255, 255, 255, .24); }
+.panel-shot-main { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; cursor: pointer; }
+.panel-shot-main:hover { background: rgba(23, 92, 255, .07); }
+.panel-shot-name { font-size: 11px; }
 .panel-shot-group-title > .panel-group-select { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 8px; padding: 9px 10px; border: 0; background: transparent; font: inherit; cursor: pointer; }
 .panel-shot-group-title b { font-size: 11px; }
 .panel-shot-timing-detail { display: grid; gap: 4px; margin: 0; padding: 8px 10px; background: #edf3f0; color: #315e50; font-size: 10px; line-height: 1.5; }

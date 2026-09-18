@@ -7327,10 +7327,12 @@ function DirectorDesk() {
                     onDrop={(event) => moveStructurePanelsByDrag(event, { reviewIndex, position: "end" })}
                   >
                     <div className="panel-shot-group-title">
-                      <div className="panel-shot-main" title={timingEstimateLabel(itemTiming, item.shot.duration)}>
-                        <button type="button" onClick={() => selectShot(reviewIndex)}>
-                          <b>SHOT {item.shot.id}{item.approved ? <i className="panel-shot-approved">✓ 已批准</i> : null}</b>
-                        </button>
+                      <div
+                        className="panel-shot-main"
+                        title={timingEstimateLabel(itemTiming, item.shot.duration)}
+                        onClick={() => selectShot(reviewIndex)}
+                      >
+                        <b className="panel-shot-name">SHOT {item.shot.id}{item.approved ? <i className="panel-shot-approved">✓ 已批准</i> : null}</b>
                         <span className="panel-shot-duration-line">
                           {panelIds.length} 张图 ·
                           <label className="panel-shot-duration-input" title={`直接修改 Shot ${item.shot.id} 的目标时长`}>
