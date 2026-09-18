@@ -218,12 +218,12 @@ html { scrollbar-gutter: stable; }
 .app-shell .panel-shot-group.is-confirmed { background: #f1f8f4; }
 .app-shell .panel-shot-group-title {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(96px, auto) auto;
+  grid-template-rows: auto auto;
 }
 .app-shell .panel-shot-group-title .panel-group-select { justify-content: flex-end; padding: 6px 12px; border-left: 0; border-top: 1px solid var(--line); color: var(--blue); font-size: 11px; }
 .app-shell .panel-shot-group-title b { white-space: nowrap; font-size: 13px; }
 /* 标题行固定两列网格：SHOT 编号永远在第一列、时长信息永远在第二列同一行，避免 flex 折行导致卡片间错位 */
-.app-shell .panel-shot-main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; box-sizing: border-box; padding: 10px 12px; }
+.app-shell .panel-shot-main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; box-sizing: border-box; padding: 8px 12px; }
 .app-shell .panel-shot-duration-line { justify-self: end; text-align: right; }
 .app-shell .panel-shot-group-title span { font-size: 11px; }
 .app-shell .panel-shot-duration-input { background: var(--surface); border-color: var(--line-strong); color: var(--ink); border-radius: 4px; }
