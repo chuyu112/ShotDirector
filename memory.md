@@ -1,5 +1,12 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-20 移除 DeepSeek V4 Pro（已部署）
+
+- 创作模型目录删除 `deepseek-v4-pro`（保留 `deepseek-v4-flash`），前端联合类型与下拉同步，兼容 provider 兜底默认改为 `deepseek-flash`（V4.1 官方名）。创作模型现为 9 个 API + 2 个本地 Codex。
+- `DEEPSEEK_PRO_MODEL` env 管道刻意保留，Worker 白名单与部署合并不变；重新上架只需恢复 catalog 条目 + 前端两行。
+- 提交 `9a7b258` 于 **2026-09-20 01:26（Asia/Shanghai）** 发布为 `20260919T172635Z-9a7b258`（分层构建，416 文件校验通过）；上一版 `20260919T153755Z-9e38212` 保留回滚，`20260919T123751Z-4be03e9` 已清理。冒烟全绿。
+- 教训：staging 的 `release-files.sha256` 必须保留 GNU 标准 `hash  ./path` 格式，误删 `./` 前缀会导致服务器 `sha256sum -c` 全部失败；staging 脚本不要放在会被自己 `rm -rf` 的目录里。详见 `docs/2026-09-19-移除DeepSeekV4Pro部署.md`。
+
 ## 2026-09-17 本地 Codex 双模型选择
 
 - 本地 Codex 现在提供两个可选项：`local-codex-gpt-6` → `gpt-6-astra`，`local-codex-gpt-5.6-sol` → `gpt-5.6-sol`；任务按提交时模型执行，继续支持图片输入与 MAX，历史提示词与审核结果不改写。
