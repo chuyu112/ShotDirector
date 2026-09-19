@@ -5,7 +5,7 @@
 - 严格审核模型现为 6 个：kimi-k3、seed-2.1-pro（新加入）、glm-5.3、jk-gpt-5.6-sol、jk-gemini-3.8-flash、jk-claude-opus-5（置灰）。容器内实测前 5 个全过（2.6–3.7s）。
 - JK Claude Opus 5 上游缺陷：jiekou 中继对 Opus 在中等长度 + 结构化/JSON 指令输入时确定性掐断流（`incomplete_stream`，首个 token 前断）；短提示词、长纯文本、Sonnet 同提示词均正常。已用 `MANJING_JIEKOU_CLAUDE_OPUS_ENABLED=0` 置灰（前缀透传 Worker），恢复改 1 即可。详见 `docs/2026-09-20-Seed加入审核与Opus置灰部署.md`。
 - 提交 `1d4d37c` 于 **2026-09-20 02:20（Asia/Shanghai）** 发布为 `20260919T181503Z-1d4d37c`（分层构建，417 文件校验通过）；上一版 `20260919T172635Z-9a7b258` 保留回滚。冒烟全绿。
-- 观察：冒烟首跑遇 Creator 瞬时空返回，pi harness 直接抛 `runModel 必须返回正文或工具调用`（重试即过，与本次改动无关）；后续可把空返回归为可重试错误。
+- 观察：冒烟首跑遇 Creator 瞬时空返回，pi harness 直接抛 `runModel 必须返回正文或工具调用`（重试即过，与本次改动无关）；**已在 `d7b4df1` 修复**：空正文且无工具调用时最多重试 2 次（共 3 次尝试），发布 `20260919T183257Z-d7b4df1`。
 
 ## 2026-09-20 移除 DeepSeek V4 Pro（已部署）
 
