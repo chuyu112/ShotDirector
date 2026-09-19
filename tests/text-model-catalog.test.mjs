@@ -47,7 +47,7 @@ test("model catalog resolves provider values only from the supplied Cuiyi env", 
 
 test("missing GLM and DeepSeek keys stay visibly unavailable", () => {
   const glm = textModelConfig("glm-5.3", cuiyiEnv);
-  const deepseek = textModelConfig("deepseek-v4-pro", cuiyiEnv);
+  const deepseek = textModelConfig("deepseek-v4-flash", cuiyiEnv);
   assert.equal(glm.configured, false);
   assert.match(glm.reason, /GLM_API_KEY/);
   assert.equal(deepseek.configured, false);
@@ -61,7 +61,6 @@ test("public and strict-review catalogs include every requested model", () => {
     "deepseek-v4-flash",
     "seed-2.1-pro",
     "glm-5.3",
-    "deepseek-v4-pro",
     'ko-gpt-5.6-luna',
     "jk-gpt-5.6-sol",
     "jk-gpt-5.6-luna",
@@ -74,7 +73,6 @@ test("public and strict-review catalogs include every requested model", () => {
     "kimi-k3",
     "deepseek-v4-flash",
     "seed-2.1-pro",
-    "deepseek-v4-pro",
     'ko-gpt-5.6-luna',
     "jk-gpt-5.6-sol",
     "jk-gpt-5.6-luna",

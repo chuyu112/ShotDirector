@@ -130,7 +130,6 @@ test("real gateway starts an isolated GLM worker after registration", { timeout:
       "kimi-k3",
       "deepseek-v4-flash",
       "seed-2.1-pro",
-      "deepseek-v4-pro",
       'ko-gpt-5.6-luna',
       "jk-gpt-5.6-sol",
       "jk-gpt-5.6-luna",

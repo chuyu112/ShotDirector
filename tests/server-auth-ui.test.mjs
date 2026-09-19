@@ -34,7 +34,7 @@ test("writing model picker uses the server catalog and preserves its selected mo
     readFile(cssPath, "utf8"),
     readFile(bridgePath, "utf8"),
   ]);
-  for (const label of ["GLM-5.3-Flash", "Kimi K3", "DeepSeek V4 Flash", "DeepSeek V4 Pro", "Seed 2.1 Pro", "JK GPT-5.6 Sol", "JK GPT-5.6 Luna", "JK Gemini 3.8 Flash", "JK Claude Opus 5", "JK Claude Sonnet 5"]) {
+  for (const label of ["GLM-5.3-Flash", "Kimi K3", "DeepSeek V4 Flash", "Seed 2.1 Pro", "JK GPT-5.6 Sol", "JK GPT-5.6 Luna", "JK Gemini 3.8 Flash", "JK Claude Opus 5", "JK Claude Sonnet 5"]) {
     assert.match(page, new RegExp(label.replace(/[.]/g, "\\.")));
   }
   assert.doesNotMatch(page, /Codex · GPT-5\.6 Sol/);

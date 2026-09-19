@@ -27,8 +27,8 @@ const PROVIDERS = Object.freeze({
   deepseek: {
     baseUrl: "https://api.deepseek.com",
     domain: "deepseek.com",
-    model: "deepseek-v4-pro",
-    label: "DeepSeek V4 Pro",
+    model: "deepseek-flash",
+    label: "DeepSeek Flash（V4.1）",
   },
   jiekou: {
     baseUrl: "https://api.highwayapi.ai/openai",

@@ -58,7 +58,7 @@ type PanelDropTarget = {
   position: "end";
   createShotAt?: number;
 };
-type WritingModelId = "local-codex-gpt-6" | "local-codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "deepseek-v4-pro" | "seed-2.1-pro" | "ko-gpt-5.6-luna" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
+type WritingModelId = "local-codex-gpt-6" | "local-codex-gpt-5.6-sol" | "glm-5.3-flash" | "kimi-k3" | "deepseek-v4-flash" | "seed-2.1-pro" | "ko-gpt-5.6-luna" | "jk-gpt-5.6-sol" | "jk-gpt-5.6-luna" | "jk-gemini-3.8-flash" | "jk-claude-opus-5" | "jk-claude-sonnet-5";
 type ShotAssetKind = "character" | "scene" | "prop";
 type AssetImageModel = "Lib Image" | "General image Pro" | "Seedream 5.0 Pro";
 type AssetImageRatio = "16:9" | "9:16" | "1:1" | "3:4" | "4:3" | "3:2" | "2:3" | "4:5" | "5:4" | "21:9";
@@ -244,7 +244,6 @@ const writingModelCatalog: WritingModelOption[] = [
   { id: "glm-5.3-flash", label: "GLM-5.3-Flash", hint: "默认 · 多模态", provider: "glm", model: "glm-5.3-flash", available: false, reason: "正在读取服务器状态" },
   { id: "kimi-k3", label: "Kimi K3", hint: "聊天与创作 · 多模态", provider: "kimi", model: "k3", available: false, reason: "正在读取服务器状态" },
   { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "快速文字创作", provider: "deepseek", model: "deepseek-v4-flash", available: false, reason: "正在读取服务器 env" },
-  { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", hint: "复杂文字创作", provider: "deepseek", model: "deepseek-v4-pro", available: false, reason: "正在读取服务器 env" },
   { id: "seed-2.1-pro", label: "Seed 2.1 Pro", hint: "长篇文字与创意写作", provider: "doubao-responses", model: "doubao-seed-2-1-pro-260628", available: false, reason: "正在读取服务器 env" },
   { id: "jk-gpt-5.6-sol", label: "JK GPT-5.6 Sol", hint: "API · 复杂推理与正式交付", provider: "jiekou-responses", model: "gpt-5.6-sol", available: false, reason: "正在读取服务器 env" },
   { id: 'ko-gpt-5.6-luna', label: 'KO GPT-5.6 Luna', hint: 'API · 通用问答与长文创作', provider: 'konjac-responses', model: 'gpt-5.6-luna', available: false, reason: '正在读取服务器 env' },

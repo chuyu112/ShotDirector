@@ -120,7 +120,6 @@ const models = [
   ['glm-5.3-flash', 'GLM-5.3-Flash', 'glm', 'glm-5.3-flash'],
   ['kimi-k3', 'Kimi K3', 'kimi', 'k3'],
   ['deepseek-v4-flash', 'DeepSeek V4 Flash', 'deepseek', 'deepseek-v4-flash'],
-  ['deepseek-v4-pro', 'DeepSeek V4 Pro', 'deepseek', 'deepseek-v4-pro'],
   ['seed-2.1-pro', 'Seed 2.1 Pro', 'doubao-responses', 'doubao-seed-2-1-pro-260628'],
   ['jk-gpt-5.6-sol', 'JK GPT-5.6 Sol', 'jiekou-responses', 'gpt-5.6-sol'],
   ['ko-gpt-5.6-luna', 'KO GPT-5.6 Luna', 'konjac-responses', 'gpt-5.6-luna'],
