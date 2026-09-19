@@ -1,5 +1,12 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-20 Seed 入审核 + Opus 置灰（已部署）
+
+- 严格审核模型现为 6 个：kimi-k3、seed-2.1-pro（新加入）、glm-5.3、jk-gpt-5.6-sol、jk-gemini-3.8-flash、jk-claude-opus-5（置灰）。容器内实测前 5 个全过（2.6–3.7s）。
+- JK Claude Opus 5 上游缺陷：jiekou 中继对 Opus 在中等长度 + 结构化/JSON 指令输入时确定性掐断流（`incomplete_stream`，首个 token 前断）；短提示词、长纯文本、Sonnet 同提示词均正常。已用 `MANJING_JIEKOU_CLAUDE_OPUS_ENABLED=0` 置灰（前缀透传 Worker），恢复改 1 即可。详见 `docs/2026-09-20-Seed加入审核与Opus置灰部署.md`。
+- 提交 `1d4d37c` 于 **2026-09-20 02:20（Asia/Shanghai）** 发布为 `20260919T181503Z-1d4d37c`（分层构建，417 文件校验通过）；上一版 `20260919T172635Z-9a7b258` 保留回滚。冒烟全绿。
+- 观察：冒烟首跑遇 Creator 瞬时空返回，pi harness 直接抛 `runModel 必须返回正文或工具调用`（重试即过，与本次改动无关）；后续可把空返回归为可重试错误。
+
 ## 2026-09-20 移除 DeepSeek V4 Pro（已部署）
 
 - 创作模型目录删除 `deepseek-v4-pro`（保留 `deepseek-v4-flash`），前端联合类型与下拉同步，兼容 provider 兜底默认改为 `deepseek-flash`（V4.1 官方名）。创作模型现为 9 个 API + 2 个本地 Codex。
