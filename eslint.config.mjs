@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local data archives and reference attachments (snapshotted copies,
+    // not shipped source): exports/ holds per-release package snapshots,
+    // attachments/ holds third-party source references.
+    "exports/**",
+    "attachments/**",
   ]),
 ]);
 
