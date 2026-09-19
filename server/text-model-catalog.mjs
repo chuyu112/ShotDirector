@@ -65,7 +65,7 @@ const DEFINITIONS = Object.freeze([
     transport: "doubao-responses",
     supportsImages: false,
     writingEnabled: true,
-    reviewEnabled: false,
+    reviewEnabled: true,
     baseVars: ["MANJING_DOUBAO_BASE_URL", "MANJING_DOUBAO_API_URL", "DOUBAO_API_URL"],
     keyVars: ["MANJING_DOUBAO_API_KEY", "DOUBAO_API_KEY"],
     modelVars: ["MANJING_DOUBAO_MODEL", "DOUBAO_MODEL"],
@@ -163,6 +163,8 @@ const DEFINITIONS = Object.freeze([
     baseVars: ["MANJING_JIEKOU_ANTHROPIC_BASE_URL", "JIEKOU_ANTHROPIC_BASE_URL"],
     keyVars: ["MANJING_JIEKOU_API_KEY", "JIEKOU_API_KEY"],
     modelVars: ["MANJING_JIEKOU_CLAUDE_OPUS_MODEL"],
+    enabledVar: "MANJING_JIEKOU_CLAUDE_OPUS_ENABLED",
+    disabledReason: "上游中继对该模型流式响应不稳定，暂时停用",
   },
   {
     id: "jk-claude-sonnet-5",

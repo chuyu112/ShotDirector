@@ -183,7 +183,7 @@ export function createWorkbenchFixtureServer({ promptGenerationState = '', promp
     modelProvider: { ...models.find(model => model.id === selectedModel), id: 'fixture', selectionId: selectedModel, configured: true, supportsWebSearch: false },
     writingModels: models.map(model => ({ ...model, selected: model.id === selectedModel })),
     reasoningPolicy: { selected: selectedEffort, options: ['low', 'high', 'max'], taskOverrides: { mangaSplit: 'low', completeShotPrompt: 'max', strictReview: 'max' } },
-    reviewers: models.filter(model => ['kimi-k3', 'glm-5.3-flash', 'jk-gpt-5.6-sol', 'jk-gemini-3.8-flash', 'jk-claude-opus-5'].includes(model.id)).map(model => ({ ...model, evidenceMode: 'direct-images', lastCall: { status: 'untested', message: 'UI 测试选项，没有实际调用' } })),
+    reviewers: models.filter(model => ['kimi-k3', 'glm-5.3-flash', 'jk-gpt-5.6-sol', 'jk-gemini-3.8-flash', 'jk-claude-opus-5', 'seed-2.1-pro'].includes(model.id)).map(model => ({ ...model, evidenceMode: 'direct-images', lastCall: { status: 'untested', message: 'UI 测试选项，没有实际调用' } })),
     harness: { harnessVersion: 'ui-fixture', runs: [] },
     libtv: { installed: false, status: 'missing', message: 'UI 验收环境：无视频服务，禁止提交生成任务。' },
   });

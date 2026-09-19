@@ -82,11 +82,23 @@ test("public and strict-review catalogs include every requested model", () => {
   ]);
   assert.deepEqual(reviewModelConfigs(cuiyiEnv).map(({ id }) => id), [
     "kimi-k3",
+    "seed-2.1-pro",
     "glm-5.3",
     "jk-gpt-5.6-sol",
     "jk-gemini-3.8-flash",
     "jk-claude-opus-5",
   ]);
+});
+
+test("enabledVar can grey out a model without removing its configuration", () => {
+  const enabled = textModelConfig("jk-claude-opus-5", cuiyiEnv);
+  assert.equal(enabled.configured, true);
+  const greyed = textModelConfig("jk-claude-opus-5", { ...cuiyiEnv, MANJING_JIEKOU_CLAUDE_OPUS_ENABLED: "0" });
+  assert.equal(greyed.configured, false);
+  assert.match(greyed.reason, /暂时停用/);
+  assert.equal(greyed.baseUrl, enabled.baseUrl);
+  assert.equal(greyed.model, enabled.model);
+  assert.equal(greyed.resolvedFrom.enabled, "MANJING_JIEKOU_CLAUDE_OPUS_ENABLED");
 });
 
 test("an empty env never fabricates an available provider", () => {
