@@ -5,6 +5,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { agentRoleContract, normalizeAgentRole } from "./agent-role-contract.mjs";
 
 /**
  * Ported from the production Pi Agent Harness in "翠易内部导演台资产库".
@@ -35,7 +36,9 @@ function estimateAgentContextTokens(value) {
 }
 
 function directModelImageAssets(job) {
-  if (job?.agentRole === "review" && job?.allowReviewImages !== true) return [];
+  // 隔离角色的图像证据必须显式授权（review 需 allowReviewImages），防止
+  // 审查者被动继承创作者素材。
+  if (normalizeAgentRole(job?.agentRole) === "review" && job?.allowReviewImages !== true) return [];
   const candidates = Array.isArray(job?.images)
     ? job.images
     : Array.isArray(job?.assets)
@@ -74,22 +77,17 @@ function normalizeSessionPart(value, fallback) {
   return normalized || fallback;
 }
 
-function normalizeAgentRole(value) {
-  if (value === "review") return "review";
-  if (value === "memory") return "memory";
-  return "creator";
-}
-
 export function manjingHarnessSessionId(job) {
   const runId = normalizeSessionPart(job?.id, "run");
   const conversationId = normalizeSessionPart(
     job?.conversationId || job?.conversation_id,
     `conversation-${runId}`,
   );
-  if (job?.agentRole === "review") {
+  const role = normalizeAgentRole(job?.agentRole);
+  if (role === "review") {
     return `${conversationId}.review.${runId}`;
   }
-  if (job?.agentRole === "memory") {
+  if (role === "memory") {
     return `${conversationId}.memory.${runId}`;
   }
   if (job?.channelId === "account-profile-generation") {
@@ -317,7 +315,7 @@ function reconciledConversationMessages(job, durableMessages) {
 
 function historyMessages(job, model) {
   const compaction = restoredCompaction(job);
-  if (job?.agentRole === "review" || job?.agentRole === "memory") return [];
+  if (!agentRoleContract(job?.agentRole).inheritConversationHistory) return [];
   const durableMessages = durableSessionMatches(job) &&
       Array.isArray(job?.harnessSession?.messages) && job.harnessSession.messages.length
     ? job.harnessSession.messages
@@ -352,7 +350,7 @@ function historyMessages(job, model) {
 }
 
 function checkpointSourceMessages(job) {
-  if (job?.agentRole === "review" || job?.agentRole === "memory") return [];
+  if (!agentRoleContract(job?.agentRole).inheritConversationHistory) return [];
   if (
     durableSessionMatches(job) &&
     Array.isArray(job?.harnessSession?.messages)
@@ -687,11 +685,11 @@ export async function createManjingPiHarnessSession({
   if (!Array.isArray(customTools)) {
     throw new TypeError("Pi customTools 必须是数组");
   }
-  // Review is a separate, read-only Agent boundary.  Even if a caller is
-  // accidentally handed creator tools, do not register them in its Pi
-  // session.  Review knowledge is injected from its own frozen review input
-  // and independent retrieval path instead of inheriting creator actions.
-  const effectiveCustomTools = job?.agentRole === "review" ? [] : customTools;
+  const roleContract = agentRoleContract(job?.agentRole);
+  // 隔离角色（review/memory）是独立的只读 Agent 边界。即使调用方意外把
+  // 创作工具传进来，也绝不在其 Pi Session 注册；角色能力一律以
+  // agent-role-contract.mjs 的契约为准。
+  const effectiveCustomTools = roleContract.allowCustomTools ? customTools : [];
   const sessionId = manjingHarnessSessionId(job);
   const { model, runtime: modelRuntime } = createManjingModelRuntime({
     job,
@@ -730,7 +728,7 @@ export async function createManjingPiHarnessSession({
   sessionManager.appendThinkingLevelChange(job.responseMode === "reasoning" ? "high" : "medium");
   const restoredHistory = historyMessages(job, model);
   const restoredEntryIds = restoredHistory.map((message) => sessionManager.appendMessage(message));
-  const compaction = job.agentRole === "creator" ? restoredCompaction(job) : null;
+  const compaction = roleContract.allowCompaction ? restoredCompaction(job) : null;
   if (compaction && restoredEntryIds.length) {
     sessionManager.appendCompaction(
       compaction.summary,
@@ -754,7 +752,7 @@ export async function createManjingPiHarnessSession({
     followUpMode: "one-at-a-time",
     retry: { enabled: false },
     compaction: {
-      enabled: job.agentRole === "creator",
+      enabled: roleContract.allowCompaction,
       reserveTokens,
       keepRecentTokens,
     },
@@ -784,14 +782,15 @@ export async function createManjingPiHarnessSession({
     noTools: effectiveCustomTools.length ? "builtin" : "all",
   });
 
+  const role = normalizeAgentRole(job?.agentRole);
   emit("manjing.session.opened", {
     protocolVersion: MANJING_PI_SESSION_PROTOCOL_VERSION,
     attemptId,
     restoredMessageCount: restoredHistory.length,
     restoredCompaction: Boolean(compaction),
     toolNames: effectiveCustomTools.map((tool) => tool.name),
-    isolatedReview: job.agentRole === "review",
-    isolatedMemory: job.agentRole === "memory",
+    isolatedReview: role === "review",
+    isolatedMemory: role === "memory",
     modelId: job.textModelId || job.modelId || null,
   });
   const unsubscribe = session.subscribe((event) => {

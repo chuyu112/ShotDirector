@@ -15,6 +15,7 @@ import {
   manjingHarnessSessionId,
 } from "./manjing-pi-harness.mjs";
 import { runManjingAgentTurn } from "./manjing-agent-runtime.mjs";
+import { agentRoleContract, normalizeAgentRole } from "./agent-role-contract.mjs";
 
 const HISTORY_LIMIT = 50;
 const writeQueues = new Map();
@@ -237,11 +238,14 @@ export async function runPersistentManjingAgentTurn({
   ...options
 }) {
   if (!job?.id || !job?.conversationId) throw new TypeError("持久 Harness 任务缺少 Run 或 Session 标识");
+  // 角色契约决定该角色是否允许持久 Session；隔离角色（review/memory）
+  // 永远从空 Session 起步，绝不加载创作者历史快照。
+  const roleContract = agentRoleContract(job.agentRole);
   const task = {
     ...job,
-    agentRole: job.agentRole === "review" || job.agentRole === "memory" ? job.agentRole : "creator",
+    agentRole: normalizeAgentRole(job.agentRole),
   };
-  const harnessSession = task.agentRole === "creator" ? await store.loadSession(task) : null;
+  const harnessSession = roleContract.durableSession ? await store.loadSession(task) : null;
   const events = [];
   await store.beginRun(task);
   try {
