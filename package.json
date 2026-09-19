@@ -22,7 +22,8 @@
     "test:harness": "node --test tests/pi-agent-runtime.test.mjs tests/manjing-agent-contract.test.mjs tests/agent-role-contract.test.mjs tests/pi-upgrade-acceptance.test.mjs",
     "typecheck": "tsc --noEmit --pretty false",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "probe:models": "node scripts/probe-models.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.85.1",
