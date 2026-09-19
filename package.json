@@ -25,9 +25,9 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.84.2",
-    "@earendil-works/pi-ai": "0.84.2",
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "drizzle-orm": "0.45.2",
     "next": "16.3.3",
     "react": "19.2.8",
