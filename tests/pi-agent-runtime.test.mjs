@@ -126,3 +126,37 @@ test("review policy cannot edit or approve", () => {
   assert.match(manjingAgentPolicies.review, /禁止改写原提示词/);
   assert.match(manjingAgentPolicies.review, /替用户批准 Shot/);
 });
+
+test("transient empty runModel result is retried and then succeeds", async () => {
+  let calls = 0;
+  const result = await runManjingAgentTurn({
+    agentRole: "creator",
+    conversationId: "conversation-empty-retry",
+    runId: "run-empty-retry",
+    prompt: "生成 Shot 02 讨论稿",
+    runModel: () => {
+      calls += 1;
+      return calls < 2 ? "   " : '{"status":"completed","prompt":"draft"}';
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(result.harnessSessionId, /^conversation-empty-retry/);
+});
+
+test("persistent empty runModel result fails after bounded retries", async () => {
+  let calls = 0;
+  await assert.rejects(
+    runManjingAgentTurn({
+      agentRole: "creator",
+      conversationId: "conversation-empty-always",
+      runId: "run-empty-always",
+      prompt: "生成 Shot 03 讨论稿",
+      runModel: () => {
+        calls += 1;
+        return "";
+      },
+    }),
+    /runModel 必须返回正文或工具调用/,
+  );
+  assert.equal(calls, 3);
+});

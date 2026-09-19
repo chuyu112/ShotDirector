@@ -201,9 +201,31 @@ function normalizeRunModelResult(result) {
     return { type: "toolCall", id, name, arguments: args };
   });
   if (!finalText.trim() && !toolCalls.length) {
-    throw new TypeError("runModel 必须返回正文或工具调用");
+    throw Object.assign(new TypeError("runModel 必须返回正文或工具调用"), { code: "empty_run_model_result" });
   }
   return { finalText: finalText.trim(), toolCalls };
+}
+
+// 模型瞬时空返回（如上游闪断后返回空正文）允许有限次重试；其余错误一律不重试。
+const EMPTY_RUN_MODEL_RESULT_MAX_RETRIES = 2;
+
+async function runModelWithEmptyRetry(runModel, params, signal) {
+  let lastEmptyError;
+  for (let attempt = 0; attempt <= EMPTY_RUN_MODEL_RESULT_MAX_RETRIES; attempt += 1) {
+    if (signal?.aborted) throw abortCause(signal);
+    const result = await waitForRunModel(
+      Promise.resolve().then(() => runModel(params)),
+      signal,
+    );
+    if (signal?.aborted) throw abortCause(signal);
+    try {
+      return normalizeRunModelResult(result);
+    } catch (error) {
+      if (error?.code !== "empty_run_model_result") throw error;
+      lastEmptyError = error;
+    }
+  }
+  throw lastEmptyError;
 }
 
 export function visibleMessageText(message, maximum = MAXIMUM_EVENT_TEXT_CHARACTERS) {
@@ -625,19 +647,14 @@ function createManjingModelRuntime({ job, runModel, onFailure }) {
           try {
             if (options.signal?.aborted) throw abortCause(options.signal);
             const prompt = providerPromptFromContext(context);
-            const result = await waitForRunModel(
-              Promise.resolve().then(() => runModel({
-                job,
-                prompt,
-                signal: options.signal,
-                model: streamModel,
-                context,
-                harnessVersion: MANJING_PI_HARNESS_VERSION,
-              })),
-              options.signal,
-            );
-            if (options.signal?.aborted) throw abortCause(options.signal);
-            const { finalText, toolCalls } = normalizeRunModelResult(result);
+            const { finalText, toolCalls } = await runModelWithEmptyRetry(runModel, {
+              job,
+              prompt,
+              signal: options.signal,
+              model: streamModel,
+              context,
+              harnessVersion: MANJING_PI_HARNESS_VERSION,
+            }, options.signal);
             const content = [
               ...(finalText ? [{ type: "text", text: finalText }] : []),
               ...toolCalls,
