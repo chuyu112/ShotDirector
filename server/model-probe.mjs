@@ -21,7 +21,7 @@ export async function runModelProbe(store, model, { signal, requestId, timeoutMs
         if (formatStatus === 'failed') return '{"connectionStatus":"passed","formatStatus":"failed"}';
         return '{"ok":true}';
       } catch (error) {
-        if (!signal.aborted && error?.code === 'invalid_output_format') {
+        if (!signal.aborted && ['invalid_output_format', 'empty_model_output'].includes(error?.code)) {
           metadata = { model: error.reportedModel || null, responseId: error.responseId, connectionStatus: 'passed', formatStatus: 'failed' };
           return '{"connectionStatus":"passed","formatStatus":"failed"}';
         }

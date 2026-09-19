@@ -22,6 +22,41 @@ export function providerFormatFailure(payload) {
   });
 }
 
+// 必须有正常结束标记、已知正文结构且没有工具或拒答，才能把空输出交给 Harness 有限重试。
+// 只传递安全诊断字段，不把正文、隐藏推理或原始响应带出 Provider。
+export function assertNonEmptyCompletedResponse(payload, protocol) {
+  if (payload?.error) return;
+  const emptyText = value => value == null || (typeof value === 'string' && !value.trim());
+  const emptyTextBlocks = value => Array.isArray(value) && value.every(part => (
+    typeof part === 'string' ? emptyText(part)
+      : ['text', 'output_text'].includes(part?.type) && typeof part.text === 'string' && emptyText(part.text)
+  ));
+  let empty = false;
+  if (protocol === 'chat') {
+    const choice = payload?.choices?.[0];
+    const message = choice?.message;
+    empty = choice?.finish_reason === 'stop' && message && typeof message === 'object' && !Array.isArray(message)
+      && Object.hasOwn(message, 'content') && !message.refusal && !message.function_call
+      && (message.tool_calls == null || (Array.isArray(message.tool_calls) && !message.tool_calls.length))
+      && (emptyText(message.content) || emptyTextBlocks(message.content));
+  } else if (protocol === 'anthropic') {
+    empty = payload?.stop_reason === 'end_turn' && Array.isArray(payload.content) && payload.content.every(part => (
+      ['thinking', 'redacted_thinking'].includes(part?.type) || (part?.type === 'text' && typeof part.text === 'string' && emptyText(part.text))
+    ));
+  } else if (protocol === 'responses') {
+    empty = payload?.status === 'completed' && emptyText(payload.output_text)
+      && Array.isArray(payload.output) && payload.output.every(item => (
+        item?.type === 'reasoning' || (item?.type === 'message' && emptyTextBlocks(item.content))
+      ));
+  }
+  if (empty) {
+    throw Object.assign(providerFormatFailure(payload), {
+      message: '模型已完整响应，但没有返回正文或工具调用',
+      code: 'empty_model_output',
+    });
+  }
+}
+
 export function providerFailure(label, { status, payload, limit, code } = {}) {
   const finishReason = payload?.stop_reason || payload?.choices?.[0]?.finish_reason;
   const truncated = code === 'output_limit' || (!code && (finishReason === 'length' || finishReason === 'max_tokens'));
@@ -105,7 +140,11 @@ export async function readProviderResponse(response, { protocol, label, onProgre
     const payload = await response.json().catch(() => ({}));
     throw providerFailure(label, { status: response.status, payload });
   }
-  if (!response.headers.get('content-type')?.includes('text/event-stream')) return response.json();
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    const payload = await response.json();
+    assertNonEmptyCompletedResponse(payload, protocol);
+    return payload;
+  }
   const anthropic = protocol === 'anthropic';
   const responses = protocol === 'responses';
   const payload = anthropic
@@ -115,6 +154,8 @@ export async function readProviderResponse(response, { protocol, label, onProgre
       : { choices: [{ message: { content: '', tool_calls: [] } }] };
   const blocks = new Map();
   let ended = false;
+  let completedResponse;
+  let hasNonTextOutput = false;
   let lastProgress = 0;
   for await (const data of events(response, label, payload)) {
     if (data === '[DONE]') {
@@ -129,10 +170,15 @@ export async function readProviderResponse(response, { protocol, label, onProgre
       lastProgress = Date.now();
     }
     if (responses) {
+      if (event.type?.startsWith('response.refusal.') || event.type?.startsWith('response.function_call_arguments.')
+        || (event.type === 'response.output_item.added' && !['message', 'reasoning'].includes(event.item?.type))) {
+        hasNonTextOutput = true;
+      }
       mergeResponsesMetadata(payload, event.response);
       if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') payload.output_text += event.delta;
       if (event.type === 'response.output_text.done' && typeof event.text === 'string') payload.output_text = event.text;
       if (event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete') {
+        completedResponse = event.type === 'response.completed' ? event.response : undefined;
         ended = true;
         break;
       }
@@ -143,6 +189,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
         payload.usage = safeUsage(event.message?.usage) || {};
       } else if (event.type === 'content_block_start') {
         const block = event.content_block;
+        if (!['text', 'thinking', 'redacted_thinking'].includes(block?.type)) hasNonTextOutput = true;
         if (block?.type === 'tool_use') blocks.set(event.index, { type: 'tool_use', id: block.id, name: block.name, input: block.input, json: '' });
         if (block?.type === 'text') blocks.set(event.index, { type: 'text', text: block.text || '' });
       } else if (event.type === 'content_block_delta') {
@@ -159,6 +206,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
       if (event.usage) payload.usage = safeUsage(event.usage);
       const choice = event.choices?.[0];
       const message = payload.choices[0].message;
+      if (choice?.delta?.refusal || choice?.delta?.function_call) hasNonTextOutput = true;
       if (choice?.finish_reason) payload.choices[0].finish_reason = choice.finish_reason;
       if (typeof choice?.delta?.content === 'string') message.content += choice.delta.content;
       for (const call of choice?.delta?.tool_calls || []) {
@@ -172,6 +220,7 @@ export async function readProviderResponse(response, { protocol, label, onProgre
   }
   if (responses) {
     if (!ended) throw providerFailure(label, { payload, code: 'incomplete_stream' });
+    if (!hasNonTextOutput && !payload.output_text.trim()) assertNonEmptyCompletedResponse(completedResponse, protocol);
     return payload;
   }
   const finish = anthropic ? payload.stop_reason : payload.choices[0].finish_reason;
@@ -184,5 +233,6 @@ export async function readProviderResponse(response, { protocol, label, onProgre
       return { type: block.type, id: block.id, name: block.name, input };
     });
   }
+  if (!hasNonTextOutput) assertNonEmptyCompletedResponse(payload, protocol);
   return payload;
 }

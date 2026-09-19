@@ -259,10 +259,12 @@ export async function runPersistentManjingAgentTurn({
       },
     });
     await store.appendEvents(events);
-    await store.saveCheckpoint(result.harnessCheckpoint);
+    if (roleContract.durableSession) await store.saveCheckpoint(result.harnessCheckpoint);
     await store.finishRun(task, "completed", {
       eventCount: events.length,
-      checkpointStateVersion: result.harnessCheckpoint.baseStateVersion + 1,
+      ...(roleContract.durableSession
+        ? { checkpointStateVersion: result.harnessCheckpoint.baseStateVersion + 1 }
+        : {}),
     });
     return result;
   } catch (error) {

@@ -19,7 +19,7 @@
     "test:server": "node --test tests/server-auth-store.test.mjs tests/server-gateway.test.mjs tests/compatible-chat-structured-provider.test.mjs tests/anthropic-structured-provider.test.mjs tests/doubao-responses-provider.test.mjs tests/text-model-catalog.test.mjs tests/model-image-atlas.test.mjs tests/openai-responses-provider.test.mjs tests/openai-image-provider.test.mjs tests/libtv-server-worker.test.mjs tests/server-auth-ui.test.mjs tests/server-browser-storage.test.mjs tests/tenant-worker-pool.test.mjs tests/server-deployment.test.mjs tests/merge-model-env.test.mjs tests/server-runtime-smoke.test.mjs tests/server-production-chain.test.mjs tests/video-extractor-server.test.mjs tests/global-settings-persistence.test.mjs tests/draft-sync-policy.test.mjs tests/media-job-resume.test.mjs",
     "test:production-chain": "node --test --test-concurrency=1 tests/server-production-chain.test.mjs",
     "test": "npm run typecheck && npm run build && node --test",
-    "test:harness": "node --test tests/pi-agent-runtime.test.mjs tests/manjing-agent-contract.test.mjs tests/agent-role-contract.test.mjs tests/pi-upgrade-acceptance.test.mjs",
+    "test:harness": "node --test tests/pi-agent-runtime.test.mjs tests/manjing-agent-contract.test.mjs tests/agent-role-contract.test.mjs tests/pi-upgrade-acceptance.test.mjs tests/model-empty-retry.test.mjs",
     "typecheck": "tsc --noEmit --pretty false",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",

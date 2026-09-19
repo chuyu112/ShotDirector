@@ -14,11 +14,12 @@
  * 注意：docker run --env-file 不像 compose 那样剥离引号，脚本会先清洗服务器
  * .env.server 的引号再注入（2026-09-19 冒烟曾因引号污染模型配置失败）。
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withPrivateSmokeEnvironment } from "./smoke-environment.mjs";
 
 const workspace = join(dirname(fileURLToPath(import.meta.url)), "..");
 const deployEnvPath = join(workspace, ".env.deploy.local");
@@ -64,31 +65,18 @@ step("解析线上镜像 tag", () => {
   return { image: `manjing-server:release-${tag.toLowerCase()}` };
 });
 
-step("启动 scratch 冒烟容器（tmpfs 数据，引号清洗 env）", ({ image }) => {
-  ssh(`docker rm -f ${SMOKE_NAME} >/dev/null 2>&1 || true
-python3 - << 'PY'
-lines = []
-for raw in open('/opt/manjing/.env.server'):
-    line = raw.rstrip('\\n')
-    if not line or line.startswith('#') or '=' not in line:
-        continue
-    key, _, value = line.partition('=')
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-        value = value[1:-1]
-    lines.append(f'{key}={value}')
-open('/tmp/manjing-smoke-env', 'w').write('\\n'.join(lines) + '\\n')
-PY
+step("启动 scratch 冒烟容器（tmpfs 数据，临时 env 权限 0600）", ({ image }) => {
+  ssh(withPrivateSmokeEnvironment(`docker rm -f ${SMOKE_NAME} >/dev/null 2>&1 || true
 docker run -d --name ${SMOKE_NAME} \
   --tmpfs /data:rw,nosuid,nodev,uid=1000,gid=1000,mode=755 \
   -p 127.0.0.1:${SMOKE_PORT}:8080 \
-  --env-file /tmp/manjing-smoke-env \
+  --env-file "$smoke_env_file" \
   -e MANJING_GATEWAY_HOST=0.0.0.0 -e MANJING_GATEWAY_PORT=8080 \
   -e MANJING_DATA_ROOT=/data -e MANJING_APP_ROOT=/app \
   -e MANJING_PUBLIC_API_BASE=/api -e MANJING_COOKIE_SECURE=0 \
   -e MANJING_REGISTRATION_ENABLED=1 \
   -e MANJING_ALLOWED_ORIGINS=http://127.0.0.1:${SMOKE_PORT} \
-  ${image} npm run start:gateway >/dev/null`);
+  ${image} npm run start:gateway >/dev/null`));
   for (let i = 0; i < 30; i += 1) {
     try {
       const out = ssh(`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${SMOKE_PORT}/healthz || true`);
@@ -169,7 +157,7 @@ for (const [name, fn] of steps) {
   }
 }
 console.log(`  清理冒烟容器 ... `);
-try { ssh(`docker rm -f ${SMOKE_NAME} >/dev/null 2>&1; rm -f /tmp/manjing-smoke-env /tmp/manjing-smoke-cookies /tmp/manjing-smoke-payload.json /tmp/manjing-review-smoke.mjs`); console.log("OK"); } catch { console.log("（请手动 docker rm -f manjing-smoke）"); }
+try { ssh(`docker rm -f ${SMOKE_NAME} >/dev/null 2>&1; rm -f /tmp/manjing-smoke-cookies /tmp/manjing-smoke-payload.json /tmp/manjing-review-smoke.mjs`); console.log("OK"); } catch { console.log("（请手动 docker rm -f manjing-smoke）"); }
 if (failed) {
   console.error(`\n冒烟失败：${failed.message}\n`);
   process.exit(1);

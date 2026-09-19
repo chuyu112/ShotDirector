@@ -1,3 +1,5 @@
+import { assertNonEmptyCompletedResponse } from './provider-response.mjs';
+
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 const MAX_OUTPUT_TOKENS = 65_536;
@@ -126,6 +128,7 @@ export class DoubaoResponsesProvider {
     if (["failed", "cancelled", "incomplete"].includes(payload?.status)) {
       throw new Error(`Seed 2.1 Pro API 未完成：${payload?.error?.message || payload?.incomplete_details?.reason || payload.status}`);
     }
+    assertNonEmptyCompletedResponse(payload, 'responses');
     const text = responseOutputText(payload);
     if (!text) throw new Error("Seed 2.1 Pro API 没有返回结构化文本");
     return {

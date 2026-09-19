@@ -206,22 +206,23 @@ function normalizeRunModelResult(result) {
   return { finalText: finalText.trim(), toolCalls };
 }
 
-// 模型瞬时空返回（如上游闪断后返回空正文）允许有限次重试；其余错误一律不重试。
+// 只重试正常返回的空结果，或 Provider 明确确认已完整结束的空响应；断流等未知结果不重试。
 const EMPTY_RUN_MODEL_RESULT_MAX_RETRIES = 2;
 
 async function runModelWithEmptyRetry(runModel, params, signal) {
   let lastEmptyError;
   for (let attempt = 0; attempt <= EMPTY_RUN_MODEL_RESULT_MAX_RETRIES; attempt += 1) {
     if (signal?.aborted) throw abortCause(signal);
-    const result = await waitForRunModel(
-      Promise.resolve().then(() => runModel(params)),
-      signal,
-    );
-    if (signal?.aborted) throw abortCause(signal);
     try {
+      const result = await waitForRunModel(
+        Promise.resolve().then(() => runModel(params)),
+        signal,
+      );
+      if (signal?.aborted) throw abortCause(signal);
       return normalizeRunModelResult(result);
     } catch (error) {
-      if (error?.code !== "empty_run_model_result") throw error;
+      if (signal?.aborted) throw abortCause(signal);
+      if (!["empty_run_model_result", "empty_model_output"].includes(error?.code)) throw error;
       lastEmptyError = error;
     }
   }

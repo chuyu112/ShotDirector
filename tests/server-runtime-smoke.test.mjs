@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -63,6 +64,71 @@ function cookiesFrom(response) {
     return value ? [`${name}=${value}`] : [];
   }).join("; ");
 }
+
+test('真实 Worker 遇完整空响应有限重试，格式错误和断流不重提', { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manjing-worker-empty-retry-'));
+  const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+  let mode = 'transient', calls = 0;
+  const upstream = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    calls++;
+    if (mode === 'incomplete') {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end('data: {"choices":[{"finish_reason":"stop","delta":{"content":""}}]}\n\n');
+      return;
+    }
+    if (mode === 'http-error') {
+      response.writeHead(504, { 'Content-Type': 'application/json' });
+      response.end('{"error":{"message":"fixture gateway timeout"}}');
+      return;
+    }
+    const content = mode === 'invalid' ? 'not-json' : (mode === 'always-empty' || calls === 1) ? '' : JSON.stringify({
+      projectTitle: '空响应恢复回归', shots: [{ id: '01', duration: 6, sourceText: ['清晨，人物推开门。'], omniReferences: [] }],
+    });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ id: 'fixture-response', model: 'fixture-glm', choices: [{ finish_reason: 'stop', message: { content } }] }));
+  });
+  const upstreamPort = await listen(upstream);
+  const port = await reservePort();
+  const token = 'empty-retry-fixture-token';
+  const child = spawn(process.execPath, [join(appRoot, 'scripts/shotdirector-bridge.mjs')], {
+    cwd: appRoot, stdio: ['ignore', 'ignore', 'pipe'],
+    env: {
+      PATH: process.env.PATH,
+      MANJING_APP_ROOT: appRoot, MANJING_DATA_ROOT: root, MANJING_SERVER_WORKER: '1',
+      MANJING_TENANT_ID: 'fixture-user', MANJING_PROJECT_ID: 'fixture-project', MANJING_INTERNAL_TOKEN: token,
+      MANJING_BRIDGE_HOST: '127.0.0.1', MANJING_BRIDGE_PORT: String(port),
+      MANJING_AI_PROVIDER: 'glm', MANJING_GLM_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`,
+      MANJING_GLM_API_KEY: 'fixture-key', MANJING_GLM_FLASH_MODEL: 'fixture-glm', LIBTV_BIN: '/usr/bin/false',
+    },
+  });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr = `${stderr}${chunk}`.slice(-4000); });
+  try {
+    const base = `http://127.0.0.1:${port}`;
+    await waitForJson(`${base}/health`, child, () => stderr);
+    for (const [scenario, expectedCalls, expectedStatus] of [
+      ['transient', 2, 200], ['always-empty', 3, 500], ['invalid', 1, 500], ['incomplete', 1, 502], ['http-error', 1, 504],
+    ]) {
+      mode = scenario;
+      calls = 0;
+      const response = await fetch(`${base}/load-script`, {
+        method: 'POST', headers: { Origin: 'http://localhost:3000', 'Content-Type': 'application/json', 'X-Manjing-Token': token },
+        body: JSON.stringify({ content: '清晨，人物推开门。', fileName: 'fixture.txt' }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const result = await response.json();
+      assert.equal(response.status, expectedStatus, JSON.stringify(result));
+      assert.equal(calls, expectedCalls, scenario);
+      if (scenario === 'transient') assert.equal(result.projectTitle, '空响应恢复回归');
+    }
+  } finally {
+    await stopChild(child);
+    upstream.closeAllConnections();
+    await new Promise(resolveClose => upstream.close(resolveClose));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("real gateway starts an isolated GLM worker after registration", { timeout: 30_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "manjing-runtime-"));

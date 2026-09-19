@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -125,6 +125,32 @@ test("review policy cannot edit or approve", () => {
   assert.match(manjingAgentPolicies.review, /只能指出问题、证据和修改建议/);
   assert.match(manjingAgentPolicies.review, /禁止改写原提示词/);
   assert.match(manjingAgentPolicies.review, /替用户批准 Shot/);
+});
+
+for (const role of ['review', 'memory']) test(`${role} 保留 Run 与事件，但不加载或写入持久会话`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'manjing-isolated-role-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ManjingHarnessStore(root);
+  store.loadSession = async () => assert.fail('隔离角色不得读取持久会话');
+  store.saveCheckpoint = async () => assert.fail('隔离角色不得写入持久会话');
+  const job = { id: `run-${role}-isolated`, conversationId: 'shared-conversation', agentRole: role };
+  const result = await runPersistentManjingAgentTurn({
+    store, job, prompt: '只检查本次证据',
+    conversationHistory: [{ role: 'user', content: 'PRIVATE_CREATOR_HISTORY' }],
+    runModel: async ({ prompt }) => {
+      assert.doesNotMatch(prompt, /PRIVATE_CREATOR_HISTORY/);
+      return '检查完成';
+    },
+  });
+  assert.equal(result.finalText, '检查完成');
+  const run = await store.getRun(job.id);
+  assert.equal(run.status, 'completed');
+  assert.ok(run.eventCount > 0);
+  assert.equal(Object.hasOwn(run, 'checkpointStateVersion'), false);
+  const paths = await readdir(root);
+  assert.equal(paths.includes('sessions'), false);
+  assert.equal(paths.includes('history'), false);
+  assert.match(await readFile(store.eventsPath, 'utf8'), /manjing\.session\.closed/);
 });
 
 test("transient empty runModel result is retried and then succeeds", async () => {
