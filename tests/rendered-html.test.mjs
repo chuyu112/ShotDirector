@@ -387,21 +387,22 @@ test("keeps model duration and omni-reference limits", async () => {
   assert.match(page, /Seedance 2\.0[^\n]*limit: 9[^\n]*minDuration: 6[^\n]*maxDuration: 15/);
   assert.match(page, /Seedance 2\.5[^\n]*limit: 50[^\n]*minDuration: 6[^\n]*maxDuration: 30/);
   assert.match(page, /defaultGenerationModel: GenerationModel = "seedance-2\.5"/);
-  assert.match(page, /视频输出 · 默认 30s/);
+  assert.match(page, /视频模型[\s\S]*视频生成模型/);
   assert.match(storyboard, /timecode: "00:00–00:30"[\s\S]*duration: 30/);
   assert.match(bridge, /payload\?\.generationModel === "seedance-2\.0"[\s\S]*Seedance 2\.5/);
   assert.match(page, /absoluteMaxOmniReferences = 50/);
 });
 
-test("groups the project toolbar by workspace, video output and import", async () => {
+test("groups the project toolbar by workspace and import; video model lives in the top bar", async () => {
   const [page, styles] = await Promise.all([
     read("../app/page.tsx"),
     read("../app/globals.css"),
   ]);
 
   assert.match(page, /loaded-script-action-group workspace-action-group/);
-  assert.match(page, /loaded-script-action-group video-action-group/);
+  assert.doesNotMatch(page, /video-action-group/);
   assert.match(page, /loaded-script-action-group import-action-group/);
+  assert.match(page, /aria-label="视频生成模型"[\s\S]*\{model\.label\} · \{model\.minDuration\}–\{model\.maxDuration\} 秒 · \{model\.limit\} 参考/);
   assert.match(styles, /\.loaded-script-actions[\s\S]*grid-template-columns:/);
   assert.match(styles, /@media \(max-width: 1500px\)[\s\S]*\.loaded-script \{ grid-template-columns: 1fr; \}/);
 });

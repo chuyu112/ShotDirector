@@ -651,8 +651,6 @@ input:focus-visible {
 
 .loaded-script-action-group .button { min-height: 43px; }
 
-.video-action-group .model-switch { height: 100%; }
-
 @media (max-width: 1500px) {
   .loaded-script { grid-template-columns: 1fr; }
   .loaded-script-actions { grid-template-columns: minmax(0, 1.4fr) minmax(250px, .8fr); }
@@ -729,29 +727,6 @@ input:focus-visible {
 .production-stage.ready b { color: var(--accent); }
 .production-stage.blocked > i { border-color: var(--red); color: var(--red); }
 .production-stage.blocked b { color: var(--red); }
-
-.model-switch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(122px, 1fr));
-  border: 1px solid var(--ink);
-  background: white;
-}
-
-.model-switch button {
-  display: grid;
-  gap: 1px;
-  padding: 7px 12px;
-  border: 0;
-  border-right: 1px solid var(--ink);
-  background: white;
-  cursor: pointer;
-  text-align: left;
-}
-.model-switch button:last-child { border-right: 0; }
-.model-switch button b { font-size: 10px; }
-.model-switch button small { color: var(--muted); font-size: 8px; }
-.model-switch button.active { background: var(--blue); color: white; }
-.model-switch button.active small { color: #dce5ff; }
 
 .global-settings-entry,
 .material-lab-entry,
@@ -4375,7 +4350,6 @@ input:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
   }
-  .loaded-script-actions .model-switch { grid-column: auto; }
   .loaded-script-actions .load-script-button { width: 100%; }
 
   .script-loader {
@@ -4549,14 +4523,6 @@ input:focus-visible {
   }
 
   .load-script-button { width: 100%; }
-
-  .model-switch {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .model-switch button {
-    padding-inline: 9px;
-  }
 
   .load-script-button {
     align-self: center;
@@ -5281,7 +5247,6 @@ input:focus-visible {
   .loaded-script-actions > *,
   .loaded-script-actions .button,
   .loaded-script-actions .load-script-button { width: 100%; min-width: 0; }
-  .loaded-script-actions .model-switch { grid-column: auto; grid-template-columns: 1fr; }
   .workspace-action-group > div,
   .import-action-group > div { grid-template-columns: 1fr; }
   .loaded-script-actions button { min-height: 48px; }

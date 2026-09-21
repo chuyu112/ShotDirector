@@ -7048,6 +7048,20 @@ function DirectorDesk() {
               ))}
             </div>
           </details>
+          <label className="reasoning-effort-picker generation-model-picker" title="决定视频生成阶段每个 Shot 可用的参考图上限与默认时长">
+            <span>视频模型</span>
+            <select
+              aria-label="视频生成模型"
+              value={generationModel}
+              disabled={!bridge.connected}
+              onChange={(event) => selectGenerationModel(event.target.value as GenerationModel)}
+            >
+              {generationModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.label} · {model.minDuration}–{model.maxDuration} 秒 · {model.limit} 参考</option>
+              ))}
+            </select>
+            <small>决定视频阶段参考上限与默认时长</small>
+          </label>
           <label className="reasoning-effort-picker" title="Chat / Work 可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
             <span>推理深度</span>
             <select
@@ -7101,25 +7115,21 @@ function DirectorDesk() {
               </button>
             </div>
           </div>
-          <div className="loaded-script-action-group video-action-group">
-            <span className="loaded-script-group-label">视频输出 · 默认 30s</span>
-            <div className="model-switch" role="group" aria-label="Seedance生成模型">
-              {generationModels.map((model) => (
-                <button key={model.id} className={generationModel === model.id ? "active" : ""} onClick={() => selectGenerationModel(model.id)}>
-                  <b>{model.label}</b><small>{model.minDuration}–{model.maxDuration} 秒 · {model.limit} 个参考</small>
-                </button>
-              ))}
+          <div className="loaded-script-action-group import-action-group">
+            <span className="loaded-script-group-label">导入 · 文字</span>
+            <div>
+              <button className="button secondary load-script-button" onClick={() => setShowLoader((current) => !current)}>
+                <b>{showLoader ? "收起" : "载入脚本"}</b>
+                <small>故事 / 分镜脚本文件，或自然语言描述</small>
+              </button>
             </div>
           </div>
           <div className="loaded-script-action-group import-action-group">
-            <span className="loaded-script-group-label">导入</span>
+            <span className="loaded-script-group-label">导入 · 漫画</span>
             <div>
               <button className={`button material-lab-entry ${state.workspaceMode === "materials" ? "active" : ""}`} type="button" onClick={state.workspaceMode === "materials" ? returnToShots : openMaterialLab}>
                 <b>{state.workspaceMode === "materials" ? "返回镜头审核" : materialDraftMode ? "续传漫画" : "漫画转分镜"}</b>
-                <small>{materialDraftMode ? "追加漫画页" : "上传漫画并拆分"}</small>
-              </button>
-              <button className="button secondary load-script-button" onClick={() => setShowLoader((current) => !current)}>
-                {showLoader ? "收起" : "载入脚本"}
+                <small>{materialDraftMode ? "追加漫画页" : "上传漫画 → 裁成单画 → 转分镜/脚本"}</small>
               </button>
             </div>
           </div>
@@ -7141,13 +7151,13 @@ function DirectorDesk() {
         <section className="script-loader" aria-label="载入脚本">
           <div className="loader-heading">
             <span>LOAD SCRIPT</span>
-            <h2>载入新的脚本</h2>
-            <p>可以选择已有文件，也可以直接用自然语言告诉当前写作模型要载入什么。</p>
+            <h2>导入文字 · 生成分镜/脚本</h2>
+            <p>已有分镜/脚本就直接载入（可继续优化）；只有故事的话，交给写作模型整理成逐镜 Shot。</p>
           </div>
           <div className="loader-options">
             <div className="loader-option">
-              <span>方式 01</span>
-              <h3>选择脚本文件</h3>
+              <span>方式 01 · 直接导入</span>
+              <h3>分镜 / 脚本文件</h3>
               <p>JSON 会直接载入；Markdown 或 TXT 会交给当前写作模型自动整理成逐镜 Shot。</p>
               <button className="button secondary" data-working={loadingScript} disabled={bridge.busy || loadingScript} onClick={() => scriptInput.current?.click()}>
                 {loadingScript ? "写作模型正在整理…" : "选择文件"}
@@ -7155,8 +7165,8 @@ function DirectorDesk() {
               <input ref={scriptInput} hidden type="file" accept="application/json,.json,.md,.markdown,.txt,text/plain,text/markdown" onChange={onScriptFile} />
             </div>
             <div className="loader-option natural-loader">
-              <span>方式 02 · 写作模型</span>
-              <h3>用自然语言载入</h3>
+              <span>方式 02 · 故事转分镜</span>
+              <h3>用自然语言描述故事</h3>
               <textarea
                 rows={6}
                 value={naturalScript}

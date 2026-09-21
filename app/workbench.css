@@ -156,8 +156,6 @@ html { scrollbar-gutter: stable; }
 .app-shell .loaded-script-action-group :is(.global-settings-entry, .coverage-entry, .asset-ledger-entry, .material-lab-entry) small { color: var(--muted); }
 .app-shell .loaded-script-action-group :is(.global-settings-entry, .coverage-entry, .asset-ledger-entry, .material-lab-entry):not(:disabled):is(.active, :hover) { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
 .app-shell .loaded-script-action-group .button:disabled { color: #77746d; background: #eeece6; border-color: var(--line); }
-.app-shell .model-switch { min-width: 0; border-color: var(--line-strong); border-radius: var(--control-radius); }
-.app-shell .model-switch button { min-width: 0; padding: 8px 10px; }
 .app-shell .production-pipeline { grid-template-columns: minmax(0, 1fr); background: var(--panel); border-color: var(--line); }
 .app-shell .production-pipeline ol { min-width: 0; grid-template-columns: repeat(7, minmax(132px, 1fr)); }
 .app-shell .production-stage { min-height: 60px; padding: 10px 12px; border-color: var(--line); }
@@ -398,7 +396,6 @@ html { scrollbar-gutter: stable; }
   .app-shell .loaded-script-action-group { padding-left: 0; border-left: 0; }
   .app-shell .workspace-action-group > div { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; }
   .app-shell .import-action-group > div { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; }
-  .app-shell .loaded-script-actions .model-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell .progress-bar { display: block; }
   .app-shell .production-pipeline { grid-template-columns: 1fr; padding: 0; }
   .app-shell .production-pipeline ol { grid-template-columns: repeat(7, 156px); }
