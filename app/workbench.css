@@ -27,7 +27,7 @@ html { scrollbar-gutter: stable; }
 .app-shell { font-size: var(--text-body); line-height: 1.6; }
 .app-shell .topbar { grid-template-columns: minmax(150px, .5fr) minmax(0, 3fr); gap: 20px; padding-inline: var(--page-gutter); border-bottom-width: 3px; }
 .app-shell .topbar-actions { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: center; }
-.topbar-control-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 10px; width: 100%; min-width: 0; }
+.topbar-control-group { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: stretch; gap: 10px; width: 100%; min-width: 0; }
 .topbar-control-group > .desk-mode-switch,
 .topbar-control-group > .writing-model-picker,
 .topbar-control-group > .reasoning-effort-picker {
