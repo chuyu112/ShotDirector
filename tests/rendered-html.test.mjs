@@ -402,7 +402,7 @@ test("groups the project toolbar by workspace and import; video model lives in t
   assert.match(page, /loaded-script-action-group workspace-action-group/);
   assert.doesNotMatch(page, /video-action-group/);
   assert.match(page, /loaded-script-action-group import-action-group/);
-  assert.match(page, /aria-label="视频生成模型"[\s\S]*\{model\.label\} · \{model\.minDuration\}–\{model\.maxDuration\} 秒 · \{model\.limit\} 参考/);
+  assert.match(page, /aria-label="视频生成模型"[\s\S]*\{model\.label\} · \{model\.minDuration\}–\{model\.maxDuration\}秒/);
   assert.match(styles, /\.loaded-script-actions[\s\S]*grid-template-columns:/);
   assert.match(styles, /@media \(max-width: 1500px\)[\s\S]*\.loaded-script \{ grid-template-columns: 1fr; \}/);
 });

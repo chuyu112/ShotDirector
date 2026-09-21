@@ -40,7 +40,7 @@ test('small screens retain a horizontal pipeline and readable stacked generation
   const css = await readFile(new URL('../app/workbench.css', import.meta.url), 'utf8');
   assert.match(css, /--text-body:\s*14px/);
   assert.match(css, /--text-help:\s*12px/);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*\.production-pipeline ol\s*\{[^}]*repeat\(7, 156px\)/);
+  assert.match(css, /@media \(max-width: 900px\)[\s\S]*\.production-pipeline ol\s*\{[^}]*repeat\(8, 156px\)/);
   assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.complete-shot-generation-status[^{}]*\{[^}]*grid-template-columns: 1fr/);
   assert.match(css, /\.director-recipe-grid button\.active\s*\{[^}]*background: var\(--blue-soft\)/);
 });

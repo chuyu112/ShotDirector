@@ -7048,7 +7048,7 @@ function DirectorDesk() {
               ))}
             </div>
           </details>
-          <label className="reasoning-effort-picker generation-model-picker" title="决定视频生成阶段每个 Shot 可用的参考图上限与默认时长">
+          <label className="reasoning-effort-picker generation-model-picker" title="视频模型：决定视频生成阶段每个 Shot 的默认时长与可用参考图上限（Seedance 2.0 上限 9 个，2.5 上限 50 个）">
             <span>视频模型</span>
             <select
               aria-label="视频生成模型"
@@ -7057,12 +7057,11 @@ function DirectorDesk() {
               onChange={(event) => selectGenerationModel(event.target.value as GenerationModel)}
             >
               {generationModels.map((model) => (
-                <option key={model.id} value={model.id}>{model.label} · {model.minDuration}–{model.maxDuration} 秒 · {model.limit} 参考</option>
+                <option key={model.id} value={model.id}>{model.label} · {model.minDuration}–{model.maxDuration}秒</option>
               ))}
             </select>
-            <small>决定视频阶段参考上限与默认时长</small>
           </label>
-          <label className="reasoning-effort-picker" title="Chat / Work 可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
+          <label className="reasoning-effort-picker" title="推理深度：Chat / Work 可调；拆图固定 LOW，逐 Shot 完整提示词和严格审核固定 MAX">
             <span>推理深度</span>
             <select
               aria-label="Chat / Work 推理深度"
@@ -7074,7 +7073,6 @@ function DirectorDesk() {
               <option value="high">HIGH · 深度</option>
               <option value="max">MAX · 最大</option>
             </select>
-            <small>拆图 LOW · 单镜提示词/审核 MAX</small>
           </label>
           </div>
           <div className={`save-status ${materialDraftMode ? "draft-mode" : ""}`}><i />{materialDraftMode ? "素材分析草稿 · 独立保存" : !hydrated || !projectArchiveLoaded ? "读取项目存档" : tenantScope.mode === "server" ? "服务器项目自动保存" : "本机自动保存"}</div>
