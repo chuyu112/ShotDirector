@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "../app/production-core.mjs";
+import { buildProjectManifest, buildProjectScript, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "../app/production-core.mjs";
 import { buildCompleteShotPromptRevision, buildShotUpstreamRevision, buildVideoGenerationPackage } from "../app/video-package.ts";
 
 const revisionGlobalSettings = {
@@ -130,6 +130,46 @@ test("manifest separates stable shot identity from editable display number", () 
   });
   assert.equal(manifest.shots[0].shotUid, shotUid);
   assert.equal(manifest.shots[0].displayNumber, "07");
+});
+
+test("project script export carries global settings and full shot content", () => {
+  const projectUid = ensureProjectUid("", "chapter-03");
+  const script = buildProjectScript({
+    projectUid,
+    projectTitle: "城市猎人 第8话",
+    sourceName: "chapter-03.png",
+    generationModel: "seedance-2.5",
+    globalSettings: { storyBackground: "硬派都市", finalVideoStyle: "写实胶片" },
+    shots: [{
+      shotUid: ensureShotUid("", projectUid, "03::P01-G01"),
+      displayNumber: "03",
+      title: "天台对峙",
+      sourcePanels: ["P01-G01"],
+      annotations: { characters: "冴羽獠", story: "獠在天台堵住目标", director: "", style: "黑白墨线" },
+      shot: {
+        id: "03", timecode: "00:30–00:45", duration: 15, title: "天台对峙",
+        story: "獠在天台堵住目标", scene: "废弃天台", characters: ["獠"], props: ["香烟"],
+        composition: "低机位仰拍", camera: "缓慢推近", action: "獠抬手", dialogue: ["站住"],
+        continuity: ["上一镜雨停"], negative: ["不要彩色"], artStyle: "黑白墨线", segments: [],
+      },
+      completePrompt: "完整提示词正文…",
+      completePromptSummary: "摘要",
+      approved: true,
+      approvedAt: "2026-09-22T00:00:00.000Z",
+    }],
+  });
+  assert.equal(script.project.title, "城市猎人 第8话");
+  assert.deepEqual(script.globalSettings, { storyBackground: "硬派都市", finalVideoStyle: "写实胶片" });
+  const shot = script.shots[0];
+  assert.equal(shot.displayNumber, "03");
+  assert.equal(shot.script["人物"], "冴羽獠");
+  assert.equal(shot.script["剧情"], "獠在天台堵住目标");
+  assert.equal(shot.script["美术风格"], "黑白墨线");
+  assert.equal(shot.script["DIRECTOR VIEW"], undefined);
+  assert.equal(shot.shot.camera, "缓慢推近");
+  assert.deepEqual(shot.shot.dialogue, ["站住"]);
+  assert.equal(shot.completePrompt, "完整提示词正文…");
+  assert.equal(shot.approved, true);
 });
 
 test("shot revisions survive display id and timecode changes for one stable shotUid", () => {

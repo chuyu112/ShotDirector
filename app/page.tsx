@@ -7,8 +7,8 @@ import { defaultArtStyle, inferredVideoArtStyle, legacyStoryboardArtStyle, mista
 import { buildCoverageReport, changedShotFields, defaultDirectorRecipeId, directorRecipes, getDirectorRecipe, sourceDocumentFromShots, sourceTextForShot, type CoverageStatus } from "./director-workflow";
 import { MediaLab, type MediaAnalysisResult } from "./media-lab";
 import { buildCompleteShotPromptRevision, buildPromptReviewRevision, buildShotUpstreamRevision, buildVideoGenerationPackage, type VideoGenerationPackage, type VideoPackageStatus } from "./video-package";
-import { buildProjectManifest, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
-import { MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
+import { buildProjectScript, deriveProductionPipeline, ensureProjectUid, ensureShotUid } from "./production-core.mjs";
+import { MANJING_RENAME_PROJECT_EVENT, MANJING_SAVE_PROJECT_EVENT, ManjingAuthGate, manjingScopedBrowserStorage, manjingSessionFetch, useManjingWorkspaceScope, type ManjingRenameProjectEventDetail, type ManjingSaveProjectEventDetail } from "./manjing-auth-client";
 import { WhiteboxEditor } from "./whitebox-stage";
 import { ShotChat, useShotChatRecovery, type ShotChatState, type ShotChatPending, type ShotChatResult } from "./shot-chat";
 import { pendingShotChats, type ShotChatRecoveryTarget } from './shot-chat-recovery.mjs';
@@ -2062,8 +2062,6 @@ function DirectorDesk() {
   const [bridge, setBridge] = useState<BridgeState>({ connected: false, busy: false });
   const [artworkRecord, setArtworkRecord] = useState<{ shotId: string; dataUrls: string[] }>({ shotId: "", dataUrls: [] });
   const [toast, setToast] = useState("");
-  const [editingProjectTitle, setEditingProjectTitle] = useState(false);
-  const [projectTitleDraft, setProjectTitleDraft] = useState("");
   const [showLoader, setShowLoader] = useState(false);
   const [loadingScript, setLoadingScript] = useState(false);
   const [switchingWritingModelId, setSwitchingWritingModelId] = useState<WritingModelId | "">("");
@@ -2485,25 +2483,17 @@ function DirectorDesk() {
     });
   }
 
-  function beginRenameProject() {
-    setProjectTitleDraft(state.projectTitle);
-    setEditingProjectTitle(true);
-  }
-
-  function cancelRenameProject() {
-    setProjectTitleDraft("");
-    setEditingProjectTitle(false);
-  }
-
-  function renameProject() {
-    const nextTitle = projectTitleDraft.trim();
-    if (!nextTitle) {
-      setToast("项目名称不能为空");
-      return;
-    }
-    if (nextTitle === state.projectTitle) {
-      cancelRenameProject();
-      return;
+  async function renameProjectNow(detail: ManjingRenameProjectEventDetail) {
+    const nextTitle = detail.name.trim();
+    if (!nextTitle) throw new Error("项目名称不能为空");
+    if (tenantScope.mode === "server") {
+      const response = await bridgeFetch(`${bridgeBase}/projects/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: detail.projectId, name: nextTitle }),
+      });
+      const payload = await response.json().catch(() => undefined) as { error?: string } | undefined;
+      if (!response.ok) throw new Error(payload?.error || "改名失败，请检查连接后重试。");
     }
     setState((previous) => ({
       ...previous,
@@ -2512,9 +2502,7 @@ function DirectorDesk() {
       structureStatus: "draft",
       structureConfirmedAt: undefined,
     }));
-    setEditingProjectTitle(false);
-    setProjectTitleDraft("");
-    setToast(`项目已改名为《${nextTitle}》；旧提示词已标记为待更新`);
+    return `项目已改名为《${nextTitle}》${tenantScope.mode === "server" ? "，服务器已同步" : ""}`;
   }
 
   useEffect(() => {
@@ -5187,43 +5175,36 @@ function DirectorDesk() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
-  function downloadProjectManifest() {
-    const packagesByShot = new Map(videoPackages.map((item) => [item.shotId, item]));
+  function downloadProjectScript() {
     const payload = {
-      ...buildProjectManifest({
+      ...buildProjectScript({
         projectUid: state.projectUid,
         projectTitle: state.projectTitle,
         sourceName: state.sourceName,
-        sourceMangaRequestId: state.sourceMangaRequestId,
         generationModel,
-        pipeline: productionPipeline,
-        shots: state.reviews.map((item) => {
-          const videoPackage = packagesByShot.get(item.shot.id);
-          return {
-            shotUid: item.shot.shotUid,
-            displayNumber: item.shot.id,
-            title: item.shot.title,
-            sourcePanels: item.shot.sourcePanels || [],
-            scriptStatus: item.scriptStatus,
-            completePromptStatus: item.completePromptStatus || "empty",
-            promptReviewStatus: item.promptReviewStatus || "empty",
-            promptReviewVerdict: item.promptReviewReport?.verdict,
-            approved: item.approved,
-            approvedAt: item.approvedAt,
-            videoPackageStatus: videoPackage?.status || "blocked",
-            sourceRevision: videoPackage?.sourceRevision,
-          };
-        }),
+        globalSettings: state.globalSettings,
+        shots: state.reviews.map((item) => ({
+          shotUid: item.shot.shotUid,
+          displayNumber: item.shot.id,
+          title: item.shot.title,
+          sourcePanels: item.shot.sourcePanels || [],
+          annotations: item.annotations,
+          shot: item.shot,
+          completePrompt: item.completePrompt,
+          completePromptSummary: item.completePromptSummary,
+          approved: item.approved,
+          approvedAt: item.approvedAt,
+        })),
       }),
       exportedAt: new Date().toISOString(),
     };
     const url = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${state.projectTitle}-manifest.json`.replace(/[\\/:*?"<>|]/g, "-");
+    anchor.download = `${state.projectTitle}-脚本.json`.replace(/[\\/:*?"<>|]/g, "-");
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    setToast("项目清单已导出；它将作为后续项目包与 LibTV 生视频的身份依据");
+    setToast("项目脚本已导出：含全局美术风格与全部 Shot 正文");
   }
 
   function returnToShots() {
@@ -5433,7 +5414,6 @@ function DirectorDesk() {
       scopeId: projectScopeId || "main", storageKey: activeStorageKey,
       appliedAgentRevision: appliedAgentDraftRevision.current,
       pairingToken: bridge.pairingToken, materialDraftMode, workspaceScope,
-      serverProjectId: tenantScope.mode === "server" ? tenantScope.projectId : undefined,
       signal: detail.signal, onProgress: detail.onProgress,
     });
   }
@@ -5449,6 +5429,19 @@ function DirectorDesk() {
     };
     window.addEventListener(MANJING_SAVE_PROJECT_EVENT, receiveSaveProject);
     return () => window.removeEventListener(MANJING_SAVE_PROJECT_EVENT, receiveSaveProject);
+  });
+
+  useEffect(() => {
+    const receiveRenameProject = (event: Event) => {
+      const detail = (event as CustomEvent<ManjingRenameProjectEventDetail>).detail;
+      if (!detail) return;
+      detail.handled = true;
+      void renameProjectNow(detail).then(detail.resolve).catch((error) => {
+        detail.reject(error instanceof Error ? error.message : "改名失败");
+      });
+    };
+    window.addEventListener(MANJING_RENAME_PROJECT_EVENT, receiveRenameProject);
+    return () => window.removeEventListener(MANJING_RENAME_PROJECT_EVENT, receiveRenameProject);
   });
 
   async function saveGlobalSettings() {
@@ -7079,26 +7072,9 @@ function DirectorDesk() {
           <span>当前项目</span>
           <div className="loaded-script-title-line">
             <div className="project-title-row">
-              {editingProjectTitle ? (
-                <form className="project-title-form" onSubmit={(event) => { event.preventDefault(); renameProject(); }}>
-                  <input
-                    autoFocus
-                    aria-label="项目名称"
-                    value={projectTitleDraft}
-                    onChange={(event) => setProjectTitleDraft(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Escape") cancelRenameProject(); }}
-                  />
-                  <button className="project-title-edit" type="submit">保存</button>
-                  <button className="project-title-edit" type="button" onClick={cancelRenameProject}>取消</button>
-                </form>
-              ) : (
-                <>
-                  <h1>{state.projectTitle}</h1>
-                  <button className="project-title-edit" type="button" onClick={beginRenameProject} aria-label="修改项目名称">修改名称</button>
-                </>
-              )}
+              <h1>{state.projectTitle}</h1>
             </div>
-            <button className="project-manifest-button" type="button" onClick={downloadProjectManifest}>导出清单</button>
+            <button className="project-manifest-button" type="button" onClick={downloadProjectScript}>导出脚本</button>
           </div>
           <small>{state.reviews.length} SHOTS <i aria-hidden="true">·</i> {state.projectUid}</small>
         </div>

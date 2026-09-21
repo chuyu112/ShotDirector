@@ -34,7 +34,9 @@ export function requestProjectSave(target, eventName, { timeoutMs = projectSaveT
 
 // Snapshot is an immutable save input, never state to reapply on completion.
 // AI results and user edits may arrive while these requests are in flight.
-export async function persistProjectSnapshot({ fetcher, apiBase, snapshot, scopeId, storageKey, appliedAgentRevision, pairingToken, materialDraftMode, workspaceScope, serverProjectId, signal, onProgress = () => {} }) {
+// Saving persists content only; the server project name is owned by the
+// explicit rename flow (MANJING_RENAME_PROJECT_EVENT), never by saving.
+export async function persistProjectSnapshot({ fetcher, apiBase, snapshot, scopeId, storageKey, appliedAgentRevision, pairingToken, materialDraftMode, workspaceScope, signal, onProgress = () => {} }) {
   async function post(path, body, stage) {
     signal?.throwIfAborted();
     onProgress(stage);
@@ -54,14 +56,7 @@ export async function persistProjectSnapshot({ fetcher, apiBase, snapshot, scope
   if (!materialDraftMode) {
     await post("/source-global-settings", { projectTitle: snapshot.projectTitle, workspaceScope, settings: snapshot.globalSettings }, "正在保存项目设定…");
   }
-  let savedProjectName = snapshot.projectTitle;
-  if (serverProjectId) {
-    const result = await post("/projects/rename", {
-      projectId: serverProjectId,
-      name: snapshot.projectTitle,
-      appendDate: true,
-    }, "正在保存项目名称…");
-    savedProjectName = result?.project?.name || savedProjectName;
-  }
-  return `项目《${savedProjectName}》已保存${serverProjectId ? "到服务器" : "到本地"}`;
+  const savedProjectName = snapshot.projectTitle;
+  const savedWhere = workspaceScope?.mode === "server" ? "到服务器" : "到本地";
+  return `项目《${savedProjectName}》已保存${savedWhere}`;
 }

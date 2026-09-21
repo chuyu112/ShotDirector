@@ -56,6 +56,49 @@ const authStorageSignalKey = "manjing-auth-signal-v1";
 export const MANJING_SESSION_INVALID_EVENT = "manjing-session-invalid";
 export const MANJING_SAVE_PROJECT_EVENT = "manjing-save-project";
 export type ManjingSaveProjectEventDetail = SaveProjectDetail;
+export const MANJING_RENAME_PROJECT_EVENT = "manjing-rename-project";
+export type ManjingRenameProjectEventDetail = {
+  handled: boolean;
+  projectId: string;
+  name: string;
+  resolve: (message?: string) => void;
+  reject: (message: string) => void;
+};
+
+export function requestProjectRename(
+  target: Window,
+  detail: { projectId: string; name: string },
+  { timeoutMs = 15_000 } = {},
+) {
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      finishReject(new Error("改名超时，请检查连接后重试。"));
+    }, timeoutMs);
+    const eventDetail: ManjingRenameProjectEventDetail = {
+      handled: false,
+      projectId: detail.projectId,
+      name: detail.name,
+      resolve: (message) => {
+        clearTimeout(timer);
+        resolve(message || "项目名称已更新");
+      },
+      reject: (message) => {
+        clearTimeout(timer);
+        reject(new Error(message || "改名失败"));
+      },
+    };
+    function finishReject(error: Error) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    try {
+      target.dispatchEvent(new CustomEvent(MANJING_RENAME_PROJECT_EVENT, { detail: eventDetail }));
+      if (!eventDetail.handled) finishReject(new Error("项目工作区尚未准备好"));
+    } catch (error) {
+      finishReject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
 const ManjingWorkspaceScopeContext = createContext<ManjingWorkspaceScope | null>(null);
 
 function safeScopePart(value: string) {
@@ -164,6 +207,9 @@ export function ManjingAuthGate({
   const [projectNameDialogOpen, setProjectNameDialogOpen] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [projectNameError, setProjectNameError] = useState("");
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState("");
   const requestSequence = useRef(0);
   const activeSessionRequest = useRef<number | null>(null);
   const authChannel = useRef<BroadcastChannel | null>(null);
@@ -479,6 +525,38 @@ export function ManjingAuthGate({
     );
   }
 
+  async function renameProject() {
+    const name = renameDraft.trim();
+    if (!name) {
+      setRenameError("请输入项目名称。");
+      return;
+    }
+    if (gate.status !== "authenticated") return;
+    if (projectBusy) return;
+    setProjectBusy(true);
+    setSessionError("");
+    setProjectNotice("");
+    setRenameError("");
+    try {
+      const message = await requestProjectRename(window, {
+        projectId: gate.activeProject.id,
+        name,
+      });
+      setRenameDialogOpen(false);
+      setRenameDraft("");
+      setProjectNotice(message);
+      publishAuthSignal("session-changed");
+      // Refresh the project dropdown so the new name shows up immediately.
+      void loadSession({ background: true, force: true });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error || "改名失败，请重试。");
+      setRenameError(messageText);
+      setSessionError(messageText);
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
   if (gate.status === "authenticated") {
     const accountName = gate.user.displayName?.trim() || gate.user.email;
     const workspaceScope = serverWorkspaceScope(gate.user.id, gate.activeProject.id, gate.user.role);
@@ -503,6 +581,19 @@ export function ManjingAuthGate({
               </button>
               <button type="button" disabled={projectBusy || !(selectedProjectId || gate.activeProject.id)} onClick={() => void activateProject(selectedProjectId || gate.activeProject.id)}>加载项目</button>
               <button type="button" data-working={projectBusy} disabled={projectBusy} onClick={() => void saveProject()}>{projectSaveStage || (projectBusy ? "处理中…" : "保存项目")}</button>
+              <button
+                type="button"
+                disabled={projectBusy}
+                onClick={() => {
+                  setSessionError("");
+                  setProjectNotice("");
+                  setRenameDraft(gate.activeProject.name);
+                  setRenameError("");
+                  setRenameDialogOpen(true);
+                }}
+              >
+                修改名称
+              </button>
             </div>
             <div className="manjing-server-account">
               <span className={gate.user.role === "superadmin" ? "superadmin-badge" : undefined}>
@@ -539,6 +630,28 @@ export function ManjingAuthGate({
               setProjectNameError("");
             }}
             onConfirm={() => void createProject()}
+          />
+          <TextInputDialog
+            open={renameDialogOpen}
+            title="修改名称"
+            description="立即同步到服务器，顶部下拉框与左侧标题会同时更新；不需要再点保存。"
+            label="项目名称"
+            value={renameDraft}
+            placeholder={gate.activeProject.name}
+            confirmLabel="保存名称"
+            busyLabel="正在保存…"
+            busy={projectBusy}
+            error={renameError}
+            onChange={(value) => {
+              setRenameDraft(value);
+              if (renameError) setRenameError("");
+            }}
+            onCancel={() => {
+              setRenameDialogOpen(false);
+              setRenameDraft("");
+              setRenameError("");
+            }}
+            onConfirm={() => void renameProject()}
           />
         </div>
       </ManjingWorkspaceScopeContext.Provider>

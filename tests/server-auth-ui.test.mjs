@@ -89,6 +89,9 @@ test("auth gate covers session, registration, login and logout", async () => {
   assert.match(auth, /加载项目/);
   assert.match(auth, /保存项目/);
   assert.match(auth, /MANJING_SAVE_PROJECT_EVENT/);
+  assert.match(auth, /MANJING_RENAME_PROJECT_EVENT/);
+  assert.match(auth, />\s*修改名称\s*<\/button>/);
+  assert.match(auth, /title="修改名称"/);
   assert.match(auth, /gate\.user\.role === "superadmin"/);
   assert.match(auth, /SUPER ADMIN/);
   assert.match(auth, /ManjingWorkspaceScopeContext\.Provider/);
@@ -111,6 +114,7 @@ test("project and global-file naming use an accessible in-app dialog instead of 
   assert.doesNotMatch(auth, /window\.prompt\(/);
   assert.doesNotMatch(page.slice(page.indexOf("async function saveGlobalFile"), page.indexOf("async function loadGlobalFile")), /window\.prompt\(/);
   assert.match(auth, /<TextInputDialog[\s\S]*?title="新建项目"[\s\S]*?onConfirm=\{\(\) => void createProject\(\)\}/);
+  assert.match(auth, /<TextInputDialog[\s\S]*?title="修改名称"[\s\S]*?onConfirm=\{\(\) => void renameProject\(\)\}/);
   assert.match(page, /<TextInputDialog[\s\S]*?title=\{globalFileNameDialog\.createNew/);
   assert.match(dialog, /role="dialog"/);
   assert.match(dialog, /aria-modal="true"/);

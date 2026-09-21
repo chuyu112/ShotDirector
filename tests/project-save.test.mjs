@@ -6,7 +6,7 @@ import { persistProjectSnapshot, requestProjectSave } from "../app/project-save.
 const setup = () => ({
   apiBase: "/api", snapshot: { projectTitle: "城市猎人", globalSettings: { storyBackground: "keep" }, reviews: [{ completePrompt: "keep" }] },
   scopeId: "chapter", storageKey: "draft", appliedAgentRevision: "v2", pairingToken: "test-only",
-  materialDraftMode: true, workspaceScope: "material-draft", serverProjectId: "project-1", signal: new AbortController().signal,
+  materialDraftMode: true, workspaceScope: "material-draft", signal: new AbortController().signal,
 });
 
 test("successful save acknowledges writes only, preserves snapshots and reports stages", async () => {
@@ -21,16 +21,13 @@ test("successful save acknowledges writes only, preserves snapshots and reports 
       assert.equal(body.state.reviews[0].completePrompt, "keep");
       assert.equal(body.appliedAgentRevision, "v2");
     }
-    if (url.endsWith("projects/rename")) {
-      assert.equal(body.appendDate, true);
-      return Response.json({ status: "saved", project: { name: "城市猎人 2026-09-06" } });
-    }
     return Response.json({ status: "saved" });
   } });
-  assert.match(result, /已保存到服务器/);
-  assert.match(result, /城市猎人 2026-09-06/);
-  assert.deepEqual(calls, ["/api/draft-state", "/api/projects/rename"]);
-  assert.equal(stages.length, 2);
+  assert.match(result, /已保存/);
+  assert.match(result, /城市猎人/);
+  assert.doesNotMatch(result, /20\d\d-\d\d-\d\d/);
+  assert.deepEqual(calls, ["/api/draft-state"]);
+  assert.equal(stages.length, 1);
   assert.equal(JSON.stringify(input.snapshot), before);
 });
 
@@ -92,4 +89,24 @@ test("manual save neither reapplies stale UI state nor waits for account refresh
   assert.doesNotMatch(save, /await loadSession/);
   assert.match(save, /finally[\s\S]*setProjectBusy\(false\)/);
   assert.match(auth, /if \(background\)[\s\S]*?当前工作区保留[\s\S]*?return/);
+});
+
+test("rename lives in the top bar, syncs the server without a date suffix, and saving never renames", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const auth = await readFile(new URL("../app/manjing-auth-client.tsx", import.meta.url), "utf8");
+  const saveModule = await readFile(new URL("../app/project-save.mjs", import.meta.url), "utf8");
+
+  // Toolbar owns the rename entry, next to 新建/加载/保存.
+  assert.match(auth, /保存项目[\s\S]*?修改名称/);
+  assert.match(auth, /MANJING_RENAME_PROJECT_EVENT = "manjing-rename-project"/);
+  assert.match(auth, /requestProjectRename/);
+
+  // Page answers the rename event and POSTs a clean rename (no appendDate).
+  assert.match(page, /window\.addEventListener\(MANJING_RENAME_PROJECT_EVENT, receiveRenameProject\)/);
+  assert.match(page, /\/projects\/rename/);
+  assert.doesNotMatch(page, /appendDate/);
+  assert.doesNotMatch(page, /beginRenameProject|cancelRenameProject|editingProjectTitle|projectTitleDraft/);
+
+  // Saving must not touch the project name.
+  assert.doesNotMatch(saveModule, /projects\/rename|appendDate|serverProjectId/);
 });

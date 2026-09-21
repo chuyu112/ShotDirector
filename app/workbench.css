@@ -148,7 +148,7 @@ html { scrollbar-gutter: stable; }
 .app-shell .loaded-script-title-line { flex-wrap: wrap; gap: 6px 12px; }
 .app-shell .loaded-script-copy small { font-size: 11px; font-weight: 500; }
 .app-shell .loaded-script-group-label { font-size: 11px; font-weight: 600; }
-.app-shell .project-title-edit, .app-shell .project-manifest-button { min-height: 28px; font-size: 11px; font-weight: 600; }
+.app-shell .project-manifest-button { min-height: 28px; font-size: 11px; font-weight: 600; }
 .app-shell .project-manifest-button { border-radius: var(--control-radius); border-color: var(--line); }
 .app-shell .loaded-script-action-group b { font-size: 13px; line-height: 1.4; }
 .app-shell .loaded-script-action-group small { font-size: 11px; font-weight: 400; line-height: 1.5; }
