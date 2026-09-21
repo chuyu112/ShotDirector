@@ -158,16 +158,12 @@ html { scrollbar-gutter: stable; }
 .app-shell .loaded-script-action-group .button:disabled { color: #77746d; background: #eeece6; border-color: var(--line); }
 .app-shell .model-switch { min-width: 0; border-color: var(--line-strong); border-radius: var(--control-radius); }
 .app-shell .model-switch button { min-width: 0; padding: 8px 10px; }
-.app-shell .production-pipeline { grid-template-columns: 170px minmax(0, 1fr); background: var(--panel); border-color: var(--line); }
-.app-shell .production-pipeline-heading { padding: 12px 16px; border-color: var(--line); }
-.app-shell .production-pipeline-heading span { font-size: 10px; }
-.app-shell .production-pipeline-heading b { font-size: 12px; font-weight: 600; }
+.app-shell .production-pipeline { grid-template-columns: minmax(0, 1fr); background: var(--panel); border-color: var(--line); }
 .app-shell .production-pipeline ol { min-width: 0; grid-template-columns: repeat(7, minmax(132px, 1fr)); }
 .app-shell .production-stage { min-height: 60px; padding: 10px 12px; border-color: var(--line); }
 .app-shell .production-stage b { font-size: 12px; font-weight: 650; }
 .app-shell .production-stage small { font-size: 11px; line-height: 1.5; }
 .app-shell .production-stage > i { width: 24px; height: 24px; font-size: 10px; }
-.app-shell .production-stage.ready { background: var(--blue-soft); }
 .app-shell .progress-bar { grid-template-columns: 180px minmax(0, 1fr) 180px; background: var(--surface-muted); }
 .app-shell .progress-copy, .app-shell .single-rule { padding: 10px 18px; }
 .app-shell .single-rule b { font-size: 12px; font-weight: 500; color: var(--muted); }
@@ -405,7 +401,6 @@ html { scrollbar-gutter: stable; }
   .app-shell .loaded-script-actions .model-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell .progress-bar { display: block; }
   .app-shell .production-pipeline { grid-template-columns: 1fr; padding: 0; }
-  .app-shell .production-pipeline-heading { border-right: 0; padding: 8px var(--page-gutter); }
   .app-shell .production-pipeline ol { grid-template-columns: repeat(7, 156px); }
   .app-shell .production-stage { min-height: 60px; }
   .app-shell .strict-review-grid { grid-template-columns: 1fr; }

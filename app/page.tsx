@@ -7127,7 +7127,6 @@ function DirectorDesk() {
       </section>
 
       <section className="production-pipeline" aria-label="漫画到提示词终稿工作阶段">
-        <div className="production-pipeline-heading"><span>PRODUCTION</span><b>全局定义 → 上传漫画 → 裁剪漫画 → 分析漫画 → 组合分镜 → 生成提示词 → 严格审核 → 确认终稿</b></div>
         <ol>
           {productionPipeline.map((stage, index) => (
             <li className={`production-stage ${stage.status}`} key={stage.id} title={stage.detail}>
