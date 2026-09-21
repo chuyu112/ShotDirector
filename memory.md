@@ -1,5 +1,13 @@
 # 漫镜（Manjing）项目记忆
 
+## 2026-09-22 顶栏改名即时同步 + 导出脚本（已推送并部署）
+
+- 「修改名称」从左侧卡片挪入顶栏（与 选择/新建/加载/保存 同组），经 `MANJING_RENAME_PROJECT_EVENT` 由页面 POST `/projects/rename`（不带 appendDate），成功后立即刷新下拉框；左侧标题与顶栏下拉框永远一致。根因是旧链路两处各改各的：本地只改 state，保存时才带 `appendDate: true` 改名，产生「第7话 vs 第7话 2026-09-22」不一致。
+- 保存不再改项目名：`persistProjectSnapshot` 删除 `serverProjectId` 参数与 rename POST，只写内容。
+- 「导出清单」改名「导出脚本」：新增 `buildProjectScript`（production-core.mjs），导出《项目名-脚本.json》，含全局美术设定全部字段 + 每镜脚本七段正文 + 结构化镜头字段 + 完整提示词与审批状态。旧 `buildProjectManifest` 保留，仍服务 agent 契约。
+- 提交 `32ef1d0baeeff72b884050d5f50c2a51d550dc03` 于 **2026-09-22 06:34（Asia/Shanghai）** 发布为 `20260921T222955Z-32ef1d0`（分层构建，424 文件校验通过，镜像 `sha256:837bb7f5…`）；上一版 `20260919T223930Z-720832f` 保留回滚，更旧的 `1d4d37c`、`d7b4df1` 已清理。冒烟全绿（Creator 拆镜 2 个 + Reviewer 金丝雀）。
+- 全量 334 项 + harness 34 项通过；容器内确认前端 bundle 含 `manjing-rename-project` 与「导出脚本」，服务端 bundle `appendDate` 为 0。详见 `docs/2026-09-22-顶栏改名与导出脚本部署.md`。
+
 ## 2026-09-20 代码审查四项修复（已推送并部署）
 
 - 以 `40b19d0` 为当前基线修复审查发现的四个问题：生产冒烟临时密钥文件权限过宽、真实 Provider 的完整空响应未进入重试、隔离角色仍落盘会话、Shot 卡片长状态覆盖标题。
