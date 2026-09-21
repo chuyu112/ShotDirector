@@ -2379,6 +2379,7 @@ function DirectorDesk() {
     analyzedPanelCount: Object.keys(state.sourceMangaPanels || {}).length,
     structureConfirmed,
     shotCount: state.reviews.length,
+    artworkReadyCount: state.reviews.filter((item) => item.artworkStatus === "ready" || Boolean(item.artworkNames?.length || item.artworkName)).length,
     scriptAppliedCount: state.reviews.filter((item) => item.scriptStatus === "applied").length,
     promptReadyCount: state.reviews.filter((item) => item.completePromptStatus === "ready" && item.completePrompt?.trim()).length,
     promptReviewedCount: state.reviews.filter((item) => {

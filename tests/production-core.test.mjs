@@ -123,16 +123,31 @@ test("text-imported projects skip the manga-only stages", () => {
     hasMangaUpload: false,
     structureConfirmed: true,
     shotCount: 2,
+    artworkReadyCount: 1,
     promptReadyCount: 2,
     promptReviewedCount: 2,
     approvedCount: 0,
   });
-  assert.deepEqual(pipeline.map((stage) => stage.id), ["global", "script", "group", "prompt", "review", "confirm"]);
+  assert.deepEqual(pipeline.map((stage) => stage.id), ["global", "script", "group", "artwork", "prompt", "review", "confirm"]);
   assert.equal(pipeline.find((stage) => stage.id === "script")?.status, "completed");
+  assert.equal(pipeline.find((stage) => stage.id === "artwork")?.status, "active");
+  assert.match(pipeline.find((stage) => stage.id === "artwork")?.detail || "", /不出图也能继续/);
   assert.equal(pipeline.find((stage) => stage.id === "confirm")?.status, "active");
 
+  const done = deriveProductionPipeline({
+    hasGlobalDefinition: true,
+    hasMangaUpload: false,
+    structureConfirmed: true,
+    shotCount: 2,
+    artworkReadyCount: 2,
+    promptReadyCount: 2,
+    promptReviewedCount: 2,
+    approvedCount: 2,
+  });
+  assert.equal(done.find((stage) => stage.id === "artwork")?.status, "completed");
+
   const empty = deriveProductionPipeline({ hasGlobalDefinition: false, hasMangaUpload: false, shotCount: 0 });
-  assert.deepEqual(empty.map((stage) => stage.id), ["global", "script", "group", "prompt", "review", "confirm"]);
+  assert.deepEqual(empty.map((stage) => stage.id), ["global", "script", "group", "artwork", "prompt", "review", "confirm"]);
   assert.equal(empty.find((stage) => stage.id === "script")?.status, "active");
 });
 
