@@ -51,6 +51,19 @@ export function deriveProductionPipeline(input) {
     && approvedCount <= promptReadyCount
     && approvedCount <= promptReviewedCount;
 
+  // Text-imported projects never touch manga pages, so the strip shows the
+  // script path instead of three permanently-pending manga stages.
+  if (!hasMangaUpload) {
+    return [
+      stage("global", "全局定义", hasGlobalDefinition ? "completed" : "active", hasGlobalDefinition ? "故事背景与最终风格已定义" : "先定义故事背景与最终风格", hasGlobalDefinition ? 1 : 0),
+      stage("script", "载入脚本", shotCount > 0 ? "completed" : "active", shotCount > 0 ? `${shotCount} 个 Shot 已载入` : "等待载入故事或分镜脚本", shotCount),
+      stage("group", "组合分镜", shotCount === 0 ? "pending" : structureConfirmed ? "completed" : "active", structureConfirmed ? `${shotCount} 个 Shot 组合已确认` : "等待检查和确认 Shot 组合", shotCount),
+      stage("prompt", "生成提示词", !structureConfirmed ? "pending" : shotCount > 0 && promptReadyCount === shotCount ? "completed" : "active", `${promptReadyCount}/${shotCount} 镜完整提示词已生成`, promptReadyCount),
+      stage("review", "审核", !promptReadyCount ? "pending" : shotCount > 0 && promptReviewedCount === shotCount ? "completed" : "active", `${promptReviewedCount}/${shotCount} 镜通过独立 AI Reviewer；保留联网证据`, promptReviewedCount),
+      stage("confirm", "确认终稿", !promptReviewedCount || !approvalChainValid ? "pending" : shotCount > 0 && approvedCount === shotCount ? "completed" : "active", `${approvedCount}/${shotCount} 镜已由用户确认终稿`, approvedCount),
+    ];
+  }
+
   return [
     stage("global", "全局定义", hasGlobalDefinition ? "completed" : "active", hasGlobalDefinition ? "故事背景与最终风格已定义" : "先定义故事背景与最终风格", hasGlobalDefinition ? 1 : 0),
     stage("upload", "上传漫画", !hasGlobalDefinition ? "pending" : hasMangaUpload ? "completed" : "active", hasMangaUpload ? "漫画原图已保存" : "等待上传漫画原图", hasMangaUpload ? 1 : 0),

@@ -117,6 +117,25 @@ test("pipeline follows the eight durable comic-to-final-prompt stages", () => {
   assert.equal(pipeline.find((stage) => stage.id === "confirm")?.status, "active");
 });
 
+test("text-imported projects skip the manga-only stages", () => {
+  const pipeline = deriveProductionPipeline({
+    hasGlobalDefinition: true,
+    hasMangaUpload: false,
+    structureConfirmed: true,
+    shotCount: 2,
+    promptReadyCount: 2,
+    promptReviewedCount: 2,
+    approvedCount: 0,
+  });
+  assert.deepEqual(pipeline.map((stage) => stage.id), ["global", "script", "group", "prompt", "review", "confirm"]);
+  assert.equal(pipeline.find((stage) => stage.id === "script")?.status, "completed");
+  assert.equal(pipeline.find((stage) => stage.id === "confirm")?.status, "active");
+
+  const empty = deriveProductionPipeline({ hasGlobalDefinition: false, hasMangaUpload: false, shotCount: 0 });
+  assert.deepEqual(empty.map((stage) => stage.id), ["global", "script", "group", "prompt", "review", "confirm"]);
+  assert.equal(empty.find((stage) => stage.id === "script")?.status, "active");
+});
+
 test("manifest separates stable shot identity from editable display number", () => {
   const projectUid = ensureProjectUid("", "chapter-02");
   const shotUid = ensureShotUid("", projectUid, "P02-G01");

@@ -7135,7 +7135,7 @@ function DirectorDesk() {
       </section>
 
       <section className="production-pipeline" aria-label="漫画到提示词终稿工作阶段">
-        <ol>
+        <ol style={{ "--production-stage-count": productionPipeline.length } as CSSProperties}>
           {productionPipeline.map((stage, index) => (
             <li className={`production-stage ${stage.status}`} key={stage.id} title={stage.detail}>
               <i>{String(index + 1).padStart(2, "0")}</i>

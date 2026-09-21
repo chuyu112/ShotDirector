@@ -157,7 +157,7 @@ html { scrollbar-gutter: stable; }
 .app-shell .loaded-script-action-group :is(.global-settings-entry, .coverage-entry, .asset-ledger-entry, .material-lab-entry):not(:disabled):is(.active, :hover) { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
 .app-shell .loaded-script-action-group .button:disabled { color: #77746d; background: #eeece6; border-color: var(--line); }
 .app-shell .production-pipeline { grid-template-columns: minmax(0, 1fr); background: var(--panel); border-color: var(--line); }
-.app-shell .production-pipeline ol { min-width: 0; grid-template-columns: repeat(8, minmax(112px, 1fr)); }
+.app-shell .production-pipeline ol { min-width: 0; grid-template-columns: repeat(var(--production-stage-count, 8), minmax(112px, 1fr)); }
 .app-shell .production-stage { min-height: 60px; padding: 10px 12px; border-color: var(--line); }
 .app-shell .production-stage b { font-size: 12px; font-weight: 650; }
 .app-shell .production-stage small { font-size: 11px; line-height: 1.5; }

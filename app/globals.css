@@ -667,7 +667,7 @@ input:focus-visible {
 
 .production-pipeline ol {
   display: grid;
-  grid-template-columns: repeat(8, minmax(96px, 1fr));
+  grid-template-columns: repeat(var(--production-stage-count, 8), minmax(96px, 1fr));
   margin: 0;
   padding: 0;
   overflow-x: auto;
